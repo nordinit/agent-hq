@@ -77,11 +77,24 @@ export interface Db {
    */
   withTransaction<T>(fn: (tx: Db) => Promise<T>): Promise<T>;
 
+  /** Schedule external/deferred work only after the outer transaction commits.
+   * The callback receives a pool-backed handle; rollback discards the callback.
+   * Optional for simple read-only/test adapters that never open transactions.
+   */
+  afterCommit?(work: (db: Db) => void): void;
+
   /** True while this handle is inside an open transaction. */
   readonly inTransaction: boolean;
 
   /** Releases underlying resources. */
   close(): Promise<void>;
+}
+
+/** Defer side effects until commit and never hand them a closed transaction. */
+export function afterCommit(db: Db, work: (poolDb: Db) => void): void {
+  if (db.afterCommit) db.afterCommit(work);
+  else if (!db.inTransaction) work(db);
+  else throw new Error('Deferred work requires after-commit support');
 }
 
 /**

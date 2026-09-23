@@ -82,6 +82,14 @@ export class PostgresAdapter implements Db {
     registerInt8Parser();
   }
 
+  private readonly postCommitCallbacks: Array<(db: Db) => void> = [];
+
+  afterCommit(work: (db: Db) => void): void {
+    this.assertUsable();
+    if (this.client) this.postCommitCallbacks.push(work);
+    else work(this);
+  }
+
   get inTransaction(): boolean {
     return this.client !== null;
   }
@@ -185,6 +193,7 @@ export class PostgresAdapter implements Db {
       try {
         const result = await fn(tx);
         await this.client.query(`RELEASE SAVEPOINT ${savepoint}`);
+        this.postCommitCallbacks.push(...tx.postCommitCallbacks);
         return result;
       } catch (err) {
         try { await this.client.query(`ROLLBACK TO SAVEPOINT ${savepoint}`); } catch { /* keep original error */ }
@@ -197,10 +206,12 @@ export class PostgresAdapter implements Db {
     const client = await this.pool.connect();
     const state = { closed: false };
     const tx = new PostgresAdapter(this.pool, client, this.depth + 1, state);
+    let committed = false;
     try {
       await client.query('BEGIN');
       const result = await fn(tx);
       await client.query('COMMIT');
+      committed = true;
       return result;
     } catch (err) {
       try { await client.query('ROLLBACK'); } catch { /* keep original error */ }
@@ -210,6 +221,11 @@ export class PostgresAdapter implements Db {
       // The connection must go back to the pool on every path, or the pool leaks a
       // connection per failed transaction and eventually deadlocks.
       client.release();
+      if (committed) {
+        for (const callback of tx.postCommitCallbacks) {
+          try { callback(this); } catch (err) { console.error('[db] after-commit callback failed:', err); }
+        }
+      }
     }
   }
 

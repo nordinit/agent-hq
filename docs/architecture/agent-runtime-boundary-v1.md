@@ -86,13 +86,13 @@ Any mismatch starts a new execution or fails closed; it must not attach to the o
 
 ## Shared cancellation
 
-Manual Stop, REST and WebSocket chat cancellation, watchdog stops, and terminal-outcome closure use `domains/runs/stopInstanceExecution.ts` to reach `AgentRuntime.abort`. Provider routing and response validation belong to the runtime adapter. Local process identity checks and durable process-group termination remain unchanged.
+Manual Stop, REST and WebSocket chat cancellation, watchdog stops, orphan cleanup after task transitions, and terminal-outcome closure use `domains/runs/stopInstanceExecution.ts` to reach `AgentRuntime.abort`. Provider routing and response validation belong to the runtime adapter. Local process identity checks and durable process-group termination remain unchanged.
 
 OpenClaw saves `job_instances.runtime_abort_target` (provider run ID, canonical agent-scoped session key, and any explicit gateway endpoint) before sending a turn. `session_key` remains the logical Agent HQ identity. The gateway idempotency key is the run ID, so a starting turn can be addressed before its send response arrives. Existing instances recover the run ID from `run_id` or legacy `response.runId` and qualify short session keys using the agent's runtime identity. Missing identifiers never fall back to stopping an agent's main session.
 
 An OpenClaw stop uses asynchronous `chat.abort` with both the exact run ID and canonical session key. Cancellation acknowledgement requires `aborted: true` and the requested ID in `runIds`. A no-op abort is considered already gone only when `agent.wait` returns a terminal snapshot with the same run ID and an end timestamp. RPC acceptance, an empty result, a missing target, or a timeout leaves runtime state uncertain. An uncertain stop does not fabricate `runtime_ended_at`; transcript observation remains active to record a later terminal event.
 
-Manual Stop commits `stop_requested_at`, the terminal Agent HQ status, and removal of the task's active-instance linkage before remote I/O. New dispatch checks this durable fence before sending and again after the gateway responds. If Stop raced startup, the send path cancels that exact turn again. It cannot restore the instance to running or cancel a later turn. Migration `34-runtime-abort-target.sql` adds the two nullable columns without rewriting existing identities.
+Manual Stop commits `stop_requested_at`, the terminal Agent HQ status, and removal of the task's active-instance linkage before remote I/O. New dispatch checks this durable fence before sending and again after the gateway responds. If Stop raced startup, the send path cancels that exact turn again. It cannot restore the instance to running or cancel a later turn. Migration `34-runtime-abort-target.sql` adds the two nullable columns without rewriting existing identities. Deferred lifecycle cleanup registers through `Db.afterCommit`: it runs with a pool-backed handle only after the outer transaction commits, and rollback discards it. No delayed watchdog retains a closed transaction or deletes an entire gateway session.
 
 ## Local Claude Code and Codex targets
 

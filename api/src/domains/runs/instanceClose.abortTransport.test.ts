@@ -66,6 +66,31 @@ describe('closeInstance abort transport', () => {
     expect(runtimeAbortMock.mock.calls[0][2]).toMatchObject({ instanceId: 700, tenantId: TENANT_ID });
   });
 
+  it('defers cancellation until commit and passes a pool-backed database handle', async () => {
+    await seedInstance('openclaw');
+    await db.withTransaction(async tx => {
+      await closeInstance({ db: tx, instanceId: 700, outcome: 'completed', status: 'done' });
+      await flushDeferredWork();
+      expect(runtimeAbortMock).not.toHaveBeenCalled();
+    });
+    await flushDeferredWork();
+    expect(runtimeAbortMock).toHaveBeenCalledTimes(1);
+    const poolDb = runtimeAbortMock.mock.calls[0][0];
+    expect(poolDb.inTransaction).toBe(false);
+    expect(await poolDb.get('SELECT status FROM job_instances WHERE id = 700')).toEqual({ status: 'done' });
+  });
+
+  it('does not cancel a run after a rolled-back close', async () => {
+    await seedInstance('openclaw');
+    await expect(db.withTransaction(async tx => {
+      await closeInstance({ db: tx, instanceId: 700, outcome: 'completed', status: 'done' });
+      throw new Error('rollback');
+    })).rejects.toThrow('rollback');
+    await flushDeferredWork();
+    expect(runtimeAbortMock).not.toHaveBeenCalled();
+    expect(await db.get('SELECT status FROM job_instances WHERE id = 700')).toEqual({ status: 'running' });
+  });
+
   it('still stops an OpenClaw run through the gateway', async () => {
     await seedInstance('openclaw');
 

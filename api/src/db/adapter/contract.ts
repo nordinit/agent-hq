@@ -159,6 +159,36 @@ export function runDbContractTests(harness: ContractHarness): void {
       expect(Number(await db.value(`SELECT COUNT(*) FROM parents`))).toBe(2);
     });
 
+    it('runs deferred callbacks only after the outer commit, with a usable pool handle', async () => {
+      const calls: Db[] = [];
+      await db.withTransaction(async tx => {
+        await tx.run(`INSERT INTO parents (name) VALUES (?)`, 'committed');
+        await tx.withTransaction(async inner => {
+          inner.afterCommit!(poolDb => { calls.push(poolDb); });
+        });
+        expect(calls).toHaveLength(0);
+      });
+      expect(calls).toHaveLength(1);
+      expect(calls[0].inTransaction).toBe(false);
+      expect(await calls[0].value('SELECT name FROM parents')).toBe('committed');
+    });
+
+    it('discards deferred callbacks from rolled-back transactions and savepoints', async () => {
+      const calls: string[] = [];
+      await expect(db.withTransaction(async tx => {
+        await tx.withTransaction(async inner => { inner.afterCommit!(() => { calls.push('outer rollback'); }); });
+        throw new Error('outer rollback');
+      })).rejects.toThrow('outer rollback');
+      await db.withTransaction(async tx => {
+        tx.afterCommit!(() => { calls.push('committed'); });
+        await expect(tx.withTransaction(async inner => {
+          inner.afterCommit!(() => { calls.push('inner rollback'); });
+          throw new Error('inner rollback');
+        })).rejects.toThrow('inner rollback');
+      });
+      expect(calls).toEqual(['committed']);
+    });
+
     it('poisons a transaction handle once its transaction has finished', async () => {
       let escaped: Db | undefined;
       await db.withTransaction(async (tx) => { escaped = tx; });

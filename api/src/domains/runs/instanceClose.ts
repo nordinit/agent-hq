@@ -4,7 +4,7 @@ import { recordRunCheckIn } from './observability';
 import { isTerminalInstanceOutcome } from '../../lib/outcomeCatalog';
 import { scheduleEndedActiveInstanceLinkageCleanup } from '../../lib/taskLifecycle';
 import { insertRuntimeLog } from '../../lib/runtimeTenantScope';
-import { type Db } from "../../db/adapter/types";
+import { afterCommit, type Db } from "../../db/adapter/types";
 
 /**
  * Terminal outcomes that should automatically close the instance and terminate
@@ -298,15 +298,17 @@ export async function closeInstance(opts: CloseInstanceOptions): Promise<CloseIn
   const closeTenantId = Number(instance.tenant_id);
   const closeReason = `terminal outcome: ${outcome ?? finalStatus}`;
   if (Number.isInteger(closeTenantId) && closeTenantId > 0) {
-    setImmediate(() => {
-      void abortInstanceExecutionTransport(db, instance, {
-        instanceId, tenantId: closeTenantId, reason: closeReason,
-      }).then(attempt => {
-        if (!attempt.result?.ok) {
-          console.warn(`[instanceClose] Runtime abort unconfirmed for instance ${instanceId}: ${attempt.result?.error ?? 'unknown'}`);
-        }
-      }).catch((err: unknown) => {
-        console.warn(`[instanceClose] Runtime abort threw for instance ${instanceId} (non-fatal):`, err instanceof Error ? err.message : err);
+    afterCommit(db, poolDb => {
+      setImmediate(() => {
+        void abortInstanceExecutionTransport(poolDb, instance, {
+          instanceId, tenantId: closeTenantId, reason: closeReason,
+        }).then(attempt => {
+          if (!attempt.result?.ok) {
+            console.warn(`[instanceClose] Runtime abort unconfirmed for instance ${instanceId}: ${attempt.result?.error ?? 'unknown'}`);
+          }
+        }).catch((err: unknown) => {
+          console.warn(`[instanceClose] Runtime abort threw for instance ${instanceId} (non-fatal):`, err instanceof Error ? err.message : err);
+        });
       });
     });
   }

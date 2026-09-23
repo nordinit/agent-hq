@@ -1,17 +1,14 @@
 import { listConfiguredTerminalStatuses } from '../domains/tasks/terminality';
 import { acquireWorkspaceLease } from '../services/workspaceLease';
 import { prepareWorkspaceCleanup } from '../services/workspaceSafety';
-import { spawn, spawnSync } from 'child_process';
-import fs from 'fs';
 import path from 'path';
-import { OPENCLAW_BIN, OPENCLAW_CONFIG_PATH, OPENCLAW_PATH } from '../config';
-import { buildGatewayRunSessionKey } from './sessionKeys';
 import { removeTaskWorktree } from '../services/worktreeManager';
 import { removeTaskClone } from '../services/repoWorkspaceManager';
 import { writeTaskHistory } from '../domains/tasks/history';
 import { taskTableHasColumn } from '../domains/tasks/ownership';
 import { nowTimestamp } from './timestamps';
-import { type Db } from "../db/adapter/types";
+import { afterCommit, type Db } from "../db/adapter/types";
+import { abortInstanceExecutionTransport } from '../domains/runs/stopInstanceExecution';
 import { columnExists as sharedColumnExists } from "../db/introspection";
 
 const LIVE_TASK_STATUSES = ['in_progress', 'dev_deploy_queued', 'dev_deploying', 'stalled'] as const;
@@ -56,22 +53,6 @@ export function clearPendingEndedActiveInstanceLinkageCleanupTimers(): number {
   }
   pendingEndedLinkageCleanupTimers.clear();
   return count;
-}
-
-// ── OpenClaw env config (mirrors integrations/openclaw.ts) ───────────────────
-function readGatewayTokenFromConfig(): string | null {
-  try {
-    const raw = fs.readFileSync(OPENCLAW_CONFIG_PATH, 'utf-8');
-    const cfg = JSON.parse(raw) as { gateway?: { auth?: { token?: string } } };
-    const token = cfg.gateway?.auth?.token;
-    return typeof token === 'string' && token.trim() ? token.trim() : null;
-  } catch {
-    return null;
-  }
-}
-
-function getGatewayAuthToken(): string {
-  return process.env.OPENCLAW_GATEWAY_TOKEN ?? readGatewayTokenFromConfig() ?? '';
 }
 
 // ── Internal helpers ─────────────────────────────────────────────────────────
@@ -239,11 +220,11 @@ async function finalizeTaskTransitionRuntimeEndIfNeeded(
       AND runtime_ended_at IS NOT NULL
   `, instanceId);
 
-  if (row.session_key && (row.status === 'dispatched' || row.status === 'running')) {
+  if (row.status === 'dispatched' || row.status === 'running') {
     abortOrphanedInstanceAsync(
       db,
       instanceId,
-      row.session_key,
+      row.session_key ?? '',
       `task #${taskId} completed semantic handoff and detached instance #${instanceId}`,
     );
   }
@@ -306,11 +287,11 @@ export async function scheduleEndedActiveInstanceLinkageCleanup(
     return true;
   }
 
-  const runCleanup = async () => {
+  const runCleanup = (poolDb: Db) => async () => {
     pendingEndedLinkageCleanupTimers.delete(key);
     try {
-      await finalizeTaskTransitionRuntimeEndIfNeeded(db, taskId, instanceId, options?.changedBy);
-      await clearEndedActiveInstanceLinkageIfEligible(db, taskId, instanceId, {
+      await finalizeTaskTransitionRuntimeEndIfNeeded(poolDb, taskId, instanceId, options?.changedBy);
+      await clearEndedActiveInstanceLinkageIfEligible(poolDb, taskId, instanceId, {
                 changedBy: options?.changedBy,
                 force: true,
               });
@@ -322,14 +303,15 @@ export async function scheduleEndedActiveInstanceLinkageCleanup(
     }
   };
 
-  if (remainingMs === 0) {
-    setImmediate(() => { void trackEndedLinkageCleanup(runCleanup); });
-    return true;
-  }
-
-  const timer = setTimeout(() => { void trackEndedLinkageCleanup(runCleanup); }, remainingMs);
-  timer.unref?.();
-  pendingEndedLinkageCleanupTimers.set(key, timer);
+  afterCommit(db, poolDb => {
+    if (remainingMs === 0) {
+      setImmediate(() => { void trackEndedLinkageCleanup(runCleanup(poolDb)); });
+      return;
+    }
+    const timer = setTimeout(() => { void trackEndedLinkageCleanup(runCleanup(poolDb)); }, remainingMs);
+    timer.unref?.();
+    pendingEndedLinkageCleanupTimers.set(key, timer);
+  });
   return true;
 }
 
@@ -438,329 +420,43 @@ export async function cleanupTerminalTaskWorkspaces(db: Db, taskId: number): Pro
 /** @deprecated Use cleanupTerminalTaskWorkspaces; eligibility is configured terminality. */
 export const cleanupDoneTaskWorktrees = cleanupTerminalTaskWorkspaces;
 
-// ── Async abort for orphaned instances ───────────────────────────────────────
-
-// ── Watchdog: hard-kill via sessions.delete if chat.abort doesn't stick ──────
-
-const WATCHDOG_GRACE_MS = 15_000;   // wait this long after chat.abort before checking
-const WATCHDOG_POLL_INTERVAL_MS = 3_000; // how often to re-check session activity
-const WATCHDOG_MAX_POLLS = 5;        // max re-checks after grace period
-
-/**
- * Resolves the full OpenClaw session key (agent:<slug>:...) from the instance
- * payload. The DB stores the short key (hook:atlas:jobrun:<id>); the gateway
- * sessions.* methods require the agent-prefixed key.
- */
-async function resolveFullSessionKey(db: Db, instanceId: number, shortKey: string): Promise<string | null> {
-  try {
-    const row = await db.get(`
-      SELECT ji.payload_sent, a.session_key, a.openclaw_agent_id, a.name
-      FROM job_instances ji
-      LEFT JOIN agents a ON a.id = ji.agent_id
-      WHERE ji.id = ?
-    `, instanceId) as {
-      payload_sent: string | null;
-      session_key: string | null;
-      openclaw_agent_id: string | null;
-      name: string | null;
-    } | undefined;
-
-    const fromAgent = buildGatewayRunSessionKey(row ?? null, shortKey);
-    if (fromAgent) return fromAgent;
-
-    if (!row?.payload_sent) return null;
-    const payload = JSON.parse(row.payload_sent) as { agentSlug?: string };
-    if (!payload.agentSlug) return null;
-    return `agent:${payload.agentSlug}:${shortKey}`;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Polls the gateway sessions.get endpoint to see if the session's updatedAt
- * has changed since the baseline. Returns true if the session appears to still
- * be active (updatedAt advanced), false if it appears gone or quiet.
- */
-function sessionStillActiveSync(fullSessionKey: string, baselineUpdatedAt: number): boolean {
-  const args = [
-    'gateway', 'call', 'sessions.get',
-    '--json',
-    '--timeout', '8000',
-    '--params', JSON.stringify({ key: fullSessionKey }),
-  ];
-
-  const gatewayAuthToken = getGatewayAuthToken();
-  if (gatewayAuthToken) {
-    args.push('--token', gatewayAuthToken);
-  }
-
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    PATH: OPENCLAW_PATH,
-    OPENCLAW_HIDE_BANNER: '1',
-    OPENCLAW_SUPPRESS_NOTES: '1',
-  };
-
-  const result = spawnSync(OPENCLAW_BIN, args, { encoding: 'utf-8', timeout: 10_000, env });
-  if (result.error || result.status !== 0) return false;
-
-  try {
-    const parsed = JSON.parse(result.stdout ?? '{}') as { updatedAt?: number; messages?: unknown[] };
-    // If the session has no messages at all, it's gone
-    if (!parsed.messages || (parsed.messages as unknown[]).length === 0) return false;
-    // If updatedAt advanced past the baseline, the session is still being written
-    if (typeof parsed.updatedAt === 'number' && parsed.updatedAt > baselineUpdatedAt) return true;
-    return false;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Force-kills a session by calling sessions.delete, which clears the session
- * queue and closes any active ACP runtimes — a hard kill that survives a soft
- * chat.abort being ignored by an in-flight agent.
- */
-function hardKillSessionSync(fullSessionKey: string): { ok: boolean; error?: string } {
-  const args = [
-    'gateway', 'call', 'sessions.delete',
-    '--json',
-    '--timeout', '10000',
-    '--params', JSON.stringify({ key: fullSessionKey }),
-  ];
-
-  const gatewayAuthToken = getGatewayAuthToken();
-  if (gatewayAuthToken) {
-    args.push('--token', gatewayAuthToken);
-  }
-
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    PATH: OPENCLAW_PATH,
-    OPENCLAW_HIDE_BANNER: '1',
-    OPENCLAW_SUPPRESS_NOTES: '1',
-  };
-
-  const result = spawnSync(OPENCLAW_BIN, args, { encoding: 'utf-8', timeout: 12_000, env });
-
-  if (result.error) return { ok: false, error: result.error.message };
-  if (result.status !== 0) {
-    return { ok: false, error: (result.stderr ?? '').trim() || `sessions.delete exited with code ${result.status}` };
-  }
-
-  try {
-    const parsed = JSON.parse(result.stdout ?? '{}') as { ok?: boolean };
-    return { ok: parsed.ok === true };
-  } catch {
-    return { ok: true }; // exit 0 is good enough
-  }
-}
-
-/**
- * Asynchronously aborts an orphaned job instance after task linkage has been
- * cleared. Uses spawn (not spawnSync) so it never blocks the event loop.
- *
- * Two-stage termination:
- * 1. Send chat.abort (soft signal) — this works most of the time.
- * 2. After WATCHDOG_GRACE_MS, check if the session is still active via
- *    sessions.get. If so, escalate to sessions.delete (hard kill), which
- *    clears the session queue and tears down the ACP runtime, guaranteeing
- *    the agent cannot post further check-ins.
- *
- * If the abort times out or fails, the instance is marked failed so it is not
- * left indefinitely in dispatched/running state.
- *
- * @param db          - PostgreSQL database adapter
- * @param instanceId  - The orphaned job_instance.id to abort
- * @param sessionKey  - The openclaw session key for the running instance (short form)
- * @param reason      - Human-readable reason for the abort (logged)
- */
+// Deferred lifecycle callbacks must never retain a transaction-bound adapter.
+// This also replaces the legacy CLI abort/watchdog/session-deletion fallback.
 export function abortOrphanedInstanceAsync(
   db: Db,
   instanceId: number,
-  sessionKey: string,
+  _sessionKey: string,
   reason: string,
 ): void {
-  const ABORT_TIMEOUT_MS = 15_000;
-
-  const args = [
-    'gateway', 'call', 'chat.abort',
-    '--json',
-    '--timeout', '10000',
-    '--params', JSON.stringify({ sessionKey }),
-  ];
-
-  const gatewayAuthToken = getGatewayAuthToken();
-  if (gatewayAuthToken) {
-    args.push('--token', gatewayAuthToken);
-  }
-
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    PATH: OPENCLAW_PATH,
-    OPENCLAW_HIDE_BANNER: '1',
-    OPENCLAW_SUPPRESS_NOTES: '1',
-  };
-
-  let stdout = '';
-  let stderr = '';
-  let settled = false;
-
-  const child = spawn(OPENCLAW_BIN, args, { env });
-
-  child.stdout?.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
-  child.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
-
-  const timeoutHandle = setTimeout(async () => {
-    if (settled) return;
-    settled = true;
-    child.kill('SIGKILL');
-    console.warn(`[taskLifecycle] abort timed out for instance #${instanceId} (${sessionKey})`);
-    await markInstanceFailed(db, instanceId, 'abort timed out after task cancel/stop');
-  }, ABORT_TIMEOUT_MS);
-
-  child.on('close', async (code: number | null) => {
-    if (settled) return;
-    settled = true;
-    clearTimeout(timeoutHandle);
-
-    const responseText = stdout.trim();
-    const errorText = stderr.trim();
-
-    // Treat "session not found" / "already gone" as a non-error success path
-    const haystack = `${responseText} ${errorText}`.toLowerCase();
-    const alreadyGone =
-      (haystack.includes('session') || haystack.includes('run') || haystack.includes('target')) &&
-      ['session not found', 'not found', 'no active run', 'not running', 'already_gone', 'missing']
-        .some(s => haystack.includes(s));
-
-    if (alreadyGone) {
-      await markInstanceCancelled(db, instanceId, 'already_gone');
-      console.log(`[taskLifecycle] instance #${instanceId} already gone — ${reason}`);
-      return;
-    }
-
-    if (code !== 0) {
-      // Abort failed entirely — mark failed, no watchdog
-      const failReason = errorText || `abort exited with code ${code}`;
-      console.warn(`[taskLifecycle] abort failed for instance #${instanceId}: ${failReason}`);
-      await markInstanceFailed(db, instanceId, `abort failed after task cancel/stop: ${failReason}`);
-      return;
-    }
-
-    // chat.abort succeeded (exit 0) — start watchdog to verify the session actually stops.
-    // The soft signal may be ignored if the agent is between tool calls.
-    console.log(`[taskLifecycle] chat.abort sent for instance #${instanceId} — starting watchdog (${WATCHDOG_GRACE_MS}ms grace, ${WATCHDOG_MAX_POLLS} polls)`);
-    const baselineTs = Date.now();
-
-    const watchdogTimer = setTimeout(async () => {
-      await runAbortWatchdog(db, instanceId, sessionKey, reason, baselineTs);
-    }, WATCHDOG_GRACE_MS);
-
-    // Unref so the watchdog doesn't prevent Node from exiting if everything else is done
-    watchdogTimer.unref();
+  afterCommit(db, poolDb => {
+    void trackEndedLinkageCleanup(async () => {
+      try {
+        const instance = await poolDb.get(`
+          SELECT ji.*, a.session_key AS agent_session_key, a.openclaw_agent_id, a.runtime_type, a.runtime_config
+          FROM job_instances ji LEFT JOIN agents a ON a.id = ji.agent_id AND a.tenant_id = ji.tenant_id
+          WHERE ji.id = ?
+        `, instanceId);
+        if (!instance || typeof instance.tenant_id !== 'number') return;
+        const tenantId = instance.tenant_id;
+        // The task has already detached. Fence the instance before remote I/O,
+        // preserving any successful semantic outcome already recorded on it.
+        await poolDb.run(`
+          UPDATE job_instances SET status = CASE WHEN status IN ('queued', 'dispatched', 'running') THEN 'cancelled' ELSE status END,
+            completed_at = COALESCE(completed_at, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
+          WHERE id = ? AND tenant_id = ?
+        `, instanceId, tenantId);
+        const { result } = await abortInstanceExecutionTransport(poolDb, instance, { instanceId, tenantId, reason });
+        await poolDb.run(`
+          UPDATE job_instances SET abort_attempted_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'),
+            abort_status = ?, abort_error = ?,
+            runtime_ended_at = CASE WHEN ? THEN COALESCE(runtime_ended_at, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')) ELSE runtime_ended_at END
+          WHERE id = ? AND tenant_id = ?
+        `, result?.status ?? 'failed', result?.ok ? null : result?.error ?? 'Runtime cancellation unconfirmed', result?.ok === true, instanceId, tenantId);
+      } catch (err) {
+        console.warn(`[taskLifecycle] Failed runtime cancellation for instance #${instanceId}:`, err instanceof Error ? err.message : err);
+      }
+    });
   });
-
-  child.on('error', async (err: Error) => {
-    if (settled) return;
-    settled = true;
-    clearTimeout(timeoutHandle);
-    console.error(`[taskLifecycle] spawn error aborting instance #${instanceId}:`, err);
-    await markInstanceFailed(db, instanceId, `spawn error during abort: ${err.message}`);
-  });
-}
-
-/**
- * Watchdog: runs after chat.abort grace period. Checks if the session is still
- * active via sessions.get polling; if still alive after all retries, escalates
- * to sessions.delete (hard kill).
- *
- * Fully non-blocking: uses recursive setTimeout so the event loop stays free.
- */
-async function runAbortWatchdog(
-  db: Db,
-  instanceId: number,
-  sessionKey: string,
-  reason: string,
-  baselineTs: number,
-): Promise<void> {
-  // First check: is the instance already terminal?
-  const inst = await db.get(`SELECT status FROM job_instances WHERE id = ?`, instanceId) as { status: string } | undefined;
-  if (!inst || ['done', 'failed', 'cancelled'].includes(inst.status)) {
-    console.log(`[taskLifecycle:watchdog] instance #${instanceId} already terminal (${inst?.status ?? 'gone'}) — watchdog done`);
-    return;
-  }
-
-  // Resolve the full OpenClaw session key (agent:<slug>:<key>)
-  const maybeFullKey = await resolveFullSessionKey(db, instanceId, sessionKey);
-  if (!maybeFullKey) {
-    // Can't resolve full key — assume soft abort was sufficient
-    console.warn(`[taskLifecycle:watchdog] cannot resolve full session key for instance #${instanceId}, assuming soft abort was sufficient`);
-    await markInstanceCancelled(db, instanceId, 'succeeded');
-    return;
-  }
-  const fullSessionKey: string = maybeFullKey;
-
-  let pollCount = 0;
-
-  async function doPoll(): Promise<void> {
-    // Re-check instance status before each poll
-    const current = await db.get(`SELECT status FROM job_instances WHERE id = ?`, instanceId) as { status: string } | undefined;
-    if (!current || ['done', 'failed', 'cancelled'].includes(current.status)) {
-      console.log(`[taskLifecycle:watchdog] instance #${instanceId} became terminal during poll ${pollCount + 1} — watchdog done`);
-      return;
-    }
-
-    pollCount++;
-    const sessionActive = sessionStillActiveSync(fullSessionKey, baselineTs);
-
-    if (!sessionActive) {
-      console.log(`[taskLifecycle:watchdog] session gone for instance #${instanceId} at poll ${pollCount} — marking cancelled`);
-      await markInstanceCancelled(db, instanceId, 'succeeded');
-      return;
-    }
-
-    console.log(`[taskLifecycle:watchdog] session still active for instance #${instanceId} at poll ${pollCount}/${WATCHDOG_MAX_POLLS}`);
-
-    if (pollCount < WATCHDOG_MAX_POLLS) {
-      // Schedule the next poll
-      const t = setTimeout(doPoll, WATCHDOG_POLL_INTERVAL_MS);
-      t.unref();
-      return;
-    }
-
-    // All polls exhausted — escalate to hard kill
-    console.warn(`[taskLifecycle:watchdog] session still active after ${WATCHDOG_MAX_POLLS} polls for instance #${instanceId} — escalating to sessions.delete`);
-    const killResult = hardKillSessionSync(fullSessionKey);
-    if (killResult.ok) {
-      await markInstanceCancelled(db, instanceId, 'hard_killed');
-      console.log(`[taskLifecycle:watchdog] sessions.delete succeeded for instance #${instanceId} — marked cancelled (hard_killed)`);
-    } else {
-      console.error(`[taskLifecycle:watchdog] sessions.delete failed for instance #${instanceId}: ${killResult.error}`);
-      await markInstanceFailed(db, instanceId, `hard kill failed after soft abort was ignored: ${killResult.error}`);
-    }
-  }
-
-  // Kick off the first poll immediately (we already waited WATCHDOG_GRACE_MS)
-  await doPoll();
-}
-
-async function markInstanceCancelled(db: Db, instanceId: number, abortStatus: string): Promise<void> {
-  try {
-    await db.run(`
-      UPDATE job_instances
-      SET status = 'cancelled',
-          abort_attempted_at = COALESCE(abort_attempted_at, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')),
-          abort_status = ?,
-          abort_error = NULL,
-          completed_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
-      WHERE id = ?
-        AND status NOT IN ('done', 'failed', 'cancelled')
-    `, abortStatus, instanceId);
-  } catch (err) {
-    console.error(`[taskLifecycle] failed to mark instance #${instanceId} as cancelled:`, err);
-  }
 }
 
 async function markInstanceFailed(db: Db, instanceId: number, reason: string): Promise<void> {
@@ -768,6 +464,7 @@ async function markInstanceFailed(db: Db, instanceId: number, reason: string): P
     await db.run(`
       UPDATE job_instances
       SET status = 'failed',
+          stop_requested_at = COALESCE(stop_requested_at, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')),
           abort_attempted_at = COALESCE(abort_attempted_at, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')),
           abort_status = 'failed',
           abort_error = ?,
@@ -854,15 +551,15 @@ export async function cleanupTaskExecutionLinkageForStatus(
     // Queued instances have no active session to abort — just mark failed.
     const isLive = instanceStatus === 'dispatched' || instanceStatus === 'running';
 
-    if (sessionKey && isLive) {
+    if (isLive) {
       // Fire-and-forget async abort — never blocks the event loop
       abortOrphanedInstanceAsync(
         db,
         orphanedInstanceId,
-        sessionKey,
+        sessionKey ?? '',
         `task #${taskId} cancelled/stopped (status → ${effectiveStatus})`,
       );
-    } else if (instanceStatus === 'queued' || (isLive && !sessionKey)) {
+    } else if (instanceStatus === 'queued') {
       // Queued or live-but-sessionless: no session to abort, mark failed immediately
       await markInstanceFailed(
                 db,

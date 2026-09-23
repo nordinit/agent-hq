@@ -1,6 +1,5 @@
 import { setupTestDb, teardownTestDb } from '../db/testDb';
-import { spawn } from 'child_process';
-import { EventEmitter } from 'events';
+import { abortInstanceExecutionTransport } from '../domains/runs/stopInstanceExecution';
 import {
   ACTIVE_INSTANCE_END_GRACE_MS,
   cleanupImpossibleTaskLifecycleStates,
@@ -23,37 +22,21 @@ jest.mock('../services/repoWorkspaceManager', () => ({
   removeTaskClone: jest.fn(({ workspacePath }: { workspacePath: string }) => ({ removed: true, workspacePath })),
 }));
 
-jest.mock('child_process', () => {
-  const actual = jest.requireActual('child_process');
-  return {
-    ...actual,
-    spawn: jest.fn(),
-  };
-});
+jest.mock('../domains/runs/stopInstanceExecution', () => ({
+  abortInstanceExecutionTransport: jest.fn(async () => ({
+    result: { attempted: true, ok: true, status: 'succeeded' },
+  })),
+}));
 
 const mockedRemoveTaskWorktree = removeTaskWorktree as jest.MockedFunction<typeof removeTaskWorktree>;
 const mockedRemoveTaskClone = removeTaskClone as jest.MockedFunction<typeof removeTaskClone>;
-const mockedSpawn = spawn as jest.MockedFunction<typeof spawn>;
+const mockedAbort = jest.mocked(abortInstanceExecutionTransport);
 
 // The deferred cleanup is launched from a timer callback, so the only
 // deterministic way to observe its result is to await the work itself rather
 // than a fixed number of microtask ticks.
 async function flushPromises(): Promise<void> {
   await flushPendingEndedActiveInstanceLinkageCleanups();
-}
-
-function mockAbortSpawn(): void {
-  mockedSpawn.mockImplementation(() => {
-    const child = new EventEmitter() as ReturnType<typeof spawn> & {
-      stdout: EventEmitter;
-      stderr: EventEmitter;
-      kill: jest.Mock;
-    };
-    child.stdout = new EventEmitter() as typeof child.stdout;
-    child.stderr = new EventEmitter() as typeof child.stderr;
-    child.kill = jest.fn();
-    return child;
-  });
 }
 
 async function createDb(): Promise<Db> {
@@ -110,8 +93,7 @@ describe('task lifecycle worktree cleanup', () => {
     mockedRemoveTaskWorktree.mockImplementation(({ worktreePath }) => ({ removed: true, worktreePath }));
     mockedRemoveTaskClone.mockClear();
     mockedRemoveTaskClone.mockImplementation(({ workspacePath }) => ({ removed: true, workspacePath }));
-    mockedSpawn.mockReset();
-    mockAbortSpawn();
+    mockedAbort.mockClear();
 
     // node-postgres resolves socket work through microtasks. Jest's modern fake timers include
     // nextTick/queueMicrotask by default, which freezes completed query promises and can leave
@@ -158,7 +140,7 @@ describe('task lifecycle worktree cleanup', () => {
     const task = await db.get(`SELECT active_instance_id FROM tasks WHERE id = 1`) as { active_instance_id: number | null };
     expect(cleared).toBe(false);
     expect(task.active_instance_id).toBe(10);
-    expect(mockedSpawn).not.toHaveBeenCalled();
+    expect(mockedAbort).not.toHaveBeenCalled();
   });
 
   it('keeps the worktree during qa_pass handoff even when execution linkage is cleared', async () => {
@@ -409,7 +391,33 @@ describe('task lifecycle worktree cleanup', () => {
     expect(instance.status).toBe('done');
     expect(instance.runtime_end_source).toBe('openclaw_runtime');
     expect(task.active_instance_id).toBeNull();
-    expect(mockedSpawn).not.toHaveBeenCalled();
+    expect(mockedAbort).not.toHaveBeenCalled();
+  });
+
+  it('runs cancellation after commit with a usable pool handle', async () => {
+    await seedLinkedTask(db, { taskStatus: 'in_progress', instanceStatus: 'running' });
+    await db.run("UPDATE job_instances SET session_key = 'run:10:transaction' WHERE id = 10");
+    await db.withTransaction(async tx => {
+      await cleanupTaskExecutionLinkageForStatus(tx, 1, 'cancelled');
+      expect(mockedAbort).not.toHaveBeenCalled();
+    });
+    await flushPromises();
+    expect(mockedAbort).toHaveBeenCalledTimes(1);
+    const poolDb = mockedAbort.mock.calls[0][0];
+    expect(poolDb.inTransaction).toBe(false);
+    expect(await poolDb.get('SELECT status FROM job_instances WHERE id = 10')).toEqual({ status: 'cancelled' });
+  });
+
+  it('does not cancel a run when the task transition rolls back', async () => {
+    await seedLinkedTask(db, { taskStatus: 'in_progress', instanceStatus: 'running' });
+    await db.run("UPDATE job_instances SET session_key = 'run:10:rollback' WHERE id = 10");
+    await expect(db.withTransaction(async tx => {
+      await cleanupTaskExecutionLinkageForStatus(tx, 1, 'cancelled');
+      throw new Error('rollback');
+    })).rejects.toThrow('rollback');
+    await flushPromises();
+    expect(mockedAbort).not.toHaveBeenCalled();
+    expect(await db.get('SELECT active_instance_id FROM tasks WHERE id = 1')).toEqual({ active_instance_id: 10 });
   });
 
   it('aborts a still-live gateway session after task-transition runtime finalization', async () => {
@@ -431,9 +439,8 @@ describe('task lifecycle worktree cleanup', () => {
     jest.advanceTimersByTime(ACTIVE_INSTANCE_END_GRACE_MS + 1);
     await flushPromises();
 
-    expect(mockedSpawn).toHaveBeenCalledTimes(1);
-    const args = mockedSpawn.mock.calls[0][1] as string[];
-    expect(args).toContain('chat.abort');
-    expect(args).toContain(JSON.stringify({ sessionKey: 'run:10:abc' }));
+    expect(mockedAbort).toHaveBeenCalledTimes(1);
+    expect(mockedAbort.mock.calls[0][1]).toMatchObject({ session_key: 'run:10:abc' });
+    expect(mockedAbort.mock.calls[0][2]).toMatchObject({ instanceId: 10, tenantId: 1 });
   });
 });
