@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createTelemetryRequestGuard, formatTelemetryValue, parseTelemetryDraft, telemetryScopeQuery, telemetryExactValue } from './telemetryPresentation.ts';
+import { createTelemetryRequestGuard, formatTelemetryContribution, formatTelemetryValue, parseTelemetryDraft, telemetryScopeQuery, telemetryExactValue } from './telemetryPresentation.ts';
+
+test('ratio contributor rows show exact components, never treat numerator counts as percentages', () => {
+  assert.equal(formatTelemetryContribution({ value: 5, numerator: 5, denominator: 15 }, 'percent'), '5 / 15');
+  assert.equal(formatTelemetryContribution({ value: 0, numerator: 0, denominator: 0 }, 'percent'), '0 / 0');
+  assert.equal(formatTelemetryContribution({ value: 0.5 }, 'percent'), '50%');
+  assert.equal(formatTelemetryContribution({ value: true }), 'true');
+});
 
 test('zero, missing population, and rates have distinct presentations', () => {
   assert.equal(formatTelemetryValue(0, 'count'), '0');

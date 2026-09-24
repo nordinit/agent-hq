@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
 import { telemetryClient } from '@/lib/api/telemetry';
-import { formatTelemetryValue, telemetryErrorMessage, telemetryExactValue } from '@/lib/telemetryPresentation';
+import { formatTelemetryContribution, formatTelemetryValue, telemetryErrorMessage, telemetryExactValue } from '@/lib/telemetryPresentation';
 import type { Contribution, Scalar, TelemetryResult, TelemetryCatalog, TelemetryDisplay, TelemetryView } from '@/lib/telemetryTypes';
 import { ErrorNotice, JsonDetails, Select } from './TelemetryControls';
 import TelemetryVisualization from './TelemetryVisualization';
@@ -34,19 +34,19 @@ function Contributors({ result, index, group, catalog }: { result: TelemetryResu
     <div className="flex flex-wrap items-end justify-between gap-3"><div><h4 className="text-sm font-medium text-white">Contributing records</h4><p className="text-xs text-slate-500">{group ? `Group: ${telemetryGroupLabel(group, result.definition, catalog)}. ` : ''}Membership and evidence retained with this result.</p></div><Select label="Show" value={filter} onChange={value => { setOffset(0); setFilter(value); }} options={[{ value: 'all', label: 'Included and excluded' }, { value: 'included', label: 'Included only' }, { value: 'excluded', label: 'Excluded only' }]}/></div>
     <ErrorNotice message={error}/>
     {busy ? <p role="status" className="text-sm text-slate-400">Loading contributing records…</p> : !error && <>
-      <div className="overflow-auto"><table className="w-full text-left text-xs"><thead className="text-slate-500"><tr><th className="py-2 pr-3">Record</th><th className="pr-3">Attributed agent</th><th className="pr-3">Included</th><th className="pr-3">Value</th><th className="pr-3">Explanation</th><th>Evidence</th></tr></thead><tbody className="divide-y divide-slate-700/40">{rows.map(row => <tr key={row.sample_id} className="align-top"><td className="py-3 pr-3">{row.entity_kind === 'task' ? <Link className="text-amber-300 hover:underline" href={`/tasks/${row.entity_id}`}>{String(row.details?.title ?? `Task #${row.entity_id}`)}</Link> : <span>{row.entity_kind} #{row.entity_id}</span>}{row.started_at && <p className="mt-1 text-slate-500">{new Date(row.started_at).toLocaleString()}</p>}</td><td className="py-3 pr-3">{telemetryDimensionLabel(row.agent_id ?? null, 'agent_id', catalog)}</td><td className="py-3 pr-3"><Badge variant={row.included ? 'done' : 'default'}>{row.included ? 'Yes' : 'No'}</Badge></td><td className="py-3 pr-3 font-mono">{typeof row.value === 'boolean' ? String(row.value) : formatTelemetryValue(row.value, result.unit)}{row.denominator != null && <p className="mt-1 text-slate-500">{formatTelemetryValue(row.numerator)} / {formatTelemetryValue(row.denominator)}</p>}</td><td className="min-w-48 py-3 pr-3 text-slate-300">{row.reason}{row.resolution && <p className="mt-1 text-slate-500">{row.resolution}</p>}</td><td className="py-3"><JsonDetails label={`${row.observation_ids.length} observations`} value={{ observations: row.observation_ids, ...row.details }}/></td></tr>)}</tbody></table></div>
+      <div className="overflow-auto"><table className="w-full text-left text-xs"><thead className="text-slate-500"><tr><th className="py-2 pr-3">Record</th><th className="pr-3">Attributed agent</th><th className="pr-3">Included</th><th className="pr-3">Contribution</th><th className="pr-3">Explanation</th><th>Evidence</th></tr></thead><tbody className="divide-y divide-slate-700/40">{rows.map(row => <tr key={row.sample_id} className="align-top"><td className="py-3 pr-3">{row.entity_kind === 'task' ? <Link className="text-amber-300 hover:underline" href={`/tasks/${row.entity_id}`}>{String(row.details?.title ?? `Task #${row.entity_id}`)}</Link> : <span>{row.entity_kind} #{row.entity_id}</span>}{row.started_at && <p className="mt-1 text-slate-500">{new Date(row.started_at).toLocaleString()}</p>}</td><td className="py-3 pr-3">{telemetryDimensionLabel(row.agent_id ?? null, 'agent_id', catalog)}</td><td className="py-3 pr-3"><Badge variant={row.included ? 'done' : 'default'}>{row.included ? 'Yes' : 'No'}</Badge></td><td className="py-3 pr-3 font-mono">{formatTelemetryContribution(row, result.unit)}</td><td className="min-w-48 py-3 pr-3 text-slate-300">{row.reason}{row.resolution && <p className="mt-1 text-slate-500">{row.resolution}</p>}</td><td className="py-3"><JsonDetails label={`${row.observation_ids.length} observations`} value={{ observations: row.observation_ids, ...row.details }}/></td></tr>)}</tbody></table></div>
       {!rows.length && <p className="py-3 text-sm text-slate-400">No records match this inclusion filter.</p>}
       <div className="flex items-center justify-between gap-2 text-xs text-slate-400"><span>{total ? `${offset + 1}–${Math.min(offset + rows.length, total)} of ${total}` : '0 records'}</span><div className="flex gap-2"><Button size="sm" variant="ghost" disabled={!offset} onClick={() => setOffset(Math.max(0, offset - 25))}><ChevronLeft className="h-3 w-3"/>Previous</Button><Button size="sm" variant="ghost" disabled={offset + rows.length >= total} onClick={() => setOffset(offset + 25)}>Next<ChevronRight className="h-3 w-3"/></Button></div></div>
     </>}
   </div>;
 }
 
-export function TelemetryResultCard({result,index,catalog,display:requestedDisplay,sort,compact=false,stale=false}: {
-  result:TelemetryResult;index?:number;catalog?:TelemetryCatalog|null;display?:TelemetryDisplay;sort?:TelemetryView['sort'];compact?:boolean;stale?:boolean;
+export function TelemetryResultCard({result,index,catalog,display:requestedDisplay,sort,compact=false,stale=false,initialGroup,showRecords=false}: {
+  result:TelemetryResult;index?:number;catalog?:TelemetryCatalog|null;display?:TelemetryDisplay;sort?:TelemetryView['sort'];compact?:boolean;stale?:boolean;initialGroup?:Scalar[];showRecords?:boolean;
 }) {
   const [display,setDisplay]=useState<TelemetryDisplay|null>(null);
-  const [expanded,setExpanded]=useState(false);
-  const [group,setGroup]=useState<Scalar[]|undefined>();
+  const [expanded,setExpanded]=useState(showRecords || Boolean(initialGroup));
+  const [group,setGroup]=useState<Scalar[]|undefined>(initialGroup);
   const chart=display??requestedDisplay??result.display??(result.funnel?'funnel':result.distribution?'distribution':'bar');
   const coverage=result.coverage;
   return <Card className={stale?'opacity-65':''}>

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { dashboardSchema } from './dashboards';
 import { scopeSchema } from './access';
 import { reportSchema, telemetryViewSchema, telemetryWidgetSchema } from './views';
 
@@ -104,7 +105,7 @@ export const telemetryReportSchema = reportSchema.safeExtend({
 }).describe('Pinned report, saved view (exactly one widget), or dashboard (up to 10 widgets). Widget filters narrow metric populations. Line charts require a historical metric and time bucket.');
 
 export const telemetryDefinitionSchemas = {
-  metric: telemetryMetricSchema, profile: telemetryProfileSchema, report: telemetryReportSchema,
+  dashboard: dashboardSchema, metric: telemetryMetricSchema, profile: telemetryProfileSchema, report: telemetryReportSchema,
   predicate: telemetryPredicateSchema, value_expression: telemetryValueSchema, journey: telemetryJourneySchema,
   scope: scopeSchema,
 };

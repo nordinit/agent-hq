@@ -69,7 +69,8 @@ declare(['get_telemetry_contributors', 'get_telemetry_coverage', 'get_telemetry_
 declare(['cancel_telemetry_query', 'preview_telemetry_metric', 'query_telemetry_metrics', 'validate_telemetry_definition'], any('telemetry.query'));
 declare(['archive_telemetry_metric', 'archive_telemetry_profile', 'revise_telemetry_metric', 'revise_telemetry_profile',
   'save_telemetry_binding', 'save_telemetry_metric', 'save_telemetry_profile'], any('telemetry.manage_metrics'));
-declare(['archive_telemetry_report', 'freeze_telemetry_report', 'revise_telemetry_report', 'save_telemetry_report'], any('telemetry.manage_reports'));
+declare(['archive_telemetry_report', 'freeze_telemetry_report', 'revise_telemetry_report', 'save_telemetry_report', 'archive_telemetry_dashboard', 'revise_telemetry_dashboard', 'save_telemetry_dashboard'], any('telemetry.manage_reports'));
+declare(['get_telemetry_dashboard', 'list_telemetry_dashboards'], any('telemetry.read'));
 declare(['export_telemetry_definitions'], any('telemetry.export'));
 declare(['import_telemetry_definitions'], [['telemetry.manage_metrics', 'telemetry.manage_reports']]);
 

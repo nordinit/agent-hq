@@ -3,13 +3,14 @@ import { z } from 'zod';
 import type { Db } from '../../db/adapter/types';
 import { TelemetryError, type TelemetryAccess, type TelemetryScope, resolveScope, scopeKey, scopeMatches, bindingRank, scopeSchema, intersectScopes } from './access';
 import { reportSchema, viewDisplayIssue } from './views';
+import { dashboardSchema } from './dashboards';
 export { reportSchema } from './views';
 import { contentHash, getTelemetryCatalog, type TelemetryField } from './catalog';
 import { parseMetricDefinition, validateMetricDefinition } from './evaluator';
 import type { CatalogDescriptor, MetricDefinition } from './contracts';
 import {compileSignalPredicates,signalReferenceHealth,type TelemetrySignal} from './signals';
 
-export type DefinitionKind = 'metric'|'profile'|'report';
+export type DefinitionKind = 'metric'|'profile'|'report'|'dashboard';
 export interface DefinitionRow {
   id:string;tenant_id:number;kind:DefinitionKind;key:string;name:string;description:string;scope:TelemetryScope;project_id:number|null;
   latest_revision_id:string;revision:number;definition:any;dependencies:any;archived_at:string|null;created_at:string;
@@ -110,7 +111,24 @@ export async function compileDefinition(db:Db,access:TelemetryAccess,raw:any,sco
   return {definition,dependencies};
 }
 
-export async function validateStoredDefinition(db:Db,access:TelemetryAccess,kind:DefinitionKind,definition:any,scope:TelemetryScope,profileId?:string) {
+export async function validateStoredDefinition(db:Db,access:TelemetryAccess,kind:DefinitionKind,definition:any,scope:TelemetryScope,profileId?:string):Promise<{definition:any;dependencies:any}> {
+  if (kind === 'dashboard') {
+    const page = dashboardSchema.parse(definition);
+    const effectiveScope = await resolveScope(db, access, intersectScopes(scope, page.scope ?? {}));
+    if (page.sections.some(section => section.columns.some(column => column.blocks.some(block => block.type === 'operation'))) &&
+      (effectiveScope.workflow_id || effectiveScope.workflow_type || effectiveScope.task_type)) throw new TelemetryError('incompatible_scope', 'Operational blocks support project scope only.');
+    const checked = page.metrics.length ? await validateStoredDefinition(db, access, 'report', {
+      presentation: 'dashboard', metrics: page.metrics, scope: effectiveScope, from: page.from, to: page.to, timezone: page.timezone,
+    }, scope) : { definition: { metrics: [] }, dependencies: { metrics: [] } };
+    for (const block of page.sections.flatMap(section => section.columns.flatMap(column => column.blocks))) {
+      if (block.type !== 'metric') continue;
+      const binding = page.metrics.find(metric => metric.id === block.binding_id)!;
+      const source = checked.dependencies.metrics.find((metric: any) => metric.metric_revision_id === binding.metric_revision_id);
+      const issue = viewDisplayIssue({ ...source.definition, bucket: binding.view?.bucket === undefined ? source.definition.bucket : binding.view.bucket }, block.display ?? binding.display);
+      if (issue) throw new TelemetryError('invalid_definition', issue);
+    }
+    return { definition: { ...page, scope: effectiveScope, metrics: checked.definition.metrics }, dependencies: checked.dependencies };
+  }
   if(kind==='metric') {
     const compiled=await compileDefinition(db,access,definition,scope,profileId);
     return {definition:profileId?{...definition,profile_revision_id:profileId}:definition,dependencies:compiled.dependencies};

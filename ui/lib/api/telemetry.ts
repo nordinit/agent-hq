@@ -1,4 +1,5 @@
 import { getApiBase } from './http';
+import type { DashboardDocument, SavedDashboard } from '../dashboardTypes';
 import { telemetryScopeQuery } from '../telemetryPresentation';
 import type { DefinitionValidation, MetricDefinition, TelemetryBinding, TelemetryBindingPreview, TelemetryBindingPreviewRequest, TelemetryCatalog, TelemetryContributors, TelemetryMetric, TelemetryProfile, TelemetryQuery, TelemetryQueryResponse, TelemetryReport, TelemetryReportDefinition, TelemetryResource, TelemetryScope } from '../telemetryTypes';
 
@@ -19,9 +20,12 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 }
 const post = <T>(path: string, body: unknown, signal?: AbortSignal) => request<T>(path, { method: 'POST', body: JSON.stringify(body), signal });
 const scopeQuery = (scope?: TelemetryScope) => telemetryScopeQuery({ ...scope });
-type ResourceKind = 'metrics' | 'profiles' | 'reports';
+type ResourceKind = 'metrics' | 'profiles' | 'reports' | 'dashboards';
 
 export const telemetryClient = {
+  getDashboards: (scope?: TelemetryScope, signal?: AbortSignal) => request<{ dashboards: SavedDashboard[] }>(`/dashboards${scopeQuery(scope)}`, { signal }),
+  createDashboard: (data: { key: string; name: string; scope: TelemetryScope; definition: DashboardDocument }) => post<SavedDashboard>('/dashboards', data),
+  reviseDashboard: (id: string, data: { name: string; definition: DashboardDocument; expected_revision_id: string }) => post<SavedDashboard>(`/dashboards/${encodeURIComponent(id)}/revisions`, data),
   getTelemetryCatalog: (scope?: TelemetryScope, signal?: AbortSignal) => request<TelemetryCatalog>(`/catalog${scopeQuery(scope)}`, { signal }),
   validateTelemetryDefinition: (definition: MetricDefinition, scope: TelemetryScope) => post<DefinitionValidation & { description?: string }>('/definitions/validate', { definition, scope }),
   previewTelemetry: (query: TelemetryQuery, signal?: AbortSignal) => post<TelemetryQueryResponse>('/queries/preview', query, signal),
@@ -45,6 +49,6 @@ export const telemetryClient = {
   getTelemetryCoverage: (scope?: TelemetryScope, signal?: AbortSignal) => request<Record<string, unknown>>(`/coverage${scopeQuery(scope)}`, { signal }),
   getTelemetrySnapshots: (id: string) => request<{ snapshots: Record<string, unknown>[] }>(`/reports/${encodeURIComponent(id)}/snapshots`),
   freezeTelemetryReport: (id: string, data: { query_id: string; name?: string; report_revision_id?: string }) => post<Record<string, unknown>>(`/reports/${encodeURIComponent(id)}/snapshots`, data),
-  exportTelemetry: (data: { scope: TelemetryScope; metric_ids?: string[]; report_ids?: string[]; profile_ids?: string[] }) => post<Record<string, unknown>>('/export', data),
+  exportTelemetry: (data: { scope: TelemetryScope; metric_ids?: string[]; report_ids?: string[]; profile_ids?: string[]; dashboard_ids?: string[] }) => post<Record<string, unknown>>('/export', data),
   importTelemetry: (data: { bundle: unknown; scope: TelemetryScope; reference_map: Record<string, string> }) => post<Record<string, unknown>>('/import', data),
 };

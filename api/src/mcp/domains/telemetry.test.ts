@@ -93,6 +93,7 @@ describe('telemetry MCP uses the shared REST API', () => {
     ['metric', telemetryDefinitionExamples.component_metric.definition],
     ['profile', telemetryDefinitionExamples.profile.definition],
     ['report', telemetryDefinitionExamples.dashboard.definition],
+    ['dashboard', telemetryDefinitionExamples.dashboard_page.definition],
   ])('save and revise %s preserve their specific definition contract', async (kind, definition) => {
     const { api, tools } = registry();
     for (const revise of [false, true]) {
@@ -118,7 +119,7 @@ describe('telemetry MCP uses the shared REST API', () => {
       await server.connect(serverTransport);
       await client.connect(clientTransport);
       const listed = (await client.listTools()).tools.filter(tool => tool.name.includes('_telemetry_'));
-      expect(listed).toHaveLength(30);
+      expect(listed).toHaveLength(35);
       for (const tool of listed) expectResolvableReferences(tool.inputSchema);
       const definition = listed.find(tool => tool.name === 'agent_hq_validate_telemetry_definition')!.inputSchema.properties!.definition as any;
       expect(definition.properties).toHaveProperty('journey');

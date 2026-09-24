@@ -64,7 +64,10 @@ export default function TelemetryAnalyze({catalog,metrics,reports,filters,onFilt
   useEffect(()=>{
     if(initialized.current)return;initialized.current=true;
     const params=new URLSearchParams(window.location.search),report=reports.find(item=>item.id===params.get('report_id'));
-    if(report)void openView(report,params.get('widget_id')??undefined);
+    if(params.get('dashboard_id')) {
+      void telemetryClient.getTelemetryResource<import('@/lib/dashboardTypes').DashboardDocument>('dashboards',params.get('dashboard_id')!).then(page=>openView({...page,definition:{presentation:'dashboard',metrics:page.definition.metrics,scope:page.definition.scope,from:page.definition.from,to:page.definition.to,timezone:page.definition.timezone}},params.get('widget_id')??undefined)).catch(cause=>setError(telemetryErrorMessage(cause)));
+    }
+    else if(report)void openView(report,params.get('widget_id')??undefined);
     else if(params.get('report_id'))setError('This saved view or dashboard is unavailable in the selected scope.');
     else {const selected=metrics.find(item=>item.id===(initialMetricId??params.get('metric_id')))??metrics[0];if(selected)selectMetric(selected);}
     // The initial selection is restored once; later choices belong to this workspace.
@@ -95,7 +98,7 @@ export default function TelemetryAnalyze({catalog,metrics,reports,filters,onFilt
       setSaved(updated);await reload();setNotice('View saved with its pinned metric revision. It is now available in the dashboard builder.');
     }catch(cause){setError(telemetryErrorMessage(cause));}finally{setSaving(false);}
   }
-  const expressions=widget?.view?.group_by??[];
+  const expressions=widget?.view?.group_by??definition?.group_by??[];
   const grouping=expressions.length===0?'':expressions.length===1&&'field' in expressions[0]?expressions[0].field:'__custom__';
   const filter=widget?.view?.filter;
   const agentFilter=filter&&'field'in filter&&filter.field==='agent_id'&&filter.op==='eq'?String(filter.value):'';
@@ -104,7 +107,7 @@ export default function TelemetryAnalyze({catalog,metrics,reports,filters,onFilt
       <div className="mt-5 grid gap-4 md:grid-cols-2"><Select label="Metric" value={metricId} onChange={id=>{const selected=metrics.find(item=>item.id===id);if(selected)selectMetric(selected);}} options={[{value:'',label:'Choose a saved metric'},...metrics.map(item=>({value:item.id,label:item.name})),...(metric&&!metrics.some(item=>item.id===metric.id)?[{value:metric.id,label:`${metric.name} (archived)`}]:[])]}/><Select label="Saved view" value={saved?.id??''} onChange={id=>{const report=views.find(item=>item.id===id);if(report)void openView(report);else if(metric)selectMetric(metric);}} options={[{value:'',label:'Unsaved view'},...views.map(item=>({value:item.id,label:item.name}))]}/></div>
       {widget&&definition&&<><p className="mt-3 text-xs text-slate-500">Pinned revision {widget.metric_revision_id.slice(0,8)} · {definition.time_basis==='current'?'Current snapshot: date range does not apply.':'Historical measurement: selected date range applies.'}{metric&&metric.latest_revision_id!==widget.metric_revision_id?' · A newer metric revision is available. Selecting the metric again uses it.':''}</p>
       {issue&&<div role="alert" className="mt-4 rounded border border-amber-500/30 p-3 text-sm text-amber-200"><p>{issue}</p>{metric&&!metric.archived_at&&<Button type="button" size="sm" variant="secondary" className="mt-2" onClick={()=>onEdit(metric)}>Repair metric definition</Button>}</div>}
-      <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4"><Select label="Break down by" value={grouping} onChange={field=>patchWidget({view:{...widget.view,group_by:field?[{field}]:[]}})} options={[{value:'',label:'One total'},{value:'agent_id',label:'Agent (selected attribution)'},{value:'project_id',label:'Project'},{value:'workflow_id',label:'Workflow'},{value:'task_type',label:'Task type'},{value:'status',label:'Status'},...catalog?.fields.filter(field=>field.id.startsWith('field_')&&!field.retired).map(field=>({value:field.id,label:field.label}))??[],...(grouping==='__custom__'?[{value:'__custom__',label:'Saved custom grouping'}]:[])]}/>
+      <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4"><Select label="Break down by" value={grouping} onChange={field=>{if(field!=='__custom__')patchWidget({view:{...widget.view,group_by:field?[{field}]:[]}});}} options={[{value:'',label:'One total'},{value:'agent_id',label:'Agent (selected attribution)'},{value:'project_id',label:'Project'},{value:'workflow_id',label:'Workflow'},{value:'task_type',label:'Task type'},{value:'status',label:'Status'},...catalog?.fields.filter(field=>field.id.startsWith('field_')&&!field.retired).map(field=>({value:field.id,label:field.label}))??[],...(grouping==='__custom__'?[{value:'__custom__',label:'Saved custom grouping'}]:[])]}/>
       <Select label="Chart style" value={widget.display??'bar'} onChange={value=>patchWidget({display:value as TelemetryDisplay,...(value==='line'&&!widget.view?.bucket?{view:{...widget.view,bucket:'day'}}:{})})} options={availableTelemetryDisplays(definition)}/>
       {definition.time_basis!=='current'&&<Select label="Time bucket" value={widget.view?.bucket??''} onChange={value=>patchWidget({view:{...widget.view,bucket:(value||null) as NonNullable<TelemetryWidget['view']>['bucket']}})} options={[{value:'',label:'Whole interval'},{value:'hour',label:'Hour'},{value:'day',label:'Day'},{value:'week',label:'Week'},{value:'month',label:'Month'}]}/>}
       <Select label="Sort groups" value={widget.view?.sort??'value_desc'} onChange={value=>patchWidget({view:{...widget.view,sort:value as NonNullable<TelemetryWidget['view']>['sort']}})} options={[{value:'value_desc',label:'Largest first'},{value:'value_asc',label:'Smallest first'},{value:'label',label:'Name'}]}/></div>

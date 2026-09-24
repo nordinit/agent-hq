@@ -1,6 +1,12 @@
 /** Presentation helpers deliberately do not calculate metrics from task rows. */
 export type TelemetryScalar = number | string | { decimal: string } | null;
 
+/** Ratio row values are numerator contributions, not per-record percentages. */
+export function formatTelemetryContribution(row: { value: TelemetryScalar | boolean; numerator?: TelemetryScalar; denominator?: TelemetryScalar }, unit?: string): string {
+  if (row.denominator != null) return `${formatTelemetryValue(row.numerator)} / ${formatTelemetryValue(row.denominator)}`;
+  return typeof row.value === 'boolean' ? String(row.value) : formatTelemetryValue(row.value, unit);
+}
+
 export function formatTelemetryValue(value: TelemetryScalar | undefined, unit?: string): string {
   if (value == null) return '—';
   const raw = typeof value === 'object' ? value.decimal : value;

@@ -1,1 +1,1 @@
-export { default } from './MetricDashboards';
+export { default } from './DashboardWorkspace';

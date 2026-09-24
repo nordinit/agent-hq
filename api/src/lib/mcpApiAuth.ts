@@ -140,7 +140,7 @@ export const AGENT_MCP_CAPABILITY_CATALOG = [
   {
     key: 'telemetry.read', group: 'Telemetry', label: 'Read project telemetry',
     description: 'Read the canonical telemetry catalog, saved metrics/profiles/reports, bindings, coverage, retained results and contributors within the credential agent\'s assigned project and tenant. Rechecks source access for retained results; does not run queries or change definitions.',
-    endpoints: ['GET /api/v1/telemetry/v2/catalog', 'GET /api/v1/telemetry/v2/metrics', 'GET /api/v1/telemetry/v2/metrics/:id', 'GET /api/v1/telemetry/v2/profiles', 'GET /api/v1/telemetry/v2/profiles/:id', 'GET /api/v1/telemetry/v2/reports', 'GET /api/v1/telemetry/v2/reports/:id', 'GET /api/v1/telemetry/v2/bindings', 'GET /api/v1/telemetry/v2/queries/:id', 'GET /api/v1/telemetry/v2/queries/:id/contributors', 'GET /api/v1/telemetry/v2/reports/:id/snapshots', 'GET /api/v1/telemetry/v2/snapshots', 'GET /api/v1/telemetry/v2/coverage', 'GET /api/v1/telemetry/v2/backfills', 'GET /api/v1/telemetry/v2/settings'],
+    endpoints: ['GET /api/v1/telemetry/v2/catalog', 'GET /api/v1/telemetry/v2/metrics', 'GET /api/v1/telemetry/v2/metrics/:id', 'GET /api/v1/telemetry/v2/profiles', 'GET /api/v1/telemetry/v2/profiles/:id', 'GET /api/v1/telemetry/v2/dashboards', 'GET /api/v1/telemetry/v2/dashboards/:id', 'GET /api/v1/telemetry/v2/reports', 'GET /api/v1/telemetry/v2/reports/:id', 'GET /api/v1/telemetry/v2/bindings', 'GET /api/v1/telemetry/v2/queries/:id', 'GET /api/v1/telemetry/v2/queries/:id/contributors', 'GET /api/v1/telemetry/v2/reports/:id/snapshots', 'GET /api/v1/telemetry/v2/snapshots', 'GET /api/v1/telemetry/v2/coverage', 'GET /api/v1/telemetry/v2/backfills', 'GET /api/v1/telemetry/v2/settings'],
     defaultEnabled: { scoped_runtime: false, trusted_admin: true },
   },
   {
@@ -158,7 +158,7 @@ export const AGENT_MCP_CAPABILITY_CATALOG = [
   {
     key: 'telemetry.manage_reports', group: 'Telemetry', label: 'Manage project telemetry reports',
     description: 'Create immutable saved report revisions, freeze retained results as report snapshots and archive reports within the assigned project. Importing a package also requires telemetry.manage_metrics. Does not grant telemetry maintenance, retention changes or workflow edits.',
-    endpoints: ['POST /api/v1/telemetry/v2/reports', 'POST /api/v1/telemetry/v2/reports/:id/revisions', 'DELETE /api/v1/telemetry/v2/reports/:id', 'POST /api/v1/telemetry/v2/reports/:id/snapshots', 'POST /api/v1/telemetry/v2/import'],
+    endpoints: ['POST /api/v1/telemetry/v2/dashboards', 'POST /api/v1/telemetry/v2/dashboards/:id/revisions', 'DELETE /api/v1/telemetry/v2/dashboards/:id', 'POST /api/v1/telemetry/v2/reports', 'POST /api/v1/telemetry/v2/reports/:id/revisions', 'DELETE /api/v1/telemetry/v2/reports/:id', 'POST /api/v1/telemetry/v2/reports/:id/snapshots', 'POST /api/v1/telemetry/v2/import'],
     defaultEnabled: { scoped_runtime: false, trusted_admin: true },
   },
   {
@@ -2188,9 +2188,10 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
     const path = requestPath.slice('/telemetry/v2'.length);
     let requiredCapability: AgentMcpCapabilityKey;
     if (method === 'POST' && path === '/bindings/preview') requiredCapability = 'telemetry.read';
-    else if (method === 'GET' && /^\/(?:catalog|metrics(?:\/[^/]+)?|profiles(?:\/[^/]+)?|reports(?:\/[^/]+(?:\/snapshots)?)?|bindings|queries\/[^/]+(?:\/contributors)?|snapshots|coverage|backfills|settings)$/.test(path)) requiredCapability = 'telemetry.read';
+    else if (method === 'GET' && /^\/(?:catalog|metrics(?:\/[^/]+)?|profiles(?:\/[^/]+)?|dashboards(?:\/[^/]+)?|reports(?:\/[^/]+(?:\/snapshots)?)?|bindings|queries\/[^/]+(?:\/contributors)?|snapshots|coverage|backfills|settings)$/.test(path)) requiredCapability = 'telemetry.read';
     else if ((method === 'POST' && ['/definitions/validate', '/queries/preview', '/queries'].includes(path)) || (method === 'DELETE' && /^\/queries\/[^/]+$/.test(path))) requiredCapability = 'telemetry.query';
     else if ((method === 'POST' && /^\/(metrics|profiles)(?:\/[^/]+\/revisions)?$/.test(path)) || (method === 'DELETE' && /^\/(metrics|profiles)\/[^/]+$/.test(path)) || (method === 'PUT' && path === '/bindings')) requiredCapability = 'telemetry.manage_metrics';
+    else if ((method === 'POST' && /^\/dashboards(?:\/[^/]+\/revisions)?$/.test(path)) || (method === 'DELETE' && /^\/dashboards\/[^/]+$/.test(path))) requiredCapability = 'telemetry.manage_reports';
     else if ((method === 'POST' && /^\/reports(?:\/[^/]+\/(revisions|snapshots))?$/.test(path)) || (method === 'DELETE' && /^\/reports\/[^/]+$/.test(path))) requiredCapability = 'telemetry.manage_reports';
     else if (method === 'POST' && path === '/export') requiredCapability = 'telemetry.export';
     else if (method === 'POST' && path === '/import') {

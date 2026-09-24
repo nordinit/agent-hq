@@ -30,7 +30,7 @@ router.post('/definitions/validate',handle(async(req,res)=>{
   const compiled=await compileDefinition(db,access,req.body.definition,scope,req.body.profile_revision_id);
   res.json({valid:true,errors:[],references:compiled.dependencies.catalog.map((field:any)=>field.id),definition:compiled.definition,description:compiled.definition.description??`${compiled.definition.name}: ${compiled.definition.grain} / ${compiled.definition.measure.kind}`,dependencies:compiled.dependencies});
 }));
-for(const [plural,kind] of Object.entries({metrics:'metric',profiles:'profile',reports:'report'}) as Array<[string,DefinitionKind]>){
+for(const [plural,kind] of Object.entries({metrics:'metric',profiles:'profile',reports:'report',dashboards:'dashboard'}) as Array<[string,DefinitionKind]>){
   router.get(`/${plural}`,handle(async(req,res)=>{const db=getDb(),access=await telemetryAccess(db,req),scope=await resolveScope(db,access,queryScope(req.query));res.json({[plural]:await listDefinitions(db,access,kind,scope)});}));
   router.post(`/${plural}`,handle(async(req,res)=>{const db=getDb();res.status(201).json(await createDefinition(db,await telemetryAccess(db,req),kind,req.body));}));
   router.get(`/${plural}/:id`,handle(async(req,res)=>{const db=getDb();res.json(await getDefinition(db,await telemetryAccess(db,req),kind,req.params.id));}));

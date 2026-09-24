@@ -63,8 +63,12 @@ describe('telemetry MCP capability boundary', () => {
     expect((await request('/profiles/id/revisions', 'POST', {})).status).toBe(200);
     expect((await request('/bindings', 'PUT', {})).status).toBe(200);
     expect((await request('/reports', 'POST', {})).status).toBe(403);
+    expect((await request('/dashboards', 'POST', {})).status).toBe(403);
     expect((await request('/reports/id/snapshots', 'POST', {})).status).toBe(403);
     await replaceAgentMcpPermissionPolicy(getDb(), 901, ['telemetry.manage_reports']);
+    expect((await request('/dashboards', 'POST', {})).status).toBe(200);
+    expect((await request('/dashboards/id/revisions', 'POST', {})).status).toBe(200);
+    expect((await request('/dashboards/id', 'DELETE')).status).toBe(200);
     expect((await request('/reports/id/snapshots', 'POST', {})).status).toBe(200);
     expect((await request('/metrics', 'POST', {})).status).toBe(403);
   });

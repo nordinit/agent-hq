@@ -7,7 +7,7 @@ import {contentHash,getTelemetryCatalog} from './catalog';
 import type {TelemetrySignal} from './signals';
 
 export async function exportTelemetry(db:Db,access:TelemetryAccess,raw:unknown){
-  const input=z.object({scope:scopeSchema.optional(),metric_ids:z.array(z.string()).max(100).optional(),profile_ids:z.array(z.string()).max(100).optional(),report_ids:z.array(z.string()).max(100).optional()}).strict().parse(raw);
+  const input=z.object({scope:scopeSchema.optional(),metric_ids:z.array(z.string()).max(100).optional(),profile_ids:z.array(z.string()).max(100).optional(),report_ids:z.array(z.string()).max(100).optional(),dashboard_ids:z.array(z.string()).max(100).optional()}).strict().parse(raw);
   const scope=await resolveScope(db,access,input.scope??{}),resources:any[]=[],seen=new Set<string>(),catalog=new Map<string,any>(),signals=new Map<string,TelemetrySignal>(),eventMappingIds=new Set<number>();
   async function add(kind:DefinitionKind,id:string){
     if(seen.has(id))return;seen.add(id);
@@ -29,8 +29,8 @@ export async function exportTelemetry(db:Db,access:TelemetryAccess,raw:unknown){
       for(const reference of references){const dependency=await getRevision(db,access,reference);await add(dependency.kind,dependency.definition_id);}
     }
   }
-  const explicit=input.metric_ids!==undefined||input.profile_ids!==undefined||input.report_ids!==undefined;
-  for(const [kind,key]of [['metric','metric_ids'],['profile','profile_ids'],['report','report_ids']] as const){
+  const explicit=input.metric_ids!==undefined||input.profile_ids!==undefined||input.report_ids!==undefined||input.dashboard_ids!==undefined;
+  for(const [kind,key]of [['metric','metric_ids'],['profile','profile_ids'],['report','report_ids'],['dashboard','dashboard_ids']] as const){
     const ids=explicit?(input[key]??[]):(await listDefinitions(db,access,kind,scope)).map(row=>row.id);
     for(const id of ids)await add(kind,id);
   }
@@ -52,7 +52,7 @@ export async function exportTelemetry(db:Db,access:TelemetryAccess,raw:unknown){
     ...(eventMappingIds.size?{event_mappings:eventMappings}:{}),...(signals.size?{signals:[...signals.values()]}:{})};
 }
 const portableSignalSchema=z.object({id:z.string(),kind:z.enum(['status','outcome']),key:z.string(),label:z.string(),identity:z.string(),scope:scopeSchema,revision_id:z.string().optional(),terminal:z.number().optional(),retired:z.boolean().optional(),unregistered:z.boolean().optional(),source:z.object({table:z.string(),id:z.string(),generation:z.string()}).strict().optional()}).strict();
-const resourceSchema=z.object({id:z.string(),kind:z.enum(['metric','profile','report']),key:z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/).max(128),name:z.string().min(1).max(200),description:z.string().max(4000).optional(),scope:scopeSchema,latest_revision_id:z.string(),revisions:z.array(z.object({id:z.string(),revision:z.number().int().positive(),definition:z.unknown(),dependencies:z.object({signals:z.array(portableSignalSchema).max(200)}).strict().optional()}).strict()).min(1).max(100)}).strict();
+const resourceSchema=z.object({id:z.string(),kind:z.enum(['metric','profile','report','dashboard']),key:z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/).max(128),name:z.string().min(1).max(200),description:z.string().max(4000).optional(),scope:scopeSchema,latest_revision_id:z.string(),revisions:z.array(z.object({id:z.string(),revision:z.number().int().positive(),definition:z.unknown(),dependencies:z.object({signals:z.array(portableSignalSchema).max(200)}).strict().optional()}).strict()).min(1).max(100)}).strict();
 const bundleSchema=z.object({format:z.literal('agent-hq-telemetry'),version:z.literal(1),exported_at:z.string().optional(),resources:z.array(resourceSchema).max(100),catalog:z.array(z.record(z.string(),z.unknown())).max(5000),bindings:z.array(z.record(z.string(),z.unknown())).max(1000).optional(),event_mappings:z.array(z.record(z.string(),z.unknown())).max(1000).optional(),signals:z.array(portableSignalSchema).max(5000).optional()}).strict();
 export async function importTelemetry(db:Db,access:TelemetryAccess,raw:unknown){
   const input=z.object({bundle:z.unknown(),scope:scopeSchema,reference_map:z.record(z.string(),z.string()).default({})}).strict().parse(raw);

@@ -60,6 +60,17 @@ export const telemetryDefinitionExamples = {
       }],
     },
   },
+  dashboard_page: {
+    description: 'A configurable dashboard page. Save with save_telemetry_dashboard; metric bindings pin saved revisions and blocks reference their local binding IDs. Replace METRIC_REVISION_ID before saving.',
+    definition: {
+      version: 1, timezone: 'UTC', appearance: { width: 'wide', density: 'comfortable' },
+      metrics: [{ id: 'searches', metric_revision_id: 'METRIC_REVISION_ID' }],
+      sections: [{ id: 'overview', title: 'Overview', columns: [{ id: 'main', width: 12, blocks: [
+        { id: 'summary', type: 'metric', binding_id: 'searches', title: 'Lead searches', display: 'card', accent: 'blue', precision: 0 },
+        { id: 'context', type: 'note', text: 'Use the metric details to inspect contributing records.' },
+      ] }] }],
+    },
+  },
 };
 
 let contract: ReturnType<typeof buildContract> | undefined;
@@ -76,7 +87,7 @@ function buildContract() {
       'Metric signal_ref requires a pinned profile revision; metric_ref requires a compatible pinned aggregate metric revision. Profiles and query/widget filter overrides use explicit predicates.',
       'Current snapshots cannot be historical trends. Use an explicit created_at population predicate for a creation cohort, or event/journey grain with from/to, timezone and bucket for historical measurements.',
       'The shared backend validates canonical references, scope, type/basis compatibility, RE2 patterns, journey/attribution requirements and bounded expressions (500 nodes, depth 12). Structural schemas do not replace semantic validation.',
-      'Validate and preview a metric before saving. Save/revise reports for views and dashboards; revisions require expected_revision_id. Inspect query contributors using the retained query_id and exact JSON group key.',
+      'Validate and preview a metric before saving. Save/revise reports for saved metric views and legacy dashboards. Save/revise dashboards for configurable pages with sections, columns and blocks. Revisions require expected_revision_id. Inspect query contributors using the retained query_id and exact JSON group key.',
     ],
     examples: telemetryDefinitionExamples,
   };
