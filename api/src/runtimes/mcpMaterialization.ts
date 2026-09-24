@@ -186,8 +186,17 @@ function applyAssignmentToolAllowlist(
   const existingToolFilter = isRecord(merged.toolFilter) ? merged.toolFilter : {};
   const allowedTools = allowlist.configured && !allowlist.malformed ? Array.from(new Set(allowlist.tools)).sort() : [];
   const include = allowedTools.length > 0 ? allowedTools : [FAIL_CLOSED_MCP_TOOL_INCLUDE];
+  const launch = { ...merged };
+  if (launch.enforce_tool_allowlist === true) {
+    if (typeof launch.command !== 'string') throw new Error('MCP tool gateway requires a stdio command');
+    const upstream = { command: launch.command, args: launch.args ?? [], cwd: launch.cwd, allowedTools };
+    launch.command = process.execPath;
+    launch.args = [path.resolve(__dirname, '../bin/mcp-tool-gateway.js')];
+    launch.env = { ...(isRecord(launch.env) ? launch.env : {}), AGENT_HQ_MCP_UPSTREAM: JSON.stringify(upstream) };
+  }
+  delete launch.enforce_tool_allowlist;
   return {
-    ...merged,
+    ...launch,
     toolFilter: {
       ...existingToolFilter,
       include,

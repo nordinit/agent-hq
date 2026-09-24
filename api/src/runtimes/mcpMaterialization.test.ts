@@ -46,6 +46,26 @@ describe('materializeAgentMcpConfig', () => {
     if (registryFixtureReady) await teardownTestDb();
   });
 
+  it('uses the same allowlist for discovery and the opt-in invocation gateway without putting credentials in launch arguments', async () => {
+    await createRegistryTables();
+    await getDb().run(`INSERT INTO agents (id, tenant_id, name, session_key) VALUES (1, 1, 'Agent', 'agent:test-1:main')`);
+    await getDb().run(`INSERT INTO mcp_servers (id, tenant_id, name, slug, command, args) VALUES (40, 1, 'CRM', 'crm', '/bin/bash', '["/crm/run-mcp.sh"]')`);
+    await getDb().run(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id, overrides) VALUES (1,40,?)`, JSON.stringify({
+      enforce_tool_allowlist: true, tool_allowlist: ['correction'], env: { CRM_AGENT_KEY_FILE: '/private/keys/james.env' },
+    }));
+    const workingDirectory = makeTempDir('agent-hq-gateway-');
+    const result = await materializeAgentMcpConfig({ db: getDb(), agentId: 1, workingDirectory });
+    expect(result.ok).toBe(true);
+    const config = JSON.parse(fs.readFileSync(path.join(workingDirectory, '.mcp.json'), 'utf8'));
+    const server = Object.values(config.mcpServers)[0] as any;
+    expect(server.args[0]).toMatch(/mcp-tool-gateway\.js$/);
+    expect(server.args.join(' ')).not.toContain('/private/keys');
+    expect(JSON.parse(server.env.AGENT_HQ_MCP_UPSTREAM)).toMatchObject({ command: '/bin/bash', args: ['/crm/run-mcp.sh'], allowedTools: ['correction'] });
+    expect(server.env.CRM_AGENT_KEY_FILE).toBe('/private/keys/james.env');
+    expect(server.toolFilter.include).toEqual(['correction']);
+    expect(server.enforce_tool_allowlist).toBeUndefined();
+  });
+
   it('does not materialize assigned capability tools as an OpenClaw MCP bridge', async () => {
     await createRegistryTables();
     await getDb().run(`INSERT INTO agents (id, tenant_id, name, session_key) VALUES (1, 1, 'Agent', 'agent:test-1:main')`);
