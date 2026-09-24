@@ -1,4 +1,5 @@
 'use client';
+import { createClientId } from '@/lib/clientId';
 
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
@@ -94,7 +95,7 @@ export default function TelemetryAnalyze({catalog,metrics,reports,filters,onFilt
       if(!name.trim())throw new Error('Give the view a name.');
       const window=windowSettings();
       const next={presentation:'view' as const,metrics:[widget],scope:filters.scope,timezone:filters.timezone,...(definition.time_basis==='current'?{}:window)};
-      const updated=saved&&!asNew?await telemetryClient.reviseTelemetryReport(saved.id,{definition:next,expected_revision_id:saved.latest_revision_id,name:name.trim()}):await telemetryClient.createTelemetryReport({key:`view_${crypto.randomUUID()}`,name:name.trim(),scope:filters.scope,definition:next});
+      const updated=saved&&!asNew?await telemetryClient.reviseTelemetryReport(saved.id,{definition:next,expected_revision_id:saved.latest_revision_id,name:name.trim()}):await telemetryClient.createTelemetryReport({key:`view_${createClientId()}`,name:name.trim(),scope:filters.scope,definition:next});
       setSaved(updated);await reload();setNotice('View saved with its pinned metric revision. It is now available in the dashboard builder.');
     }catch(cause){setError(telemetryErrorMessage(cause));}finally{setSaving(false);}
   }

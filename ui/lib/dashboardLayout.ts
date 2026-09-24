@@ -1,7 +1,8 @@
 import type { DashboardBlock, DashboardColumn, DashboardDocument, DashboardDraft, DashboardOperation, DashboardSection } from './dashboardTypes.ts';
 import type { Scalar, TelemetryReport, TelemetryResult } from './telemetryTypes.ts';
+import { createClientId } from './clientId.ts';
 
-export const dashboardId = () => crypto.randomUUID();
+export const dashboardId = createClientId;
 export const operationLabels: Record<DashboardOperation, string> = {
   agents: 'Total agents', active_runs: 'Active runs', templates: 'Enabled templates', runs: 'Runs · last 24h',
   completed_runs: 'Completed runs · last 24h', tokens: 'Tokens · last 24h', failed_runs: 'Failed runs · last 24h',
