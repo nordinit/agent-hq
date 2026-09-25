@@ -2,7 +2,7 @@
 
 This document records the intended ownership boundaries for the Agent HQ frontend after the UI-folder refactor moves.
 
-It complements `docs/ui-folder-refactor-phase-0-inventory.md`, which captured the initial inventory and migration plan. This file describes the steady-state architecture the frontend should now follow.
+The phase-0 inventory and migration plan for that refactor are not part of this repository. This file describes the steady-state architecture the frontend should now follow.
 
 ## Goals
 - Make route ownership obvious.
