@@ -521,26 +521,6 @@ app.use('/api/v1/provider-connections', providerConnectionsRouter);
 app.use('/api/v1/github-identities', githubIdentitiesRouter);
 app.use('/api/v1/sessions', sessionsRouter);
 
-// Instances route (shortcut for Kanban)
-app.get('/api/v1/instances', async (_req, res) => {
-  try {
-    const { getDb } = require('./db/client');
-    const db = getDb();
-    const instances = await db.all(`
-      SELECT ji.*, a.job_title as job_title, a.name as agent_name, a.session_key as agent_session_key,
-             t.title as task_title, t.status as task_status, t.project_id as project_id
-      FROM job_instances ji
-      LEFT JOIN agents a ON a.id = ji.agent_id
-      LEFT JOIN tasks t ON t.id = ji.task_id
-      ORDER BY ji.created_at DESC
-      LIMIT 200
-    `);
-    res.json(instances);
-  } catch (err) {
-    res.status(500).json({ error: String(err) });
-  }
-});
-
 // Dashboard stats
 app.get('/api/v1/stats', async (req, res) => {
   try {

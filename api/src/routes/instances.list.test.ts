@@ -26,7 +26,7 @@ async function getJson(app: express.Express, route: string): Promise<{ status: n
 describe('GET /api/v1/instances', () => {
   beforeEach(async () => {
     db = await setupTestDb();
-    await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Test', 'test', 1)`);
+    await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Test', 'test', 1), (2, 'Other', 'other', 0)`);
     await db.run(`
       INSERT INTO app_settings (key, value)
       VALUES ('default_tenant_id', '1'), ('active_tenant_id', '1')
@@ -42,11 +42,20 @@ describe('GET /api/v1/instances', () => {
     await db.run(`INSERT INTO tasks (id, tenant_id, title, status, project_id, workflow_id) VALUES (11, 1, 'Backend two', 'ready', 7, 70)`);
     await db.run(`INSERT INTO tasks (id, tenant_id, title, status, project_id, workflow_id) VALUES (12, 1, 'Mobile', 'ready', 8, 80)`);
     await db.run(`
-      INSERT INTO job_instances (id, task_id, agent_id, session_key, status, created_at)
+      INSERT INTO job_instances (id, tenant_id, task_id, agent_id, session_key, status, created_at)
       VALUES
-        (101, 10, 1, 'run:101', 'done', '2026-06-01T10:00:00Z'),
-        (102, 11, 1, 'run:102', 'running', '2026-06-01T11:00:00Z'),
-        (103, 12, 2, 'run:103', 'done', '2026-06-01T12:00:00Z')
+        (101, 1, 10, 1, 'run:101', 'done', '2026-06-01T10:00:00Z'),
+        (102, 1, 11, 1, 'run:102', 'running', '2026-06-01T11:00:00Z'),
+        (103, 1, 12, 2, 'run:103', 'done', '2026-06-01T12:00:00Z')
+    `);
+    // Another tenant's run, newer than every run above, so an unscoped list would lead with it.
+    await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (9, 2, 'Other tenant project')`);
+    await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name, workflow_type) VALUES (90, 2, 9, 'Other workflow', 'generic')`);
+    await db.run(`INSERT INTO agents (id, tenant_id, name, job_title, session_key) VALUES (3, 2, 'Outsider', 'Other', 'agent:outsider:main')`);
+    await db.run(`INSERT INTO tasks (id, tenant_id, title, status, project_id, workflow_id) VALUES (13, 2, 'Other tenant secret', 'ready', 9, 90)`);
+    await db.run(`
+      INSERT INTO job_instances (id, tenant_id, task_id, agent_id, session_key, status, created_at)
+      VALUES (104, 2, 13, 3, 'run:104', 'running', '2026-06-02T09:00:00Z')
     `);
   });
 
@@ -74,5 +83,23 @@ describe('GET /api/v1/instances', () => {
     expect(res.status).toBe(200);
     expect(res.body).toHaveLength(1);
     expect(res.body[0]).toMatchObject({ id: 102 });
+  });
+
+  it("never lists another tenant's runs", async () => {
+    const app = express();
+    app.use('/api/v1/instances', instancesRouter);
+
+    const all = await getJson(app, '/api/v1/instances');
+    expect(all.status).toBe(200);
+    expect(all.body.map((row: { id: number }) => row.id)).toEqual([103, 102, 101]);
+
+    const byAgent = await getJson(app, '/api/v1/instances?agent_id=3');
+    expect(byAgent.body).toEqual([]);
+    const byProject = await getJson(app, '/api/v1/instances?project_id=9');
+    expect(byProject.body).toEqual([]);
+
+    await db.run(`UPDATE app_settings SET value = '2' WHERE key = 'active_tenant_id'`);
+    const otherTenant = await getJson(app, '/api/v1/instances');
+    expect(otherTenant.body.map((row: { id: number }) => row.id)).toEqual([104]);
   });
 });

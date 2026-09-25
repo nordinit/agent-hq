@@ -48,12 +48,16 @@ function fallbackExecutionState(status: unknown): string {
 router.get('/', async (req: Request, res: Response) => {
   try {
     const db = getDb();
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     const agentId = readOptionalPositiveInteger(req.query.agent_id);
     const projectId = readOptionalPositiveInteger(req.query.project_id);
     const limit = readPositiveInteger(req.query.limit, 200, 500);
     const offset = Math.max(readPositiveInteger(req.query.offset, 0, Number.MAX_SAFE_INTEGER), 0);
-    const filters: string[] = [];
-    const params: unknown[] = [];
+    // Scoped by tenant like every other instance route (see /:id/runtime): the list carries
+    // task titles, session keys, run errors and changed files.
+    const jobInstancesHaveTenant = await columnExists(db, 'job_instances', 'tenant_id');
+    const filters: string[] = [`${jobInstancesHaveTenant ? 'ji.tenant_id' : 'a.tenant_id'} = ?`];
+    const params: unknown[] = [tenantId];
 
     if (agentId !== null) {
       filters.push('ji.agent_id = ?');
@@ -64,7 +68,7 @@ router.get('/', async (req: Request, res: Response) => {
       params.push(projectId);
     }
 
-    const whereClause = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
+    const whereClause = `WHERE ${filters.join(' AND ')}`;
     params.push(limit, offset);
 
     const instances = await db.all(`
