@@ -7,6 +7,7 @@ import type { DashboardBlock, DashboardDocument, DashboardDraft, DashboardOperat
 import { operationLabels } from '@/lib/dashboardLayout';
 import type { TelemetryCatalog, TelemetryMetric, TelemetryReport, TelemetryScope, TelemetryWidget } from '@/lib/telemetryTypes';
 import { telemetryErrorMessage } from '@/lib/telemetryPresentation';
+import { telemetryScopeConflict, telemetryScopeConflictMessage, telemetryScopeValueLabel } from '@/lib/telemetryViews';
 import { USER_NAME_KEY } from '@/components/OnboardingWizard';
 import { useDashboardData } from './useDashboardData';
 import DashboardCanvas from './DashboardCanvas';
@@ -128,7 +129,7 @@ export default function DashboardWorkspace() {
     column.blocks.push(block); change({ ...draft, definition: next }); setSelectedBlock(block.id); setInsertColumn(null);
   }
   function addMetric(metric: TelemetryMetric) {
-    const id = dashboardId(); insert({ id: dashboardId(), type: 'metric', binding_id: id, title: metric.name, display: 'card', accent: 'blue', precision: 2 }, { id, metric_id: metric.id, metric_revision_id: metric.latest_revision_id, title: metric.name, view: { scope: metric.scope, group_by: metric.definition.group_by } });
+    const id = dashboardId(); insert({ id: dashboardId(), type: 'metric', binding_id: id, title: metric.name, display: 'card', accent: 'blue', precision: 2 }, { id, metric_id: metric.id, metric_revision_id: metric.latest_revision_id, title: metric.name, view: { group_by: metric.definition.group_by } });
   }
   function addView(report: TelemetryReport) {
     const metric = structuredClone(report.definition.metrics[0]); if (!metric) return;
@@ -147,6 +148,20 @@ export default function DashboardWorkspace() {
       const link = document.createElement('a'); link.href = url; link.download = `${draft.name.replace(/[^a-zA-Z0-9_-]/g, '-')}.json`; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (cause) { setError(telemetryErrorMessage(cause)); }
   }
+  // Everything a block may draw from, checked against the dashboard's own scope (the saved
+  // resource's scope plus the page filters) so incompatible metrics are explained up front.
+  const pageScope: TelemetryScope = { ...(active?.scope ?? {}), ...(page.scope ?? {}) };
+  const pageScopeSummary = (['project_id', 'workflow_id', 'workflow_type', 'task_type'] as const)
+    .flatMap(key => pageScope[key] != null ? [telemetryScopeValueLabel(key, pageScope[key]!, catalog)] : []).join(', ') || 'all projects';
+  const describeConflict = (scope: TelemetryScope | undefined) => {
+    const conflict = telemetryScopeConflict(scope, pageScope);
+    return conflict ? telemetryScopeConflictMessage(conflict, catalog) : null;
+  };
+  const sources = [
+    ...metrics.filter(metric => matches(metric.name)).map(metric => ({ key: `metric-${metric.id}`, label: `Metric · ${metric.name}`, add: () => addMetric(metric), conflict: describeConflict(metric.scope) })),
+    ...reports.filter(report => report.definition.presentation === 'view' && matches(report.name)).map(report => ({ key: `view-${report.id}`, label: `Saved view · ${report.name}`, add: () => addView(report),
+      conflict: describeConflict({ ...report.scope, ...report.definition.scope, ...report.definition.metrics[0]?.view?.scope }) })),
+  ];
   const latest = Object.values(data).flatMap(item => item.result?.as_of ? [item.result.as_of] : []).sort()[0];
   const matches = (text: string) => text.toLowerCase().includes(search.toLowerCase());
   const operationalAllowed = !scope.workflow_id && !scope.workflow_type && !scope.task_type;
@@ -176,8 +191,9 @@ export default function DashboardWorkspace() {
       {(['heading', 'note', 'callout', 'divider', 'link', 'comparison'] as const).filter(matches).map(type => <button className={styles.button} type="button" key={type} disabled={type === 'comparison' && !page.metrics.length} onClick={() => insert(type === 'comparison' ? { id: dashboardId(), type, title: 'Metric comparison', binding_ids: page.metrics.slice(0, 4).map(metric => metric.id) } : type === 'link' ? { id: dashboardId(), type, title: 'Tasks board', url: '/tasks' } : type === 'divider' ? { id: dashboardId(), type } : { id: dashboardId(), type, text: type === 'heading' ? 'New heading' : '', surface: type === 'note' ? 'plain' : 'card' })}>{type[0].toUpperCase() + type.slice(1)}</button>)}
       {operationalAllowed && Object.entries(operationLabels).filter(([, label]) => matches(label)).map(([operation, label]) => <button className={styles.button} type="button" key={operation} onClick={() => insert({ id: dashboardId(), type: 'operation', operation: operation as DashboardOperation, accent: 'blue' })}>{label}</button>)}
       {metricBudgetFull && <p className={styles.muted}>All 10 metric sources are in use. Duplicate an existing block to reuse its source.</p>}
-      {metrics.filter(metric => matches(metric.name)).map(metric => <button className={styles.button} type="button" key={metric.id} disabled={metricBudgetFull} onClick={() => addMetric(metric)}>Metric · {metric.name}</button>)}
-      {reports.filter(report => report.definition.presentation === 'view' && matches(report.name)).map(report => <button className={styles.button} type="button" key={report.id} disabled={metricBudgetFull} onClick={() => addView(report)}>Saved view · {report.name}</button>)}
+      {sources.filter(source => !source.conflict).map(source => <button className={styles.button} type="button" key={source.key} disabled={metricBudgetFull} onClick={source.add}>{source.label}</button>)}
+      {sources.some(source => source.conflict) && <p className={styles.muted}>Not available here: this dashboard only covers {pageScopeSummary}. Start a blank dashboard to combine metrics from other workflows or task types.</p>}
+      {sources.filter(source => source.conflict).map(source => <button className={styles.button} type="button" key={source.key} disabled title={source.conflict ?? undefined}>{source.label}</button>)}
     </div></Dialog>
     <Dialog open={Boolean(pendingNavigation)} title="Leave unsaved changes?" close={() => setPendingNavigation(null)}><p className={styles.description}>Your layout has unsaved changes. Save it before leaving, or discard the changes.</p><div className={`${styles.actions} mt-5`}><button type="button" className={styles.button} onClick={() => setPendingNavigation(null)}>Keep editing</button><button type="button" className={styles.button} onClick={() => { const target = pendingNavigation; setEditing(false); setPendingNavigation(null); if (target) setTimeout(() => window.location.assign(target), 0); }}>Discard and leave</button></div></Dialog>
   </div>;

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { availableTelemetryDisplays, sortedTelemetryGroups, telemetryDimensionLabel, telemetryGroupLabel, telemetryTimeSeries, telemetryWidgetQuery } from './telemetryViews.ts';
+import { availableTelemetryDisplays, sortedTelemetryGroups, telemetryDimensionLabel, telemetryGroupLabel, telemetryScopeConflict, telemetryScopeConflictMessage, telemetryTimeSeries, telemetryWidgetQuery } from './telemetryViews.ts';
 import { buildTelemetryDefinition, newTelemetryGuide, telemetryGuideFromDefinition } from './telemetryBuilder.ts';
 import { telemetryGuideSelectionIssue } from './telemetryBuilderOptions.ts';
 import { metricAttributionIssues } from './telemetry-contracts/requirements.ts';
@@ -45,7 +45,18 @@ test('widgets retain pins, intersect scope, and do not turn snapshot counts into
   const widget:TelemetryWidget={id:'one',metric_revision_id:'pinned',view:{group_by:[{field:'agent_id'}],scope:{project_id:11},from:'2026-09-01T00:00:00Z'}};
   const query=telemetryWidgetQuery(widget,count,{}, {from:'2026-08-01T00:00:00Z'});
   assert.equal(query.metric_revision_id,'pinned');assert.equal(query.from,undefined);assert.equal(query.scope?.project_id,11);
-  assert.throws(()=>telemetryWidgetQuery(widget,count,{project_id:12}),/conflicts/);
+  assert.throws(()=>telemetryWidgetQuery(widget,count,{project_id:12}),/but this dashboard only covers project 12/);
   assert.equal(telemetryWidgetQuery({...widget,view:{scope:{include_archived:true}}},count,{include_archived:false}).scope?.include_archived,false);
   assert.equal(telemetryWidgetQuery({...widget,view:{timezone:'America/New_York'}},count,{}, {timezone:'UTC'}).timezone,'America/New_York');
+});
+
+test('dashboard scope conflicts name both sides so an incompatible metric is explained before it is added',()=>{
+  const named:TelemetryCatalog={...catalog,workflows:[{id:114,name:'Lead Generation',project_id:99,workflow_type:'lead_generation'},{id:115,name:'Development',project_id:99,workflow_type:'dev'}]};
+  assert.equal(telemetryScopeConflict({project_id:99,workflow_id:115},{project_id:99}),null);
+  assert.equal(telemetryScopeConflict({project_id:99},{project_id:99,workflow_id:114,task_type:'lead_search'}),null);
+  assert.equal(telemetryScopeConflict(undefined,{workflow_id:114}),null);
+  const conflict=telemetryScopeConflict({project_id:99,workflow_id:115},{project_id:99,workflow_id:114});
+  assert.deepEqual(conflict,{key:'workflow_id',own:115,dashboard:114});
+  assert.equal(telemetryScopeConflictMessage(conflict!,named),'This metric is limited to workflow Development, but this dashboard only covers workflow Lead Generation. Remove the block, or use a dashboard without that filter.');
+  assert.match(telemetryScopeConflictMessage(telemetryScopeConflict({task_type:'ops'},{task_type:'lead_search'})!),/task type ops.*task type lead_search/);
 });

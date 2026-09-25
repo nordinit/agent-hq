@@ -51,12 +51,36 @@ export function telemetryTimeSeries(groups: GroupResult[]) {
   }
   return {times,series:[...series].map(([key,points])=>({key,groups:times.map(time=>points.get(time))}))};
 }
+const SCOPE_FILTERS = {project_id:'project',workflow_id:'workflow',workflow_type:'workflow type',task_type:'task type'} as const;
+export type TelemetryScopeConflict = {key: keyof typeof SCOPE_FILTERS; own: string|number; dashboard: string|number};
+/**
+ * The first filter a metric (or saved view) and a dashboard both set to different values. The
+ * server intersects the two, so a dashboard narrowed to one workflow or task type can never show a
+ * metric that belongs to another — better to say so before the block is added.
+ */
+export function telemetryScopeConflict(own: TelemetryScope|undefined, dashboard: TelemetryScope|undefined): TelemetryScopeConflict|null {
+  for(const key of Object.keys(SCOPE_FILTERS) as (keyof typeof SCOPE_FILTERS)[]) {
+    const a=own?.[key],b=dashboard?.[key];
+    if(a!=null&&b!=null&&a!==b) return {key,own:a,dashboard:b};
+  }
+  return null;
+}
+/** "workflow Development" when the catalog knows the name, otherwise "workflow 115". */
+export function telemetryScopeValueLabel(key: keyof typeof SCOPE_FILTERS, value: string|number, catalog?: TelemetryCatalog|null): string {
+  const name=key==='project_id'?catalog?.projects.find(item=>item.id===value)?.name
+    :key==='workflow_id'?catalog?.workflows.find(item=>item.id===value)?.name
+    :key==='workflow_type'?catalog?.workflow_types.find(item=>item.key===value)?.name
+    :catalog?.task_types.find(item=>item.key===value)?.label;
+  return `${SCOPE_FILTERS[key]} ${name??value}`;
+}
+export function telemetryScopeConflictMessage(conflict: TelemetryScopeConflict, catalog?: TelemetryCatalog|null): string {
+  return `This metric is limited to ${telemetryScopeValueLabel(conflict.key,conflict.own,catalog)}, but this dashboard only covers ${telemetryScopeValueLabel(conflict.key,conflict.dashboard,catalog)}. Remove the block, or use a dashboard without that filter.`;
+}
 export function telemetryWidgetQuery(widget: TelemetryWidget, definition: MetricDefinition, scope: TelemetryScope, window: {from?:string;to?:string;timezone?:string} = {}): TelemetryQuery {
   // The server intersects these requested filters with the immutable metric scope.
   const view=widget.view??{};
-  for(const key of ['project_id','workflow_id','workflow_type','task_type'] as const) {
-    if(scope[key]!=null&&view.scope?.[key]!=null&&scope[key]!==view.scope[key]) throw new Error(`Widget ${key.replace(/_/g,' ')} override conflicts with the dashboard filter.`);
-  }
+  const conflict=telemetryScopeConflict(view.scope,scope);
+  if(conflict) throw new Error(telemetryScopeConflictMessage(conflict));
   return {metric_revision_id:widget.metric_revision_id,scope:{...scope,...view.scope,include_archived:scope.include_archived===false||view.scope?.include_archived===false?false:view.scope?.include_archived??scope.include_archived},timezone:view.timezone??window.timezone??'UTC',
     group_by:view.group_by??definition.group_by??[],bucket:view.bucket===undefined?definition.bucket??null:view.bucket,filter:view.filter,
     ...(definition.time_basis==='current'?{}:{from:view.from??window.from,to:view.to??window.to})};
