@@ -160,6 +160,7 @@ Agents run real CLIs with shell access on the host, so operator access to Agent 
 
 - **Operator token.** Every `/api/v1` request needs `AGENT_HQ_OPERATOR_TOKEN` (as `Authorization: Bearer <token>`) or an agent's MCP API key, which is limited to the capabilities granted to that agent. The API refuses to start without a token of at least 32 characters. `agent-hq start` generates one. The UI has a sign-in page for the same token; the UI server attaches it to API calls and never sends it to the browser.
 - **Loopback by default.** The API and UI listen on `127.0.0.1` (`HOST` and `AGENT_HQ_UI_HOST` for native installs, `AGENT_HQ_BIND_ADDRESS` for Compose). The API refuses cross-origin browser requests unless the origin is listed in `AGENT_HQ_ALLOWED_ORIGINS`. Put TLS in front before exposing either beyond the host.
+- **Confined host paths.** Agent workspaces, runtime config homes, and runtime executables must be in allowed locations; extra ones are listed in `AGENT_HQ_ALLOWED_*` variables (see [Host paths and runtime executables](docs/SELF_HOSTING.md#host-paths-and-runtime-executables)).
 - **Remote MCP connectors.** Publish only `/mcp` and the MCP OAuth endpoints, never the whole API port. OAuth is enabled when `AGENT_HQ_PUBLIC_URL` is set.
 - **Upgrades.** `AGENT_HQ_AUTH_MODE=report` serves requests that enforcement would refuse and logs each caller, so existing scripts can be found and fixed before switching back to `enforce` (the default).
 

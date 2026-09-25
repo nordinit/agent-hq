@@ -255,6 +255,22 @@ The external OpenClaw product may itself store OAuth profiles in SQLite. Agent H
 files and, during an explicitly requested OAuth-profile sync, may update OpenClaw's profile store.
 Those external files are not Agent HQ's system of record.
 
+### Host paths and runtime executables
+
+Agents run commands on this host, so the directories and binaries an agent record may name are
+confined:
+
+- An agent workspace must be under the Agent HQ workspace parent (`AGENT_HQ_WORKSPACE_PARENT`,
+  default `~/.agent-hq/workspaces`), in an OpenClaw `workspace`/`workspace-*` directory, or under
+  a root listed in `AGENT_HQ_ALLOWED_WORKSPACE_ROOTS`.
+- Runtime config homes (Claude, Codex, Hermes) must be the runtime's own home directories, the
+  Agent HQ data directory, or under `AGENT_HQ_ALLOWED_RUNTIME_HOME_ROOTS`.
+- Runtime executables default to the bare command on the host `PATH`. An absolute path must be
+  listed in `AGENT_HQ_ALLOWED_CLAUDE_BINARIES`, `AGENT_HQ_ALLOWED_CODEX_BINARIES`,
+  `AGENT_HQ_ALLOWED_HERMES_BINARIES`, or `AGENT_HQ_ALLOWED_OPENCLAW_BINARIES`.
+
+Each list is `:`-separated absolute paths. `.env.example` documents the exact rules.
+
 ## Upgrades
 
 ```bash

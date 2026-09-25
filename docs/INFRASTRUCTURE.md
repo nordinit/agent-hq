@@ -105,8 +105,17 @@ running). Task mutations also trigger an immediate dispatch pass for the affecte
 | Agent contract templates | `agent-contracts/` in the repository, or `AGENT_CONTRACT_ROOT` |
 | Uploaded files | `uploads/` in the repository, or `AGENT_HQ_UPLOADS_DIR` |
 | Starter agent workspaces | `~/.openclaw/workspace-<tenant>-<agent>`, or under `WORKSPACE_PARENT` |
+| Workspaces for agents created without one | `~/.agent-hq/workspaces/<agent>`, or under `AGENT_HQ_WORKSPACE_PARENT` |
 | Task worktrees | `task-<id>` under the agent's workspace (or the OS user's workspaces directory when the agent runs as a separate OS user) |
 | OpenClaw configuration | `~/.openclaw/openclaw.json`, or `OPENCLAW_CONFIG_PATH` |
+
+Agents run commands on the host, so the paths and binaries an agent record may name are
+confined. A workspace must be under the Agent HQ workspace parent, in an OpenClaw
+`workspace`/`workspace-*` directory, or under a root listed in `AGENT_HQ_ALLOWED_WORKSPACE_ROOTS`.
+Runtime config homes are limited to the runtime's own home directories, the Agent HQ data
+directory, or `AGENT_HQ_ALLOWED_RUNTIME_HOME_ROOTS`. Runtime executables default to the bare
+command on the host `PATH`; an absolute path must be listed in
+`AGENT_HQ_ALLOWED_{CLAUDE,CODEX,HERMES,OPENCLAW}_BINARIES`. See `.env.example`.
 
 ---
 
