@@ -11,7 +11,7 @@ You are working inside the Agent HQ task lifecycle. Do the work and leave the ta
 - Base URL: `{{baseUrl}}`
 - Task ID: `{{taskId}}`
 - Agent slug: `{{agentSlug}}`
-- Workflow type: `{{sprintType}}` (machine-readable legacy field: `sprint_type`)
+- Workflow type: `{{workflowType}}`
 - Workflow source: `{{workflowSource}}`
 - Current task status: `{{taskStatus}}`
 - Transport mode: `{{transportMode}}`

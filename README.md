@@ -71,7 +71,7 @@ The same workflow model can also be used for:
 
 | Capability | What it does |
 |---|---|
-| **Task orchestration** | Organize work into projects, workflows/workflows, tasks, task types, statuses, and priorities. |
+| **Task orchestration** | Organize work into projects, workflows, tasks, task types, statuses, and priorities. |
 | **No-code workflow configuration** | Configure task types, custom fields, statuses, outcomes, assignment rules, transitions, and gates through the UI. |
 | **Deterministic task assignment** | Assign tasks to agents based on workflow, task type, and current status. |
 | **Outcome-driven transitions** | Map agent-posted outcomes to the next task status. |
@@ -172,7 +172,7 @@ Agent HQ separates work definition, workflow policy, and runtime execution.
 Work is organized into:
 
 ```text
-Project → Workflow / Workflow → Task → Agent Run
+Project → Workflow → Task → Agent Run
 ```
 
 A task can include:
@@ -190,7 +190,7 @@ A task can include:
 - evidence fields
 - run history
 
-Today the app uses the term **Workflow** for the configurable workflow unit. In practice, a workflow can represent any workflow lifecycle, not just an agile software workflow.
+A workflow can represent any lifecycle, not just software delivery.
 
 ---
 

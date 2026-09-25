@@ -2,7 +2,7 @@
 
 > Historical design note. The proxy-managed lifecycle model in this V1 design was deprecated by task #558; current Hermes runtime behavior uses Agent HQ MCP/capability lifecycle reporting plus runtime end-event/missing-outcome handling instead of parsed lifecycle blocks.
 >
-> Task #506 · Hermes Agent Runtime sprint
+> Task #506 · Hermes Agent Runtime workflow
 > Status: superseded historical design
 
 ## 1. Decisions

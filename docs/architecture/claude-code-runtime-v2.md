@@ -4,7 +4,7 @@ Status: **CLI runtime, MCP preflight, live transcript, and local-hardening basel
 
 The current cross-runtime contract and release gates live in
 [`agent-runtime-boundary-v1.md`](./agent-runtime-boundary-v1.md). This document retains
-the original sprint-65 analysis and empirical CLI notes as history; statements in the
+the original workflow-65 analysis and empirical CLI notes as history; statements in the
 archived plan describe the system at plan time, not the current runtime.
 
 ## Implementation status
@@ -62,7 +62,7 @@ clean. That is a historical result, not current release evidence.
 
 ### End-to-end verification
 
-The original sprint-65 implementation was run against the real `claude` CLI (2.1.220)
+The original workflow-65 implementation was run against the real `claude` CLI (2.1.220)
 and a throwaway SQLite test database, with no runtime mocks and a stand-in Agent HQ MCP
 server. These results remain useful protocol evidence; the SQLite references are an
 archived test-harness detail, not a current deployment requirement. Two scenarios:
@@ -189,7 +189,7 @@ bites development-from-source — the same pre-existing limitation noted under
 
 ---
 
-## Archived sprint-65 plan
+## Archived workflow-65 plan
 
 The material below is retained to explain the decisions and empirical findings that led
 to the CLI adapter. Any present-tense baseline, path, test count, or implementation status
@@ -197,8 +197,8 @@ below is historical and is superseded by the current hardening status above and 
 `agent-runtime-boundary-v1.md`.
 
 Archived status: proposal at time of writing
-Covers: sprint 65 tasks #534 (research), #537 (implement), #538 (transcripts), #539 (MCP materialization)
-Informs: sprint 111 tasks #902–#906 (Agent Runtime Hardening)
+Covers: workflow 65 tasks #534 (research), #537 (implement), #538 (transcripts), #539 (MCP materialization)
+Informs: workflow 111 tasks #902–#906 (Agent Runtime Hardening)
 Reference implementation studied: `paperclipai/paperclip` → `packages/adapters/claude-local`
 
 ---
@@ -237,7 +237,7 @@ for Hermes.
 
 ---
 
-## 2. What sprint 65 asks for
+## 2. What workflow 65 asks for
 
 - **#534** — decide whether the headless CLI (`claude -p --output-format stream-json`)
   replaces the SDK path, coexists, or becomes the default.
@@ -249,7 +249,7 @@ for Hermes.
   `.mcp.json`, a runtime-specific config file, env injection, or an adapter-owned
   in-process tool server is the right vehicle.
 
-Sprint 65's stated goal is "moving Agent HQ away from proxy-managed runtime lifecycle
+Workflow 65's stated goal is "moving Agent HQ away from proxy-managed runtime lifecycle
 patterns toward agent-native MCP-driven task execution". The claude-code runtime is
 currently the last proxy-managed local runtime.
 
@@ -262,7 +262,7 @@ The SDK path is deleted, not retained as a fallback.**
 
 The deciding factors, in order:
 
-1. **MCP materialization is the whole point of the sprint, and the CLI does it natively.**
+1. **MCP materialization is the whole point of the workflow, and the CLI does it natively.**
    `--mcp-config <path> --strict-mcp-config` consumes exactly the `{"mcpServers": {...}}`
    file that `materializeAgentMcpConfig()` already writes, and `--strict-mcp-config`
    makes the tool surface auditable: these servers and no others. The existing
@@ -284,7 +284,7 @@ The deciding factors, in order:
 4. **`--session-id <uuid>`.** Agent HQ can mint the session UUID *before* spawn. That
    removes the current race where `session_key` is only written after the SDK's `init`
    message arrives, makes the transcript path deterministic at dispatch time, and gives
-   sprint 111's checkpointing story (#903) a stable handle from t=0.
+   workflow 111's checkpointing story (#903) a stable handle from t=0.
 
 5. **Transcript uniformity (#538).** Codex (`codex exec --json`) and Claude Code
    (`--output-format stream-json`) are both line-delimited JSON on stdout from a child
@@ -331,7 +331,7 @@ flag. Future remote/clone targets must remain allowlisted.
 only passed to `--resume` when *all* of: valid UUID, cwd unchanged, prompt-bundle hash
 unchanged, MCP server-set identity unchanged, execution-target identity unchanged.
 Otherwise it logs why and starts fresh. This is the single most reusable idea in the
-adapter and it maps directly onto sprint 111 #903.
+adapter and it maps directly onto workflow 111 #903.
 
 **Stable prompt bundle for cache hits** (`prompt-cache.ts`). Skills and the appended
 system prompt are hashed into a content-addressed directory passed via `--add-dir`;
@@ -542,7 +542,7 @@ reconciliation check rather than the primary write.
 Live streaming (write as events arrive) is the point — it removes the "run looks silent
 until it finishes" gap that both claude-code and Codex have today.
 
-### Phase 4 — resume + prompt bundle (optional, gates on sprint 111 #903)
+### Phase 4 — resume + prompt bundle (optional, gates on workflow 111 #903)
 
 Only worth doing once #903 settles resume semantics. Build the fingerprint first
 (`{sessionId, cwd, promptBundleKey, mcpServerIdentity, model}`), persist it alongside the
@@ -555,12 +555,12 @@ implementation, and the dispatcher does not yet produce a trusted `priorCheckpoi
 
 ---
 
-## 7. How this feeds sprint 111
+## 7. How this feeds workflow 111
 
 The runtime is one node in the durable graph, and four of the five hardening tasks have a
 cheap hook that should be built in Phase 1–2 rather than retrofitted:
 
-| Sprint 111 task | Hook to build now |
+| Workflow 111 task | Hook to build now |
 |---|---|
 | **#902** durable state graph | `applyRuntimeEndToJobInstance` on every terminal path gives the node a real terminal edge. Today claude-code runs have no transport-level end state at all, so any graph model built on `job_instances` is missing this runtime entirely. |
 | **#903** checkpointing / resumability | Pre-minted `--session-id`, plus the resume fingerprint from §4. That fingerprint *is* the checkpoint record: what must match for a resumed run to be provably continuing the same task. |
@@ -589,5 +589,5 @@ cheap hook that should be built in Phase 1–2 rather than retrofitted:
   `validateClaudeCodeRuntimeConfig` requires `workingDirectory`; the CLI path should treat
   it as a fallback behind `activeRepoRoot`, exactly as the SDK path already does
   (`ClaudeCodeRuntime.ts:104`) — no config migration needed.
-- **Scope.** Phases 1–3 are the sprint-65 deliverable. Phase 4 should not start before
+- **Scope.** Phases 1–3 are the workflow-65 deliverable. Phase 4 should not start before
   #903 produces its brief.

@@ -1,7 +1,7 @@
 # Remote Agent Runtime Adapter Model
 
 > Architecture specification for Agent HQ's generalized agent runtime system.
-> Task #472 · Sprint: Remote Agent Runtime Support · 2026-03-30
+> Task #472 · Workflow: Remote Agent Runtime Support · 2026-03-30
 
 ## Status
 

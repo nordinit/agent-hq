@@ -19,11 +19,11 @@ New backend business logic should land in an owning domain slice instead of grow
 - Status policy and task-type workflow rules
 - Routing admin/config CRUD
 
-### `api/src/domains/sprint-definitions`
-- Sprint types and allowed task types
+### `api/src/domains/workflow-definitions`
+- Workflow types and allowed task types
 - Task field schemas
 - Configured outcomes and workflow metadata
-- Sprint-definition router helpers
+- Workflow-definition router helpers
 
 ### `api/src/domains/runs`
 - Run and instance lifecycle helpers
@@ -31,9 +31,9 @@ New backend business logic should land in an owning domain slice instead of grow
 - Transcript providers and OpenClaw transcript backfill
 - Token usage and token backfill
 
-### `api/src/domains/sprints`
-- Sprint CRUD/admin flows
-- Sprint lifecycle read models and admin helpers
+### `api/src/domains/workflows`
+- Workflow CRUD/admin flows
+- Workflow lifecycle read models and admin helpers
 
 ### `api/src/domains/chat`
 - Canonical chat-session helpers and session-facing read models
@@ -60,7 +60,7 @@ New backend business logic should land in an owning domain slice instead of grow
 The remaining non-compat `lib/` files fall into two buckets:
 
 - **Intentional shared utilities** such as auth helpers, workspace/runtime adapters, shared vocabularies, and gateway/OpenClaw integration helpers.
-- **Follow-up domain moves** such as `taskOutcome.ts`, `taskRelease.ts`, `taskLifecycle.ts`, `taskStop.ts`, `taskNotifications.ts`, `canonicalSessions.ts`, `reflectionContext.ts`, `gatewayTranscriptCapture.ts`, `projectAudit.ts`, and `sprintWorkflow.ts`.
+- **Follow-up domain moves** such as `taskOutcome.ts`, `taskRelease.ts`, `taskLifecycle.ts`, `taskStop.ts`, `taskNotifications.ts`, `canonicalSessions.ts`, `reflectionContext.ts`, `gatewayTranscriptCapture.ts`, `projectAudit.ts`, and `workflowModel.ts`.
 
 Those follow-up files are intentionally left in place for this cleanup pass so task #482 does not become another broad migration.
 

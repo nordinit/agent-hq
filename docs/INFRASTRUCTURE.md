@@ -11,13 +11,13 @@ This document is the implementation-facing companion to `README.md`.
 Agent HQ is a local orchestration layer that sits between human planning and AI agent execution.
 
 It provides:
-- task/project/sprint state
+- task/project/workflow state
 - deterministic routing rules
 - job execution tracking
 - run observability and artifacts
 - release-truth gating
 - contract-driven dispatch (workflow + transport separation)
-- task board and sprint board UX
+- task board and workflow board UX
 
 ---
 
@@ -28,7 +28,7 @@ It provides:
 │                        Agent HQ UI                         │
 │                  Next.js · localhost:3500                   │
 │                                                            │
-│  Dashboard | Tasks | Agents | Chat | Sprints | Routing     │
+│  Dashboard | Tasks | Agents | Chat | Workflows | Routing   │
 │  Capabilities | Workspaces | Telemetry | Projects | Logs   │
 └─────────────────────────┬──────────────────────────────────┘
                           │ HTTP
@@ -37,7 +37,7 @@ It provides:
 │                       Agent HQ API                         │
 │               Express/TypeScript · localhost:3501           │
 │                                                            │
-│  Routes: tasks, agents, instances, projects, sprints,      │
+│  Routes: tasks, agents, instances, projects, workflows,    │
 │          routing, telemetry, logs, chat, tools,             │
 │          dispatch, providers, github-identities, browser    │
 │                                                            │
@@ -96,20 +96,20 @@ It provides:
 ## 6. Major subsystems
 
 ### 6.1 Task system
-Tasks are the canonical work units. They store project/sprint placement, agent assignment, task type, blockers, dependencies, notes, attachments, release evidence, routing metadata, story points, and observability metadata.
+Tasks are the canonical work units. They store project/workflow placement, agent assignment, task type, blockers, dependencies, notes, attachments, release evidence, routing metadata, story points, and observability metadata.
 
 ### 6.2 Routing system
 Routing is deterministic, built from:
-- **sprint task transitions** — sprint + task_type + from_status + outcome -> to_status
-- **sprint task routing rules** — sprint + task_type + status → agent (multi-rule, priority-ordered)
-- **transition requirements** — evidence gates per outcome, with sprint-specific rows preferred over global fallback rows
+- **workflow task transitions** — workflow + task_type + from_status + outcome -> to_status
+- **assignment rules** (`workflow_task_routing_rules`) — workflow + task_type + status → agent (multi-rule, priority-ordered). A status with no matching rule does not dispatch.
+- **transition requirements** — evidence gates per outcome and task type, scoped to a workflow or workflow type. There is no global fallback.
 - **system policies** — stall detection, auto-retry, dispatched_unclaim
 
 ### 6.3 Contract system (task #632)
 Separates **workflow semantics** from **runtime transport**.
 
 **Workflow contract** (`services/contracts/workflowContract.ts`):
-- Reads the configured workflow for the task's sprint, task type, and current status
+- Reads the configured workflow for the task's workflow, task type, and current status
 - `resolveWorkflow()` returns the current workflow phase and valid configured outcomes
 - `resolveEvidenceRequirements()` returns the configured gate fields for those outcomes
 - Treats workflow phase as derived contract phrasing only; phases do not create evidence requirements
@@ -163,11 +163,11 @@ Task cycle time, QA breakdown, model usage, agent efficiency, creation/outcome q
 | `settings.ts` | `/api/v1/settings` | Telegram config |
 | `setup.ts` | `/api/v1/setup` | Onboarding/health check |
 | `skills.ts` | `/api/v1/skills` | Skill directory management |
-| `sprints.ts` | `/api/v1/sprints` | Sprint CRUD + metrics + scheduling |
 | `tasks.ts` | `/api/v1/tasks` | Task CRUD + outcome + evidence + integrity + notes + blockers + attachments |
 | `telemetry.ts` | `/api/v1/telemetry` | Task/run analytics |
 | `tools.ts` | `/api/v1/tools` | Tool registry CRUD + agent assignments |
 | `workflow-files.ts` | `/api/v1/projects/:projectId/workflows/:workflowId/files` | Workflow-scoped file uploads and version history |
+| `workflows.ts` | `/api/v1/workflows` | Workflow CRUD + metrics; workflow types under `/types` |
 
 ---
 
@@ -178,21 +178,21 @@ Task cycle time, QA breakdown, model usage, agent efficiency, creation/outcome q
 
 Key fields: id, name, role, session_key, workspace_path, status, runtime_type, runtime_config, Remote Gateway URL (`hooks_url` compatibility column), Remote Gateway Auth Header (`hooks_auth_header` compatibility column), github_identity_id, model, project_id, dispatch_mode, job_instructions, skill_names, enabled, timeout_seconds, os_user. The legacy `schedule` column is internal/deprecated; recurring task series own scheduling.
 
-Legacy/internal compatibility: older databases may still retain `agents.job_title` and `agents.sprint_id`, but new agent configuration must not use them. Agents belong to projects; sprint-specific dispatch is configured with `sprint_task_routing_rules` using project/sprint or sprint type + task type + status → agent.
+Legacy/internal compatibility: older databases may still retain `agents.job_title` and `agents.workflow_id`, but new agent configuration must not use them. Agents belong to projects; workflow-specific dispatch is configured with `workflow_task_routing_rules` using project/workflow or workflow type + task type + status → agent.
 
 ### 8.2 job_instances
 Concrete runs. Key fields: id, agent_id, task_id, status, session_key, dispatched_at, started_at, completed_at, run_id, task_outcome, token_total, effective_model, payload_sent, response, error, abort_*, worktree_path.
 
 ### 8.3 tasks
-Key fields: id, title, description, status, priority, agent_id, project_id, sprint_id, task_type, story_points, active_instance_id, retry_count, max_retries, routing_reason, review_owner_agent_id, custom_fields_json. Lifecycle/release evidence such as review branch/commit/url, QA verified commit/tested URL, deploy commit/target/timestamp, and live verification metadata is canonical in `custom_fields_json` and exposed through task `custom_fields`.
+Key fields: id, title, description, status, priority, agent_id, project_id, workflow_id, task_type, story_points, active_instance_id, retry_count, max_retries, routing_reason, review_owner_agent_id, custom_fields_json. Lifecycle/release evidence such as review branch/commit/url, QA verified commit/tested URL, deploy commit/target/timestamp, and live verification metadata is canonical in `custom_fields_json` and exposed through task `custom_fields`.
 
 ### 8.4 Routing tables
-- `sprint_task_transitions` — primary workflow transitions (sprint, task_type, from_status, outcome, to_status)
-- `sprint_task_routing_rules` — primary task→agent routing (sprint, task_type, status, agent, priority)
-- `sprint_task_transition_requirements` — evidence gates per outcome, scoped to a workflow type
+- `workflow_task_transitions` — primary workflow transitions (workflow, task_type, from_status, outcome, to_status)
+- `workflow_task_routing_rules` — primary task→agent routing (workflow, task_type, status, agent, priority)
+- `workflow_task_transition_requirements` — evidence gates per outcome, scoped to a workflow type
   or a single workflow. The only place gates live: a global `transition_requirements` fallback
   was moved into the dev workflow default and dropped by migration 15.
-- `routing_config` / `lifecycle_rules` — legacy configuration tables retained for compatibility and migration; runtime task outcome routing must use explicit `sprint_task_transitions`
+- `routing_config` / `lifecycle_rules` — legacy configuration tables retained for compatibility and migration; runtime task outcome routing must use explicit `workflow_task_transitions`
 - `system_policies` — stall detection, auto-retry
 
 ### 8.5 Observability tables
@@ -202,7 +202,7 @@ Key fields: id, title, description, status, priority, agent_id, project_id, spri
 - `task_creation_events` / `task_outcome_metrics` — telemetry
 
 ### 8.6 Supporting tables
-projects, sprints, sprint_job_schedules, sprint_job_assignments, task_notes, task_history, task_dependencies, task_attachments, provider_config, github_identities, tools, agent_tool_assignments, story_point_model_routing, app_settings, security_events, dispatch_log.
+projects, workflows, task_notes, task_history, task_dependencies, task_attachments, provider_config, github_identities, tools, agent_tool_assignments, story_point_model_routing, app_settings, security_events, dispatch_log.
 
 ---
 
@@ -247,7 +247,7 @@ Story-point-based: 1-2pt → haiku, 3-4pt → sonnet, 5+pt → opus. Agent overr
 | Module | Function | Interval |
 |---|---|---|
 | scheduler | Legacy per-agent job scheduler disabled; recurring task series scheduler owns scheduled task creation | startup no-op |
-| sprintScheduler | Sprint-specific job scheduling | Per trigger config |
+| workflowScheduler | Disabled; recurring task series own scheduled task creation | startup no-op |
 | watchdog | Stalled/timeout detection, worktree cleanup, Telegram alerts | 60s poll |
 | reconciler | Eligibility + dispatch sweep | ~60s |
 

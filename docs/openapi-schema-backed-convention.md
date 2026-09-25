@@ -118,7 +118,7 @@ export const runtimeCallbackContract = defineRouteContract({
 3. Use `.describe()` on public fields whose meaning is not obvious. Use descriptions for sensitive fields that explain whether the value is masked, omitted, or a placeholder.
 4. Examples must be safe: no secrets, runtime tokens, hook auth headers, local filesystem paths, raw logs, private transcripts, or real customer/task data.
 5. Keep `operationId` stable once published. Rename only with an explicit compatibility note.
-6. Prefer canonical workflow route/field names in new public docs. Sprint aliases can remain compatibility operations only when product needs them documented.
+6. Use canonical workflow route and field names in public docs.
 
 ## GET route example
 
@@ -198,7 +198,7 @@ import { defineRouteContract } from '../openapi/routeContract';
 
 export const CreateTaskBodySchema = z.object({
   project_id: z.number().int().positive().describe('Project ID'),
-  workflow_id: z.number().int().positive().optional().describe('Workflow ID. Prefer workflow_id over legacy sprint_id.'),
+  workflow_id: z.number().int().positive().optional().describe('Workflow ID.'),
   title: z.string().min(1).max(240),
   description: z.string().optional(),
   priority: z.enum(['low', 'medium', 'high']).optional(),
@@ -222,7 +222,7 @@ export const createTaskContract = defineRouteContract({
   operationId: 'createTask',
   tags: ['Tasks'],
   summary: 'Create a task.',
-  description: 'Creates a task in a project. New clients should use workflow_id instead of legacy sprint_id.',
+  description: 'Creates a task in a project.',
   visibility: 'public',
   body: CreateTaskBodySchema,
   examples: {
@@ -291,7 +291,7 @@ Manual paths can continue to serve the docs console while individual routes migr
 2. Add route inventory tests that classify mounted routes as `public`, `internal`, `deferred`, or `unsafe`; start with warnings or a small allowlist so this does not block current docs console work.
 3. Pick one low-risk route group, such as health/setup/providers, and move its schemas from handwritten `components.schemas` into Zod response/request schemas while preserving the generated OpenAPI output shape.
 4. Wire those route contracts into the aggregator and remove only the equivalent handwritten operations after snapshot/structural tests pass.
-5. Migrate larger groups incrementally: projects, workflows, tasks, agents/tools, routing, chat/sessions. Prefer public canonical workflow endpoints before legacy sprint aliases.
+5. Migrate larger groups incrementally: projects, workflows, tasks, agents/tools, routing, chat/sessions.
 6. For each migrated route, make the Express validation path consume the same contract schemas or document why the handler cannot yet do so.
 7. Keep deferred/internal route groups excluded until the public docs policy approves redaction, auth, and examples.
 8. After enough coverage exists, change the route inventory test from warning/allowlist mode to enforcing that every mounted route is either documented or intentionally excluded.

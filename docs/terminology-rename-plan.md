@@ -1,6 +1,8 @@
 # Terminology rename: sprint → workflow, job → agent
 
-Status: schema done and verified; application and UI in progress.
+Status: complete. Schema, API, MCP tools, UI, and agent contracts use workflow terminology, and
+`scripts/check-workflow-terminology.mjs` enforces it in CI. The request/response `sprint_*`
+aliases described below have since been removed. Kept as a historical record.
 
 ## What already exists
 

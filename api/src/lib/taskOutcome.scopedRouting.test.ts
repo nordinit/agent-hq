@@ -281,7 +281,7 @@ describe('applyTaskOutcome scoped routing_config resolution', () => {
     });
   });
 
-  it('uses workflow-type default transitions for matching workflow workflow outcomes', async () => {
+  it('uses workflow-type default transitions for matching workflow outcomes', async () => {
     db = await createDb();
     await db.run(`
       INSERT INTO workflow_task_transitions (tenant_id, workflow_id, project_id, workflow_type, task_type, from_status, outcome, to_status, enabled)

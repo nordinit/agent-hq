@@ -7,7 +7,9 @@ const exceptions=new Set([
   'api/src/db/pg/migration19TenantOwnership.test.ts',
   'api/src/db/pg/migration32WorkflowTerminology.test.ts',
 ]);
-const roots=/^(api\/(src|scripts)|ui\/(app|components|features|lib|scripts)|scripts|cli|plugins|skills|docker|\.github)\//;
+// Agent contracts are rendered into every dispatch, so a stale placeholder there
+// reaches agents verbatim.
+const roots=/^(?:(api\/(src|scripts)|ui\/(app|components|features|lib|scripts)|scripts|cli|plugins|skills|docker|\.github|agent-contracts|db\/pg-metadata)\/|README\.md$)/;
 const forbidden=/sprint(?!f)/i;
 const files=execFileSync('git',['ls-files','--cached','--others','--exclude-standard','-z'],{encoding:'utf8'}).split('\0');
 const failures=[];

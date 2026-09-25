@@ -283,7 +283,7 @@ export interface JobInstance {
   artifact_outcome?: string | null;
   run_is_stale?: number | null;
   stale_at?: string | null;
-  /** Task workflow outcome — distinct from execution status and configured by workflow workflow metadata. */
+  /** Task workflow outcome — distinct from execution status and configured by workflow metadata. */
   task_outcome?: string | null;
   /** Model that was selected / used for this run (e.g. anthropic/claude-opus-5) */
   effective_model?: string | null;

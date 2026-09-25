@@ -11,9 +11,9 @@ Agent HQ must treat an agent run as a durable control-plane operation, not merel
 
 The design follows the useful parts of [Paperclip's adapter model](https://github.com/paperclipai/paperclip/blob/master/docs/adapters/overview.md): runtime-specific invocation stays inside an adapter, session state survives the adapter object, prompt and workspace identity are explicit, and trust posture depends on the execution target. Paperclip now pairs local CLI/ACP drivers with host, SSH, and managed-sandbox targets and makes credential-home ownership explicit. Agent HQ adds a versioned, secret-free boundary and a durable lifecycle store so the same control plane can later operate those target shapes without changing workflow semantics.
 
-## Sprint coverage
+## Workflow coverage
 
-| Sprint work | Implemented baseline | Deliberately still open |
+| Workflow and tasks | Implemented baseline | Deliberately still open |
 |---|---|---|
 | 65 #533/#536 — Codex research and adapter | Native JSONL adapter, isolated config/profile policy, exact MCP preflight, transcript normalization, diagnostics, supported-version enforcement | Real production-profile fresh/resume canaries; automatic trusted resume producer |
 | 65 #534/#537 — Claude headless refresh | CLI child-process adapter, strict settings/tool policy, run-scoped MCP config, live stream-json transcript, truthful stop/timeout | Claude resume/reattach and poisoned-session recovery |

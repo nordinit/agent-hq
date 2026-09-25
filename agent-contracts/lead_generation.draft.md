@@ -15,7 +15,7 @@ Sales work differs from engineering work in one way that governs this entire con
 - Base URL: `{{baseUrl}}`
 - Task ID: `{{taskId}}`
 - Agent slug: `{{agentSlug}}`
-- Workflow type: `{{sprintType}}` (machine-readable legacy field: `sprint_type`)
+- Workflow type: `{{workflowType}}`
 - Workflow source: `{{workflowSource}}`
 - Current task status: `{{taskStatus}}`
 - Transport mode: `{{transportMode}}`

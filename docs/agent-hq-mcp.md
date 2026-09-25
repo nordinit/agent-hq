@@ -172,8 +172,8 @@ Tools used to carry aliases — the `atlas_*` names from before the product was 
 | `agent_hq_create_model_routing_rule` | Create a story-point model-routing rule |
 | `agent_hq_update_model_routing_rule` | Update a story-point model-routing rule |
 | `agent_hq_delete_model_routing_rule` | Delete a story-point model-routing rule |
-| `agent_hq_list_workflow_type_task_types` | List allowed task types for a workflow type using the legacy sprint_type key |
-| `agent_hq_update_workflow_type_task_types` | Replace allowed task types for a workflow type using the legacy sprint_type key |
+| `agent_hq_list_workflow_type_task_types` | List allowed task types for a workflow type |
+| `agent_hq_update_workflow_type_task_types` | Replace allowed task types for a workflow type |
 | `agent_hq_create_workflow_type` | Create a workflow type using the legacy workflow type route |
 | `agent_hq_update_workflow_type` | Update a workflow type using the legacy workflow type route |
 | `agent_hq_delete_workflow_type` | Delete a workflow type using the legacy workflow type route |
@@ -274,7 +274,7 @@ All 30 telemetry tools are exposed by both the full and mobile profiles. Permiss
 Use project files for material that applies across the whole project: product context, shared research, API references, brand assets, and reusable runbooks. Use workflow files for material owned by a single workflow: implementation specs, QA artifacts, handoff packages, and temporary working documents that should not clutter the broader project library.
 
 Workflow-file handoff path for agents:
-1. Resolve project and workflow context from `agent_hq_get_task`, `agent_hq_get_task_context`, or `agent_hq_get_workflow`. Tool schemas use `workflow_id`; legacy task fields may still call this `sprint_id`.
+1. Resolve project and workflow context from `agent_hq_get_task`, `agent_hq_get_task_context`, or `agent_hq_get_workflow`. Tool schemas use `workflow_id`.
 2. Upload with `agent_hq_upload_workflow_file` using `project_id`, `workflow_id`, `filename`, `content_base64`, and optional `mime_type` / `uploaded_by`.
 3. Reference files in notes or instructions by both workflow ID and file ID or filename, for example: `workflow_id=42 file_id=9 spec.md`.
 4. Update an existing artifact with `agent_hq_replace_workflow_file`; this keeps the same workflow file ID and records a new version.
@@ -289,8 +289,8 @@ Workflow-file API and MCP responses include `scope: "workflow"`, `tenant_id`, `p
 Use this recipe before creating, updating, linking, or moving tasks in configurable workflows:
 
 1. Resolve tenant and task context from the MCP identity and the current task or project. Tenant-bound keys should omit `tenant_id`; only super-admin keys can pass it.
-2. Resolve workflow context with `agent_hq_get_task`, `agent_hq_get_task_context`, `agent_hq_get_workflow`, or `agent_hq_list_workflows`. Treat `sprint_id` as the current compatibility field for workflow IDs when a tool schema exposes only `sprint_id`.
-3. Call `agent_hq_get_workflow_metadata` with the resolved `sprint_id`, and include `task_type` when the write depends on task-type-specific fields.
+2. Resolve workflow context with `agent_hq_get_task`, `agent_hq_get_task_context`, `agent_hq_get_workflow`, or `agent_hq_list_workflows`.
+3. Call `agent_hq_get_workflow_metadata` with the resolved `workflow_id`, and include `task_type` when the write depends on task-type-specific fields.
 4. Resolve custom field schemas from the metadata response or with `agent_hq_list_workflow_type_field_schemas` / `agent_hq_get_workflow_type_field_schema`. Submit only accepted `custom_fields` keys and types.
 5. Resolve relationship types with `agent_hq_get_task_relationship_types` for task-specific linking, or `agent_hq_list_workflow_type_relationship_types` when configuring a workflow type. Use relationship keys and dispatch semantics from the response.
 6. Resolve transition requirements with `agent_hq_list_transition_requirement_fields` and the outcome metadata. Check required gate/evidence payload keys before posting an outcome.
@@ -333,7 +333,7 @@ Typical writable fields:
 - `title` (required)
 - `project_id` (required)
 - `description`
-- `workflow_id` in new workflow-facing docs/tools; `sprint_id` remains the compatibility field currently used by routing/task APIs
+- `workflow_id` for workflow IDs in tools and APIs
 - `status` (optional initial workflow status; omit to use the workflow/default creation status)
 - `priority`
 - `task_type`
@@ -346,7 +346,7 @@ For configurable workflow/task-type fields, resolve the schema before creating:
 {
   "tool": "agent_hq_get_workflow_metadata",
   "arguments": {
-    "sprint_id": 42,
+    "workflow_id": 42,
     "task_type": "backend"
   }
 }
@@ -406,7 +406,7 @@ Then pass only fields accepted by the resolved task field schema:
   "arguments": {
     "title": "Implement API retry policy",
     "project_id": 86,
-    "sprint_id": 42,
+    "workflow_id": 42,
     "status": "ready",
     "task_type": "backend",
     "custom_fields": {
@@ -425,7 +425,7 @@ Typical writable fields:
 - `title`
 - `description`
 - `priority`
-- `workflow_id` in workflow-facing contexts; `sprint_id` remains the compatibility field currently used by routing/task APIs
+- `workflow_id` for workflow IDs in tools and APIs
 - `task_type`
 - `story_points`
 - `custom_fields`
@@ -558,7 +558,7 @@ These typed MCP tools map to explicit, self-describing API surfaces so clients d
 - canonical story-point model routing: `/api/v1/model-routing`
 - compatibility aliases for canonical model routing: `/api/v1/routing/model-routing`, `/api/v1/routing/story-point-routing`
 - agent skill assignment relation surface: `/api/v1/agents/:id/skills`
-- task field schema surfaces: `/api/v1/sprints/types/:key/field-schemas`
+- task field schema surfaces: `/api/v1/workflows/types/:key/field-schemas`
 - top-level schema aliases for external clients: `/api/v1/task-field-schemas`, `/api/v1/task-field-definitions`
 
 ---
@@ -687,22 +687,6 @@ In ChatGPT Desktop settings, add an MCP integration with:
 - Command: `node`
 - Args: `/absolute/path/to/agent-hq/api/dist/mcp/server.js`
 - Env: `AGENT_HQ_MCP_API_KEY=ahq_mcp_...`
-
-### Alternate `npx` setup
-
-```json
-{
-  "mcpServers": {
-    "agent-hq": {
-      "command": "npx",
-      "args": ["--yes", "agent-hq-mcp"],
-      "env": {
-        "AGENT_HQ_MCP_API_KEY": "ahq_mcp_..."
-      }
-    }
-  }
-}
-```
 
 ---
 
@@ -842,7 +826,7 @@ A workflow definition is the type plus everything hanging off it, and `workflow_
 | outcomes | `GET .../outcomes[/:outcomeId]` | `POST`/`PUT`/`DELETE` |
 | relationship types | `GET .../relationship-types[/:id]` | `POST`/`PUT`/`DELETE` |
 
-All three path spellings (`/sprints`, `/workflows`, `/workflow-definitions`) resolve identically.
+Both path spellings (`/workflows`, `/workflow-definitions`) resolve identically.
 
 Scope comes from the type named in the path: it must exist in the caller's tenant and either have the assigned project as its stored `project_id` or be referenced by a workflow in that project and tenant. A shared definition can have no stored project, or a different creating project. Operators from every project using it can read or edit it with the corresponding capability, and edits affect all projects using that definition. Workflow usage counts regardless of workflow status and requires no dispatched task. Removing the last use removes usage-based access; the creating project retains access.
 
@@ -1121,13 +1105,13 @@ Supported high-blast-radius writes accept `dry_run: true` for read-only preview.
 | `agent_hq_create_workflow` | POST | `/api/v1/workflows` |
 | `agent_hq_update_workflow` | PUT | `/api/v1/workflows/:id` |
 | `agent_hq_delete_workflow` | DELETE | `/api/v1/workflows/:id` |
-| `agent_hq_list_assignment_rules` | GET | `/api/v1/routing/assignment-rules?sprint_id=:sprintId` |
-| `agent_hq_get_assignment_rule` | GET | `/api/v1/routing/assignment-rules/:id?sprint_id=:sprintId` |
+| `agent_hq_list_assignment_rules` | GET | `/api/v1/routing/assignment-rules?workflow_id=:workflowId` |
+| `agent_hq_get_assignment_rule` | GET | `/api/v1/routing/assignment-rules/:id?workflow_id=:workflowId` |
 | `agent_hq_create_assignment_rule` | POST | `/api/v1/routing/assignment-rules` |
 | `agent_hq_update_assignment_rule` | PUT | `/api/v1/routing/assignment-rules/:id` |
 | `agent_hq_delete_assignment_rule` | DELETE | `/api/v1/routing/assignment-rules/:id` |
-| `agent_hq_list_assignment_rules` | GET | `/api/v1/routing/rules?sprint_id=:sprintId` compatibility alias |
-| `agent_hq_get_assignment_rule` | GET | `/api/v1/routing/rules/:id?sprint_id=:sprintId` compatibility alias |
+| `agent_hq_list_assignment_rules` | GET | `/api/v1/routing/rules?workflow_id=:workflowId` compatibility alias |
+| `agent_hq_get_assignment_rule` | GET | `/api/v1/routing/rules/:id?workflow_id=:workflowId` compatibility alias |
 | `agent_hq_create_assignment_rule` | POST | `/api/v1/routing/rules` compatibility alias |
 | `agent_hq_update_assignment_rule` | PUT | `/api/v1/routing/rules/:id` compatibility alias |
 | `agent_hq_delete_assignment_rule` | DELETE | `/api/v1/routing/rules/:id` compatibility alias |
@@ -1141,17 +1125,17 @@ Supported high-blast-radius writes accept `dry_run: true` for read-only preview.
 | `agent_hq_create_model_routing_rule` | POST | `/api/v1/model-routing` |
 | `agent_hq_update_model_routing_rule` | PUT | `/api/v1/model-routing/:id` |
 | `agent_hq_delete_model_routing_rule` | DELETE | `/api/v1/model-routing/:id` |
-| `agent_hq_list_workflow_types` | GET | `/api/v1/sprints/types/list` |
-| `agent_hq_list_workflow_type_task_types` | GET | `/api/v1/sprints/types/:key/task-types` |
-| `agent_hq_update_workflow_type_task_types` | PUT | `/api/v1/sprints/types/:key/task-types` |
-| `agent_hq_create_workflow_type` | POST | `/api/v1/sprints/types` |
-| `agent_hq_update_workflow_type` | PUT | `/api/v1/sprints/types/:key` |
-| `agent_hq_delete_workflow_type` | DELETE | `/api/v1/sprints/types/:key` |
-| `agent_hq_list_workflow_type_field_schemas` | GET | `/api/v1/sprints/types/:key/field-schemas` |
-| `agent_hq_get_workflow_type_field_schema` | GET | `/api/v1/sprints/types/:key/field-schemas/:schemaId` |
-| `agent_hq_create_workflow_type_field_schema` | POST | `/api/v1/sprints/types/:key/field-schemas` |
-| `agent_hq_update_workflow_type_field_schema` | PUT | `/api/v1/sprints/types/:key/field-schemas/:schemaId` |
-| `agent_hq_delete_workflow_type_field_schema` | DELETE | `/api/v1/sprints/types/:key/field-schemas/:schemaId` |
+| `agent_hq_list_workflow_types` | GET | `/api/v1/workflows/types/list` |
+| `agent_hq_list_workflow_type_task_types` | GET | `/api/v1/workflows/types/:key/task-types` |
+| `agent_hq_update_workflow_type_task_types` | PUT | `/api/v1/workflows/types/:key/task-types` |
+| `agent_hq_create_workflow_type` | POST | `/api/v1/workflows/types` |
+| `agent_hq_update_workflow_type` | PUT | `/api/v1/workflows/types/:key` |
+| `agent_hq_delete_workflow_type` | DELETE | `/api/v1/workflows/types/:key` |
+| `agent_hq_list_workflow_type_field_schemas` | GET | `/api/v1/workflows/types/:key/field-schemas` |
+| `agent_hq_get_workflow_type_field_schema` | GET | `/api/v1/workflows/types/:key/field-schemas/:schemaId` |
+| `agent_hq_create_workflow_type_field_schema` | POST | `/api/v1/workflows/types/:key/field-schemas` |
+| `agent_hq_update_workflow_type_field_schema` | PUT | `/api/v1/workflows/types/:key/field-schemas/:schemaId` |
+| `agent_hq_delete_workflow_type_field_schema` | DELETE | `/api/v1/workflows/types/:key/field-schemas/:schemaId` |
 | `agent_hq_list_tasks` | GET | `/api/v1/tasks` |
 | `agent_hq_get_task` | GET | `/api/v1/tasks/:id` |
 | `agent_hq_delete_task` | DELETE | `/api/v1/tasks/:id` |

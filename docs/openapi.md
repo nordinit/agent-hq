@@ -11,7 +11,7 @@ The current source of truth lives in `api/src/openapi/document.ts`. New and migr
 
 The document intentionally follows the public scope inventory in `docs/api-public-scope-inventory.md` and the public API documentation policy in `docs/api-public-docs-policy.md`; internal callback hooks, logs, browser controls, telemetry, artifact file access, credential registries, gateway tokens, and other deferred route groups should stay out of the published spec until their auth, redaction, and examples are approved.
 
-Workflow endpoints are the preferred board/operating-cycle surface in the published document. Sprint endpoints and `sprint_*` fields remain documented as legacy compatibility aliases where existing clients still depend on them.
+Workflow endpoints are the board/operating-cycle surface in the published document.
 
 ## Tenant Context
 
@@ -24,7 +24,7 @@ Agent HQ supports logical tenants through tenant-owned rows in the shared databa
 - `POST /api/v1/tenants/:id/select` — select an active tenant by id.
 - `DELETE /api/v1/tenants/:id` — delete a non-default tenant. Payload: `{ "confirmation": "<exact tenant name>" }`. Deletion is a hard delete of tenant-owned records because the current tenant model has no archive column; Settings blocks the default tenant, and deleting the active tenant switches the active context to a remaining tenant.
 
-Tenant context for normal browser/API requests comes from the active tenant in `app_settings`, falling back to the default tenant. Use `PUT /api/v1/tenants/active` or `POST /api/v1/tenants/:id/select` to switch that context. Tenant selector query parameters and headers (`tenant_id`, legacy `company_id`, `X-Agent-HQ-Tenant-ID`, `X-Tenant-ID`) are not accepted for normal requests; they are reserved for trusted cross-tenant MCP/admin access. Tenant-owned data includes projects, workflows/sprints, tasks, agents, routing rules, model routing, tools, MCP servers, recurring task series, sessions, and external event mappings. Host-global provider/runtime configuration remains global unless a product decision explicitly scopes it later.
+Tenant context for normal browser/API requests comes from the active tenant in `app_settings`, falling back to the default tenant. Use `PUT /api/v1/tenants/active` or `POST /api/v1/tenants/:id/select` to switch that context. Tenant selector query parameters and headers (`tenant_id`, legacy `company_id`, `X-Agent-HQ-Tenant-ID`, `X-Tenant-ID`) are not accepted for normal requests; they are reserved for trusted cross-tenant MCP/admin access. Tenant-owned data includes projects, workflows, tasks, agents, routing rules, model routing, tools, MCP servers, recurring task series, sessions, and external event mappings. Host-global provider/runtime configuration remains global unless a product decision explicitly scopes it later.
 
 Creating a tenant seeds a clean starter Agent HQ workspace: an `Agent HQ` project plus the standard Backlog workflow and starter workflow/task policy created by the existing project bootstrap path.
 
