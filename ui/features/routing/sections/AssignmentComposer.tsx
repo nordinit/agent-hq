@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, type RoutingPreview, type WorkflowGraph } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { getTaskTypeLabel } from '@/lib/taskTypes';
@@ -30,6 +30,7 @@ export default function AssignmentComposer({
   context,
   onCancel,
   onCommitted,
+  startRemoving = false,
 }: {
   draft: AssignmentDraft;
   graph: WorkflowGraph;
@@ -37,61 +38,97 @@ export default function AssignmentComposer({
   context: GuardContext;
   onCancel: () => void;
   onCommitted: () => void;
+  /**
+   * Open straight into the remove flow — the canvas's hover ✕. It still stops at the preview:
+   * the ✕ is a shortcut to "Remove…", never a delete on its own.
+   */
+  startRemoving?: boolean;
 }) {
   const [form, setForm] = useState<AssignmentDraft>(draft);
   const [preview, setPreview] = useState<RoutingPreview | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [intent, setIntent] = useState<'save' | 'delete'>('save');
-
-  useEffect(() => {
-    setForm(draft);
-    setPreview(null);
-    setError(null);
-    setIntent('save');
-  }, [draft]);
+  // Clicking ✕ on one chip and then another can leave two previews in flight; only the
+  // newest may land, or the confirm button would describe a different rule than it deletes.
+  const previewSeq = useRef(0);
+  const rootRef = useRef<HTMLDivElement>(null);
 
   const isCreate = form.rule_id == null;
   const guard = isCreate
     ? guardCreate(context)
     : guardMutate(intent === 'delete' ? 'delete' : 'update', { is_override: form.is_override }, context);
 
-  const payload = useCallback((): Record<string, unknown> => ({
-    ...(form.rule_id != null ? { id: form.rule_id } : {}),
-    project_id: context.projectId,
-    workflow_type: graph.scope.workflow_type,
-    // scope_kind is sent explicitly: the rules API accepts it, and inferring scope from the
-    // page selection is exactly how an inherited default gets silently converted.
-    ...(isCreate
-      ? (context.workflowId != null
-        ? { workflow_id: context.workflowId, scope_kind: 'workflow_override' }
-        : { scope_kind: 'workflow_type_default' })
-      : (form.is_override ? { workflow_id: context.workflowId } : {})),
-    status: form.status,
-    task_type: form.task_type,
-    agent_id: form.agent_id,
-    priority: form.priority,
-    enabled: form.enabled ? 1 : 0,
-  }), [form, context, graph.scope.workflow_type, isCreate]);
+  const payloadFor = useCallback((source: AssignmentDraft): Record<string, unknown> => {
+    const creating = source.rule_id == null;
+    return {
+      ...(source.rule_id != null ? { id: source.rule_id } : {}),
+      project_id: context.projectId,
+      workflow_type: graph.scope.workflow_type,
+      // scope_kind is sent explicitly: the rules API accepts it, and inferring scope from the
+      // page selection is exactly how an inherited default gets silently converted.
+      ...(creating
+        ? (context.workflowId != null
+          ? { workflow_id: context.workflowId, scope_kind: 'workflow_override' }
+          : { scope_kind: 'workflow_type_default' })
+        : (source.is_override ? { workflow_id: context.workflowId } : {})),
+      status: source.status,
+      task_type: source.task_type,
+      agent_id: source.agent_id,
+      priority: source.priority,
+      enabled: source.enabled ? 1 : 0,
+    };
+  }, [context, graph.scope.workflow_type]);
 
-  const runPreview = async (action: 'create' | 'update' | 'delete') => {
+  const payload = useCallback(() => payloadFor(form), [payloadFor, form]);
+
+  const runPreview = useCallback(async (action: 'create' | 'update' | 'delete', source: AssignmentDraft) => {
+    const seq = ++previewSeq.current;
     setBusy(true);
     setError(null);
     setIntent(action === 'delete' ? 'delete' : 'save');
     try {
-      setPreview(await api.previewRoutingChange({
+      const result = await api.previewRoutingChange({
         projectId: context.projectId,
         workflowType: graph.scope.workflow_type,
         workflowId: context.workflowId,
-        operations: [{ entity: 'rule', action, payload: payload() }],
-      }));
+        operations: [{ entity: 'rule', action, payload: payloadFor(source) }],
+      });
+      if (seq === previewSeq.current) setPreview(result);
     } catch (e) {
+      if (seq !== previewSeq.current) return;
       setPreview(null);
       setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setBusy(false);
+      if (seq === previewSeq.current) setBusy(false);
     }
-  };
+  }, [context.projectId, context.workflowId, graph.scope.workflow_type, payloadFor]);
+
+  useEffect(() => {
+    previewSeq.current += 1;
+    setForm(draft);
+    setPreview(null);
+    setError(null);
+    setBusy(false);
+    const removing = startRemoving && draft.rule_id != null;
+    setIntent(removing ? 'delete' : 'save');
+    // The ✕ lives on the canvas and this panel can sit below the fold under the agent palette;
+    // without this the click looks like it did nothing.
+    if (removing) rootRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    // A blocked delete (an inherited default seen from one workflow) is not previewed: the
+    // guard banner explains why and what to do instead.
+    if (removing && guardMutate('delete', { is_override: draft.is_override }, context).allow) {
+      void runPreview('delete', draft);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reset only when a new gesture arrives
+  }, [draft, startRemoving]);
+
+  // The preview lands after that first scroll and pushes the confirm button down; follow it.
+  useEffect(() => {
+    if (startRemoving && preview && intent === 'delete') {
+      rootRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
+  }, [startRemoving, preview, intent]);
 
   const commit = async () => {
     setBusy(true);
@@ -119,11 +156,11 @@ export default function AssignmentComposer({
   const statusLabel = graph.nodes.find(n => n.id === form.status)?.label ?? form.status;
 
   return (
-    <div className="space-y-3">
+    <div ref={rootRef} className="space-y-3">
       <div className="flex items-start justify-between gap-2">
         <div>
           <p className="text-xs font-medium uppercase tracking-[0.2em] text-slate-500">
-            {isCreate ? 'Assign agent' : 'Edit assignment'}
+            {isCreate ? 'Assign agent' : intent === 'delete' ? 'Remove assignment' : 'Edit assignment'}
           </p>
           <p className="mt-1 text-sm font-semibold text-white">
             {form.agent_name} <span className="text-slate-500">picks up</span> {statusLabel}
@@ -233,12 +270,12 @@ export default function AssignmentComposer({
           </>
         ) : (
           <>
-            <Button size="sm" variant="primary" onClick={() => runPreview(isCreate ? 'create' : 'update')} disabled={!guard.allow || busy}>
+            <Button size="sm" variant="primary" onClick={() => runPreview(isCreate ? 'create' : 'update', form)} disabled={!guard.allow || busy}>
               {busy ? 'Checking…' : 'Preview change'}
             </Button>
             {!isCreate && (
               <button
-                onClick={() => runPreview('delete')}
+                onClick={() => runPreview('delete', form)}
                 disabled={busy || !guardMutate('delete', { is_override: form.is_override }, context).allow}
                 className="rounded-lg border border-red-500/40 px-2.5 py-1.5 text-xs text-red-300 transition-colors hover:bg-red-950/30 disabled:opacity-40"
               >

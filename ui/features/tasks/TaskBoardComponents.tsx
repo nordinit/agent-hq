@@ -1,7 +1,8 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Plus, X, Shield, AlertTriangle, GripVertical, PauseCircle, Search } from 'lucide-react';
+import { Plus, X, Shield, AlertTriangle, GripVertical, PauseCircle, Search, Maximize2 } from 'lucide-react';
+import Link from 'next/link';
 import { api } from '@/lib/api';
 import type { TaskRelationship, TaskRelationshipTypeConfig } from '@/lib/api';
 import { getFailureSourceLabel, getFailureTone, isFailureBlocked } from '@/lib/taskFailure';
@@ -322,6 +323,15 @@ export function TaskCard({ task, allTasks, onClick, relationshipTypes, onLinkTas
             {task.recurring ? <span className="ml-1.5 text-xs text-slate-400" title="Recurring">🔁</span> : null}
           </span>
         </div>
+        <Link
+          href={`/tasks/${task.id}`}
+          onClick={e => e.stopPropagation()}
+          className="hidden sm:inline-flex shrink-0 rounded p-0.5 text-slate-500 opacity-0 transition-opacity hover:bg-slate-700 hover:text-amber-300 focus:opacity-100 group-hover:opacity-100"
+          aria-label={`Open task #${task.id} full page`}
+          title="Open full page"
+        >
+          <Maximize2 className="h-3.5 w-3.5" />
+        </Link>
       </div>
 
       {/* Priority + story points + agent + stop button */}
