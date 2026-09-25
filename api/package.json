@@ -52,7 +52,7 @@
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@types/multer": "^2.1.0",
     "@types/ws": "^8.18.1",
-    "better-sqlite3": "^12.6.2",
+    "better-sqlite3": "^13.0.3",
     "cors": "^2.8.5",
     "dotenv": "^17.3.1",
     "express": "^4.22.3",
