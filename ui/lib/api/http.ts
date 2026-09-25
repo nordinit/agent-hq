@@ -1,4 +1,5 @@
 import { getAgentHqBaseUrl } from '../agentHqBaseUrl';
+import { isUiSessionExpired, redirectToLogin } from '../sessionExpiry';
 
 export const getApiBase = () => {
   // Browser clients should always use the UI origin and rely on Next rewrites / route handlers.
@@ -21,6 +22,7 @@ export async function apiFetch<T>(path: string, options?: RequestInit): Promise<
     try {
       const json = JSON.parse(body) as { error?: string };
       errorMsg = json.error ?? errorMsg;
+      if (isUiSessionExpired(res.status, json)) redirectToLogin();
     } catch { /* ignore */ }
     throw new Error(errorMsg);
   }

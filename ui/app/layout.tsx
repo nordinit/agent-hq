@@ -1,7 +1,6 @@
 import type { Metadata } from 'next';
 import './globals.css';
-import Sidebar from '@/components/Sidebar';
-import MainContent from '@/components/MainContent';
+import AppShell from '@/components/AppShell';
 import ThemeScript from '@/components/theme/ThemeScript';
 export const metadata: Metadata = {
   title: 'Agent HQ',
@@ -20,8 +19,7 @@ export default function RootLayout({
         <ThemeScript />
       </head>
       <body className="bg-slate-900 text-slate-100 h-[var(--app-viewport-height)] min-h-0 overflow-hidden flex flex-col md:flex-row">
-        <Sidebar />
-        <MainContent>{children}</MainContent>
+        <AppShell>{children}</AppShell>
       </body>
     </html>
   );

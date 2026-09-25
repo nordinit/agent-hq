@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAgentHqBaseUrl } from '@/lib/agentHqBaseUrl';
+import { operatorAuthorizationHeaders } from '@/lib/apiProxyHeaders';
+import { getOperatorToken } from '@/lib/operatorSession';
 
 function buildGatewayUrl(req: NextRequest, apiBase: string): string {
   const internalApiUrl = new URL(apiBase);
@@ -30,6 +32,7 @@ export async function GET(req: NextRequest) {
   try {
     const res = await fetch(`${apiBase}/api/v1/chat/config`, {
       cache: 'no-store',
+      headers: operatorAuthorizationHeaders(getOperatorToken()),
     });
     const data = await res.json();
     const gatewayUrl = buildGatewayUrl(req, apiBase);

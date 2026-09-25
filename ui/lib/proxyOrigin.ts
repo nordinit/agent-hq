@@ -1,6 +1,6 @@
 /**
- * The `/api/v1` proxy forwards requests to an API that has no login yet, so another website
- * must not be able to drive it through the operator's browser. A browser attaches `Origin` to
+ * The `/api/v1` proxy forwards requests to the API as the operator, so another website must not
+ * be able to drive it through the signed-in operator's browser. A browser attaches `Origin` to
  * cross-origin requests; a same-origin request from the UI's own pages carries the UI's own
  * host. Requests without `Origin` (server-side callers) pass.
  */

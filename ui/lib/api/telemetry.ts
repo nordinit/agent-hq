@@ -1,4 +1,5 @@
 import { getApiBase } from './http';
+import { isUiSessionExpired, redirectToLogin } from '../sessionExpiry';
 import type { DashboardDocument, SavedDashboard } from '../dashboardTypes';
 import { telemetryScopeQuery } from '../telemetryPresentation';
 import type { DefinitionValidation, MetricDefinition, TelemetryBinding, TelemetryBindingPreview, TelemetryBindingPreviewRequest, TelemetryCatalog, TelemetryContributors, TelemetryMetric, TelemetryProfile, TelemetryQuery, TelemetryQueryResponse, TelemetryReport, TelemetryReportDefinition, TelemetryResource, TelemetryScope } from '../telemetryTypes';
@@ -11,6 +12,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetch(`${getApiBase()}${BASE}${path}`, { ...options, headers: { 'Content-Type': 'application/json', ...options?.headers } });
   const body = await response.json().catch(() => null);
   if (!response.ok) {
+    if (isUiSessionExpired(response.status, body)) redirectToLogin();
     const error = body?.error;
     let message = typeof error === 'string' ? error : error?.message ?? body?.message ?? `Telemetry request failed (${response.status}).`;
     if (Array.isArray(body?.issues)) message += '\n' + body.issues.map((issue: { path?: unknown; message?: string }) => `${Array.isArray(issue.path) ? issue.path.join('.') : issue.path ?? ''}: ${issue.message ?? 'Invalid value'}`).join('\n');

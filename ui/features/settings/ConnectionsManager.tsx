@@ -92,9 +92,8 @@ function TelegramCard() {
   const [testResult, setTestResult] = useState<{ ok: boolean; message?: string; error?: string; botUsername?: string } | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
 
-  const apiBase = typeof window !== 'undefined'
-    ? (window.location.port === '3510' ? `${window.location.protocol}//${window.location.hostname}:3511` : '')
-    : '';
+  // Same-origin through the UI proxy, which carries the operator credential the API requires.
+  const apiBase = '';
 
   const fetchStatus = useCallback(async () => {
     setLoading(true);

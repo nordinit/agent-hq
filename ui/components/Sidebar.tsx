@@ -22,6 +22,7 @@ import {
   Cpu,
   Settings,
   HelpCircle,
+  LogOut,
   MoreHorizontal,
   X,
 } from 'lucide-react';
@@ -183,11 +184,22 @@ export default function Sidebar() {
               <HelpCircle className="w-3.5 h-3.5 text-amber-400" />
               Getting Started
             </button>
-            <p className="text-slate-600 text-xs">v1.0 · Phase 1+2</p>
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-slate-600 text-xs">v1.0 · Phase 1+2</p>
+              <form method="post" action="/api/auth/logout">
+                <button
+                  type="submit"
+                  className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs text-slate-500 transition-colors hover:bg-slate-800 hover:text-white"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                  Sign out
+                </button>
+              </form>
+            </div>
           </div>
         )}
         {collapsed && (
-          <div className="px-1 py-3 border-t border-slate-800 flex justify-center">
+          <div className="px-1 py-3 border-t border-slate-800 flex flex-col items-center gap-1">
             <button
               type="button"
               onClick={() => beginGettingStartedGuide(0)}
@@ -196,6 +208,16 @@ export default function Sidebar() {
             >
               <HelpCircle className="w-4 h-4 text-amber-400" />
             </button>
+            <form method="post" action="/api/auth/logout">
+              <button
+                type="submit"
+                className="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+                title="Sign out"
+                aria-label="Sign out"
+              >
+                <LogOut className="w-4 h-4" />
+              </button>
+            </form>
           </div>
         )}
       </aside>
@@ -261,6 +283,17 @@ export default function Sidebar() {
                     <HelpCircle className="w-4 h-4 text-amber-400" />
                     Getting Started Guide
                   </Button>
+                  <form method="post" action="/api/auth/logout" className="mt-2">
+                    <Button
+                      type="submit"
+                      variant="ghost"
+                      size="md"
+                      className="w-full justify-start rounded-2xl border border-slate-800 bg-slate-900/70 px-3 py-3 text-left text-slate-300 hover:border-slate-700"
+                    >
+                      <LogOut className="w-4 h-4" />
+                      Sign out
+                    </Button>
+                  </form>
                 </div>
               </div>
             </div>

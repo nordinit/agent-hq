@@ -1,21 +1,12 @@
 import { NextRequest } from 'next/server';
 import { getAgentHqBaseUrl } from '@/lib/agentHqBaseUrl';
+import { buildDownstreamResponseHeaders, buildUpstreamRequestHeaders } from '@/lib/apiProxyHeaders';
+import { getOperatorToken } from '@/lib/operatorSession';
 import { isSameOriginProxyRequest } from '@/lib/proxyOrigin';
 
 const API_BASE = getAgentHqBaseUrl();
-const HOP_BY_HOP_HEADERS = new Set([
-  'connection',
-  'content-length',
-  'host',
-  'keep-alive',
-  'proxy-authenticate',
-  'proxy-authorization',
-  'te',
-  'trailer',
-  'transfer-encoding',
-  'upgrade',
-]);
 
+// middleware.ts has already required a signed-in session for every request that reaches here.
 async function proxy(req: NextRequest, path: string[]) {
   if (!isSameOriginProxyRequest(req.headers)) {
     return Response.json(
@@ -23,20 +14,20 @@ async function proxy(req: NextRequest, path: string[]) {
       { status: 403 },
     );
   }
+  const operatorToken = getOperatorToken();
+  if (!operatorToken) {
+    return Response.json(
+      { code: 'operator_token_not_configured', error: 'AGENT_HQ_OPERATOR_TOKEN is not configured for the UI.' },
+      { status: 503 },
+    );
+  }
 
   const url = new URL(req.url);
   const target = new URL(`/api/v1/${path.join('/')}${url.search}`, API_BASE);
-  const headers = new Headers(req.headers);
-
-  for (const header of HOP_BY_HOP_HEADERS) {
-    headers.delete(header);
-  }
-  // Checked above. The API sees the UI server as a same-machine caller, not the browser page.
-  headers.delete('origin');
 
   const init: RequestInit = {
     method: req.method,
-    headers,
+    headers: buildUpstreamRequestHeaders(req.headers, operatorToken),
     cache: 'no-store',
     redirect: 'manual',
   };
@@ -46,16 +37,11 @@ async function proxy(req: NextRequest, path: string[]) {
   }
 
   const upstream = await fetch(target, init);
-  const responseHeaders = new Headers(upstream.headers);
-
-  for (const header of HOP_BY_HOP_HEADERS) {
-    responseHeaders.delete(header);
-  }
 
   return new Response(upstream.body, {
     status: upstream.status,
     statusText: upstream.statusText,
-    headers: responseHeaders,
+    headers: buildDownstreamResponseHeaders(upstream.headers),
   });
 }
 
