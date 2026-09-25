@@ -9,9 +9,7 @@ import { useTaskStatuses } from '@/lib/useTaskStatuses';
 import { useTaskTypes } from '@/lib/taskTypes';
 import { hasLiveTaskInstance } from '@/lib/liveTaskInstances';
 import { useProjectFilterPreference } from '@/lib/projectFilterPreference';
-
-const PAGE_SIZE = 50;
-const BACKGROUND_PAGE_SIZE = 200;
+import { fetchTaskPages, type TaskPage } from '@/lib/taskPages';
 
 export interface Project {
   id: number;
@@ -77,16 +75,11 @@ export function useTasksPageState() {
   const loadedWorkflowIds = useRef<Set<number>>(new Set());
   const [loadingWorkflowIds, setLoadingWorkflowIds] = useState<Set<number>>(new Set());
   const selectedSingleWorkflowId = selectedWorkflowIds.length === 1 ? selectedWorkflowIds[0] : null;
-  const loadedCountRef = useRef(PAGE_SIZE);
   const loadRunIdRef = useRef(0);
-  const backgroundLoadTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    loadedCountRef.current = Math.max(tasks.length, PAGE_SIZE);
-  }, [tasks.length]);
+  const loadControllerRef = useRef<AbortController | null>(null);
 
   useEffect(() => () => {
-    if (backgroundLoadTimeoutRef.current) clearTimeout(backgroundLoadTimeoutRef.current);
+    loadControllerRef.current?.abort();
   }, []);
 
   const selectedWorkflowType = useMemo(() => {
@@ -150,94 +143,76 @@ export function useTasksPageState() {
       .catch(console.error);
   }, [base]);
 
-  const loadTasks = useCallback((opts: { silent?: boolean; refreshCount?: number } = {}) => {
-    const { silent = false, refreshCount } = opts;
+  const loadTasks = useCallback(async (opts: { silent?: boolean } = {}) => {
+    const { silent = false } = opts;
     const runId = ++loadRunIdRef.current;
-
-    if (backgroundLoadTimeoutRef.current) {
-      clearTimeout(backgroundLoadTimeoutRef.current);
-      backgroundLoadTimeoutRef.current = null;
-    }
+    loadControllerRef.current?.abort();
+    const controller = new AbortController();
+    loadControllerRef.current = controller;
+    const isCurrent = () => loadRunIdRef.current === runId && !controller.signal.aborted;
 
     if (!silent) {
       setLoading(true);
       setIsBackgroundLoading(false);
     }
 
-    const params = new URLSearchParams({
-      limit: String(refreshCount ?? PAGE_SIZE),
-      offset: '0',
-    });
-    if (selectedProject) params.set('project_id', String(selectedProject));
+    const workflowsFetch: Promise<Workflow[] | null> = selectedProject
+      ? fetch(`${base}/api/v1/workflows?project_id=${selectedProject}`, { signal: controller.signal })
+        .then(r => { if (!r.ok) throw new Error('Workflow refresh failed'); return r.json(); })
+        .catch(() => null)
+      : Promise.resolve([]);
 
-    const tasksFetch = fetch(`${base}/api/v1/tasks?${params.toString()}`).then(r => r.json());
-    const workflowsFetch = !selectedProject
-      ? Promise.resolve(null)
-      : fetch(`${base}/api/v1/workflows?project_id=${selectedProject}`).then(r => r.json()).catch(() => []);
-
-    Promise.all([tasksFetch, workflowsFetch])
-      .then(([taskData, workflowData]) => {
-        if (loadRunIdRef.current !== runId) return;
-
-        const { tasks: newTasks, hasMore: more, total } = taskData as {
-          tasks: Task[];
-          hasMore: boolean;
-          total: number;
-        };
-        setTasks(newTasks);
-        setHasMore(more);
-        setTotalTasks(total);
-        if (workflowData !== null) {
-          setWorkflows((workflowData as Workflow[]).filter(s => s.status === 'active' || s.status === 'planning'));
+    try {
+      let firstPage = true;
+      const snapshot = await fetchTaskPages<Task>(async (offset, limit) => {
+        const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+        if (selectedProject) params.set('project_id', String(selectedProject));
+        const response = await fetch(`${base}/api/v1/tasks?${params}`, { signal: controller.signal });
+        if (!response.ok) throw new Error(`Task refresh failed (${response.status})`);
+        return response.json() as Promise<TaskPage<Task>>;
+      }, silent ? undefined : async page => {
+        const workflowData = await workflowsFetch;
+        if (!isCurrent()) return;
+        if (firstPage) {
+          setTasks(page.tasks);
+          if (workflowData) setWorkflows(workflowData.filter(s => s.status === 'active' || s.status === 'planning'));
+          firstPage = false;
+        } else {
+          // Preserve tasks already fetched by a visible workflow section during initial loading.
+          setTasks(prev => [...new Map([...prev, ...page.tasks].map(task => [task.id, task])).values()]);
         }
-      })
-      .catch(console.error)
-      .finally(() => {
-        if (!silent && loadRunIdRef.current === runId) setLoading(false);
+        setTotalTasks(page.total);
+        setHasMore(page.hasMore);
+        setIsBackgroundLoading(page.hasMore);
+        setLoading(false);
       });
+      const workflowData = await workflowsFetch;
+      if (!isCurrent()) return;
+      // A refresh publishes only a complete snapshot, never a temporary first page.
+      setTasks(snapshot.tasks);
+      setTotalTasks(snapshot.total);
+      setHasMore(false);
+      setLoadingWorkflowIds(new Set());
+      if (workflowData) {
+        setWorkflows(workflowData.filter(s => s.status === 'active' || s.status === 'planning'));
+        loadedWorkflowIds.current = new Set(workflowData.map(workflow => workflow.id));
+      }
+    } catch (error) {
+      if (isCurrent()) console.error(error);
+    } finally {
+      if (isCurrent()) {
+        setLoading(false);
+        setIsBackgroundLoading(false);
+      }
+    }
   }, [base, selectedProject]);
-
-  useEffect(() => {
-    if (loading || !hasMore || isBackgroundLoading) return;
-
-    const runId = loadRunIdRef.current;
-    setIsBackgroundLoading(true);
-
-    const params = new URLSearchParams({
-      limit: String(BACKGROUND_PAGE_SIZE),
-      offset: String(tasks.length),
-    });
-    if (selectedProject) params.set('project_id', String(selectedProject));
-
-    backgroundLoadTimeoutRef.current = setTimeout(() => {
-      backgroundLoadTimeoutRef.current = null;
-      fetch(`${base}/api/v1/tasks?${params.toString()}`)
-        .then(r => r.json())
-        .then((data: { tasks: Task[]; hasMore: boolean; total: number }) => {
-          if (loadRunIdRef.current !== runId) return;
-
-          const incoming = data.tasks ?? [];
-          setTasks(prev => {
-            if (!incoming.length) return prev;
-            const seen = new Set(prev.map(task => task.id));
-            const deduped = incoming.filter(task => !seen.has(task.id));
-            return deduped.length ? [...prev, ...deduped] : prev;
-          });
-          setHasMore(data.hasMore);
-          setTotalTasks(data.total);
-        })
-        .catch(console.error)
-        .finally(() => {
-          if (loadRunIdRef.current === runId) setIsBackgroundLoading(false);
-        });
-    }, 0);
-  }, [base, hasMore, isBackgroundLoading, loading, selectedProject, tasks.length]);
 
   const handleSectionVisible = useCallback((sectionKey: string) => {
     if (!sectionKey.startsWith('workflow-')) return;
     const workflowId = Number(sectionKey.replace('workflow-', ''));
     if (!workflowId || loadedWorkflowIds.current.has(workflowId)) return;
     loadedWorkflowIds.current.add(workflowId);
+    const runId = loadRunIdRef.current;
 
     setLoadingWorkflowIds(prev => new Set([...prev, workflowId]));
 
@@ -247,6 +222,7 @@ export function useTasksPageState() {
     fetch(`${getApiBase()}/api/v1/tasks?${params.toString()}`)
       .then(r => r.json())
       .then((data: { tasks: Task[] }) => {
+        if (loadRunIdRef.current !== runId) return;
         if (data.tasks?.length) {
           setTasks(prev => {
             const existingIds = new Set(prev.map(t => t.id));
@@ -257,6 +233,7 @@ export function useTasksPageState() {
       })
       .catch(console.error)
       .finally(() => {
+        if (loadRunIdRef.current !== runId) return;
         setLoadingWorkflowIds(prev => {
           const next = new Set(prev);
           next.delete(workflowId);
@@ -276,8 +253,8 @@ export function useTasksPageState() {
     loadTasks();
   }, [selectedProject, loadTasks]);
 
-  useLiveRefresh(() => loadTasks({ silent: true, refreshCount: loadedCountRef.current }), {
-    enabled: true,
+  useLiveRefresh(() => loadTasks({ silent: true }), {
+    enabled: !loading && !isBackgroundLoading,
     intervalMs: 10000,
     hiddenIntervalMs: 30000,
   });
@@ -385,12 +362,12 @@ export function useTasksPageState() {
       relationship_type_key: relationshipTypeKey,
       created_by: 'prism-frontend',
     });
-    loadTasks();
+    void loadTasks({ silent: true });
   }, [loadTasks]);
 
   const handleRemoveBlocker = useCallback(async (taskId: number, blockerId: number) => {
     await fetch(`${base}/api/v1/tasks/${taskId}/blockers/${blockerId}`, { method: 'DELETE' });
-    loadTasks();
+    void loadTasks({ silent: true });
   }, [base, loadTasks]);
 
   const handleCancel = useCallback(async (taskId: number) => {
@@ -398,19 +375,19 @@ export function useTasksPageState() {
     if (reason === null) return;
     const result = await api.stopTask(taskId, reason || undefined);
     if (viewTask?.id === taskId) setViewTask(result.task as Task);
-    loadTasks();
+    void loadTasks({ silent: true });
   }, [loadTasks, viewTask]);
 
   const handlePause = useCallback(async (taskId: number, reason?: string) => {
     const result = await api.pauseTask(taskId, reason);
     if (viewTask?.id === taskId) setViewTask(result.task as Task);
-    loadTasks();
+    void loadTasks({ silent: true });
   }, [loadTasks, viewTask]);
 
   const handleUnpause = useCallback(async (taskId: number) => {
     const result = await api.unpauseTask(taskId);
     if (viewTask?.id === taskId) setViewTask(result.task as Task);
-    loadTasks();
+    void loadTasks({ silent: true });
   }, [loadTasks, viewTask]);
 
   const handleStatusChange = useCallback(async (taskId: number, newStatus: string) => {

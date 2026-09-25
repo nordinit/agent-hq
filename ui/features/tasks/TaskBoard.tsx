@@ -256,7 +256,8 @@ export function TaskBoard({
   onSectionVisible,
   isFiltered = false,
 }: TaskBoardProps) {
-  const normalizedWorkflowTypes = useMemo(() => uniqueStrings(workflowTypes), [workflowTypes]);
+  const workflowTypesKey = JSON.stringify(uniqueStrings(workflowTypes));
+  const normalizedWorkflowTypes = useMemo(() => JSON.parse(workflowTypesKey) as string[], [workflowTypesKey]);
   const singleWorkflowType = normalizedWorkflowTypes.length === 1 ? normalizedWorkflowTypes[0] : null;
   const {
     allColumns: ALL_COLUMNS,
