@@ -30,16 +30,12 @@ function parseJson(text: string): unknown {
   }
 }
 
-function makeEnv(): NodeJS.ProcessEnv {
-  return {
-    ...process.env,
-    OPENCLAW_HIDE_BANNER: '1',
-    OPENCLAW_SUPPRESS_NOTES: '1',
-  };
-}
-
-function runOpenClaw(args: string[]) {
-  return runOpenClawSync(args, { timeout: 30000, env: makeEnv() });
+// The token rides in the child's environment, not on argv where `ps` shows it to every local user.
+function runOpenClaw(args: string[], gatewayToken: string | null) {
+  return runOpenClawSync(args, {
+    timeout: 30000,
+    env: gatewayToken ? { OPENCLAW_GATEWAY_TOKEN: gatewayToken } : {},
+  });
 }
 
 function readGatewayTokenFromConfig(): string | null {
@@ -59,16 +55,12 @@ function loadGatewayToken(): string | null {
   return readGatewayTokenFromConfig();
 }
 
-function buildListArgs(gatewayToken: string | null): string[] {
-  const args = ['devices', 'list', '--json'];
-  if (gatewayToken) args.push('--token', gatewayToken);
-  return args;
+function buildListArgs(): string[] {
+  return ['devices', 'list', '--json'];
 }
 
-function buildApproveArgs(requestId: string, gatewayToken: string | null): string[] {
-  const args = ['devices', 'approve', requestId, '--json'];
-  if (gatewayToken) args.push('--token', gatewayToken);
-  return args;
+function buildApproveArgs(requestId: string): string[] {
+  return ['devices', 'approve', requestId, '--json'];
 }
 
 function collectPendingRequests(value: unknown, acc: PendingRequest[], inheritedPending = false): void {
@@ -180,7 +172,7 @@ export function ensureLocalGatewayPairing(gatewayUrl: string | null | undefined)
     ?? pending[0]
     ?? null;
 
-  const listResult = runOpenClaw(buildListArgs(gatewayToken));
+  const listResult = runOpenClaw(buildListArgs(), gatewayToken);
   const listStdout = listResult.stdout ?? '';
   const listStderr = listResult.stderr ?? '';
   let candidate = selectCandidate(pendingFrom(listStdout));
@@ -198,21 +190,21 @@ export function ensureLocalGatewayPairing(gatewayUrl: string | null | undefined)
     };
   }
 
-  let approveResult = runOpenClaw(buildApproveArgs(candidate.requestId, gatewayToken));
+  let approveResult = runOpenClaw(buildApproveArgs(candidate.requestId), gatewayToken);
   let stdout = approveResult.stdout ?? '';
   let stderr = approveResult.stderr ?? '';
   let requestId = candidate.requestId;
 
   const combinedError = `${stdout}\n${stderr}`.toLowerCase();
   if (approveResult.status !== 0 && combinedError.includes('unknown requestid')) {
-    const retryListResult = runOpenClaw(buildListArgs(gatewayToken));
+    const retryListResult = runOpenClaw(buildListArgs(), gatewayToken);
     const retryStdout = retryListResult.stdout ?? '';
     const retryStderr = retryListResult.stderr ?? '';
     const retryCandidate = selectCandidate(pendingFrom(retryStdout));
     if (retryCandidate?.requestId && retryCandidate.requestId !== requestId) {
       candidate = retryCandidate;
       requestId = retryCandidate.requestId;
-      approveResult = runOpenClaw(buildApproveArgs(requestId, gatewayToken));
+      approveResult = runOpenClaw(buildApproveArgs(requestId), gatewayToken);
       stdout = approveResult.stdout ?? '';
       stderr = approveResult.stderr ?? '';
     } else {
