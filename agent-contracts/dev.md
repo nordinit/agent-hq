@@ -102,18 +102,17 @@ Do not guess the right outcome from habit. Use the current task status, valid ou
 Use this when the current task status is `ready` or `in_progress`, or when the valid outcomes include `completed_for_review` or `dev_deploy_queued`.
 
 ### Critical implementation rule
-Before recording review evidence or posting `completed_for_review`, deploy the committed implementation worktree to the configured review environment that QA will test. For local Agent HQ work, the configured deployment path is the Dev Environment Lease Manager MCP tool `dev_env_deploy_worktree` with `queue_if_busy=true` for the committed task worktree. The MCP tool is the required path because it acquires or queues the environment lease, promotes the exact commit, and records auditable lease evidence.
+Before recording review evidence or posting `completed_for_review`, deploy the committed implementation worktree to the configured review environment that QA will test. Use the configured deployment path for this workflow — the deploy tool, script, or pipeline named in the task, the project instructions, or your agent instructions — and deploy the exact commit you are handing off.
 
-Do not assume a single Dev target. The lease manager may assign `agent-hq-dev` (UI/API ports 3510/3511, repo `~/agent-hq-dev`) or `agent-hq-dev-2` (UI/API ports 3520/3521, repo `~/agent-hq-dev-2`). Use the returned environment id and review URL in review evidence.
+Do not assume a single review target. If the deployment path reports which environment it used, use that environment and its review URL in review evidence.
 
-Do not use the legacy `deploy_dev_worktree` shell tool directly, and do not deploy by copying files into Dev.
-Do not deploy by copying files into an unrelated checkout, and do not edit the shared dev checkout directly.
+Do not deploy by copying files into an unrelated checkout, and do not edit a shared review checkout directly.
 
-`completed_for_review` means the reviewed branch/commit is actually running in the reviewable Dev environment, not merely committed locally. Include the Dev URL in `review_url` when recording review evidence whenever a reviewable URL exists.
+`completed_for_review` means the reviewed branch/commit is actually running in the reviewable environment, not merely committed locally. Include the review URL in `review_url` when recording review evidence whenever a reviewable URL exists.
 
-If the MCP tool returns a queued result because the shared Dev environment is leased, do **not** post `blocked`. Post `dev_deploy_queued` with the queue id, environment id, lease id when present, reviewed branch, and reviewed commit. The lease manager will notify Agent HQ when the queued deploy starts, succeeds, or fails.
+If the deployment path queues the deploy because a shared review environment is busy, do **not** post `blocked`. Post `dev_deploy_queued` (when it is a valid outcome) with the queue or environment reference the deployment path returned, the reviewed branch, and the reviewed commit. A deployment system integrated through Agent HQ workflow events moves the task onward when the queued deploy starts, succeeds, or fails.
 
-If the MCP tool is unavailable, returns `environment_not_found`, the deploy fails, or cannot prove Dev is serving or queueing the reviewed commit, do **not** post `completed_for_review`. Post `blocked` or `failed` with the exact lease/deploy blocker instead.
+If no deployment path is configured, the deploy fails, or you cannot prove the review environment is serving or queueing the reviewed commit, do **not** post `completed_for_review`. Post `blocked` or `failed` with the exact deploy blocker instead.
 
 If the configured gate fields for the intended outcome require review evidence, record truthful review evidence before posting that outcome.
 
@@ -132,10 +131,10 @@ Post `blocked` or `failed` instead with a short explanation of what is missing.
 ### Canonical implementation sequence
 1. finish the implementation
 2. commit the implementation in the task worktree
-3. deploy/promote that committed worktree to the Dev/review environment with the Dev Environment Lease Manager MCP tool `dev_env_deploy_worktree` using `queue_if_busy=true`
-4. if the deploy is queued, post `dev_deploy_queued` with queue/lease/environment/commit evidence and stop
-5. if the deploy completes immediately, verify the Dev/review environment is serving the reviewed commit and capture the lease id/environment id
-6. record any evidence required by the configured gate fields, including `review_url` and lease-backed deploy details when a reviewable Dev URL exists
+3. deploy that committed worktree to the review environment through the configured deployment path
+4. if the deploy is queued, post `dev_deploy_queued` with queue/environment/commit evidence and stop
+5. if the deploy completes immediately, verify the review environment is serving the reviewed commit
+6. record any evidence required by the configured gate fields, including `review_url` when a reviewable URL exists
 7. then post a valid configured outcome
 
 ---
@@ -146,15 +145,15 @@ Use this when the current task status is `review`, or when the valid outcomes in
 ### Critical QA rule
 Do not pass work that you could not actually verify.
 
-Keep lifecycle writes separate from the system under test. When QA targets an Agent HQ Dev environment, that environment is the thing being tested — record notes, evidence, and outcomes against your own Agent HQ MCP lifecycle tools, never against the Dev instance's API, and leave the task in `review` until you post an outcome.
+Keep lifecycle writes separate from the system under test. When QA targets another Agent HQ instance (for example a review deployment of Agent HQ itself), that environment is the thing being tested — record notes, evidence, and outcomes against your own Agent HQ MCP lifecycle tools, never against the tested instance's API, and leave the task in `review` until you post an outcome.
 
-Before testing or posting `qa_pass`, use the Dev Environment Lease Manager MCP tool `dev_env_validate_qa` and confirm the lease id, task id, review environment, and commit match the recorded review evidence. Validate against the active Dev lease/queue evidence and recorded review environment on the task, not the QA agent's own worktree HEAD.
+Before testing or posting `qa_pass`, confirm the task id, review environment, and commit match the recorded review evidence. Validate against the recorded review environment on the task, not the QA agent's own worktree HEAD.
 
-Choose the product URL and code checkout from the lease-selected environment, not from habit. `agent-hq-dev` uses UI/API ports 3510/3511 and `~/agent-hq-dev`; `agent-hq-dev-2` uses UI/API ports 3520/3521 and `~/agent-hq-dev-2`.
+Choose the product URL and code checkout from the recorded review evidence, not from habit.
 
-Lease mismatch, missing lease evidence, environment mismatch, or commit mismatch is an environment integrity blocker, not a product pass.
+Missing review evidence, environment mismatch, or commit mismatch is an environment integrity blocker, not a product pass.
 
-If the lease is valid but QA fails the product behavior, call the Dev Environment Lease Manager MCP tool `dev_env_mark_qa_failed` for that lease before posting `qa_fail`. Include the release result in the task summary/evidence. If the tool is unavailable or fails, say the lease was not released in the outcome summary.
+If the deployment path reserved a shared review environment for this task and QA fails the product behavior, hand the environment back the way that deployment system requires before posting `qa_fail`, and say in the outcome summary whether it was released.
 
 If the artifact, branch, commit, environment, or evidence is not testable, post the truthful blocked/fail path instead of guessing.
 
@@ -191,26 +190,21 @@ Do not stop after deployment alone if a configured live-verification route still
 If live verification cannot be completed truthfully, post `blocked` or `failed` with the exact reason.
 
 ### Release environment cleanup
-cleanup required by the configured workflow includes Dev environment lease release and post-verification branch cleanup.
+cleanup required by the configured workflow includes releasing any review environment still held for the task and post-verification branch cleanup.
 
-### Dev environment lease release for Agent HQ releases
-For local Agent HQ release tasks that were validated from a lease-backed Dev environment:
-1. find the lease id from QA/review evidence or `dev_env_status` and confirm it matches the QA-passed commit
-2. when production release begins, call the Dev Environment Lease Manager MCP tool `dev_env_mark_prod_deploying` for that lease
-3. after production deploy succeeds and live verification evidence is recorded, call `dev_env_mark_done` for that lease before posting the final `live_verified` outcome; this clears the shared Dev environment for the next task
-4. if production deploy or live verification fails after `dev_env_mark_prod_deploying`, call `dev_env_mark_prod_failed` before posting `blocked` or `failed`
-5. include the lease transition result in the task note/outcome summary; if a required lease tool is unavailable or fails, explicitly say the Dev lease was not released
+### Review environment release
+If the task held a shared review environment (a lease, reservation, or queue slot) through QA:
+1. find its reference in the review/QA evidence and confirm it matches the QA-passed commit
+2. after production deploy succeeds and live verification evidence is recorded, release it the way the deployment system requires, before posting the final `live_verified` outcome
+3. if production deploy or live verification fails, report the failure to the deployment system the way it requires before posting `blocked` or `failed`
+4. include the release result in the task note/outcome summary; if the release is unavailable or fails, explicitly say the review environment was not released
 
-`live_verified` is terminal and can close your session, so do not wait until after posting that outcome to release the Dev lease.
+`live_verified` is terminal and can close your session, so do not wait until after posting that outcome to release the review environment.
 
-### Post-verification branch cleanup for Agent HQ releases
-After successful production live verification, and after clearing any matching Dev environment lease with `dev_env_mark_done`, call the Dev Environment Lease Manager MCP tool `dev_env_cleanup_task_branch` for the released task branch. Use the MCP cleanup tool rather than ad hoc `git branch -d`, `git branch -D`, or `git push origin --delete` commands. Ad hoc branch deletion is allowed only when the MCP tool is unavailable and an operator explicitly approves the fallback.
+### Post-verification branch cleanup
+When the configured workflow or project instructions call for it, delete the released task branch after successful production live verification. Use the branch cleanup tool your installation provides when there is one; otherwise delete only the branch named in the task evidence, and only after confirming its reviewed commit is contained in the commit that was verified live.
 
-Use the reviewed source branch and commit from task evidence, and use the production `main`/deployed commit that was verified live:
-
-`dev_env_cleanup_task_branch({"repo_path":"<release repo path>","source_branch":"<review_branch>","source_commit":"<review_commit>","deployed_commit":"<deployed/main commit verified live>","actor":"{{agentSlug}}","remote":"origin","dry_run":true})`
-
-Run dry-run first when branch state is uncertain, when the branch tip may have drifted, or when prior cleanup evidence is missing. If the dry-run is safe, run the real cleanup with `dry_run=false`. Keep `delete_local=true` and `delete_remote=true` unless the task explicitly says to clean only one side.
+Use the reviewed source branch and commit from task evidence, and use the production `main`/deployed commit that was verified live.
 
 Cleanup runs only after successful live verification or an equivalent verified release-terminal condition. Do not clean branches after merge, deploy, or `deployed_live` alone if the workflow still requires live verification. Cleanup failure is not a production deploy failure and must not roll back or invalidate a verified production release. Record it as a cleanup issue, include the error details, and create or request an operator cleanup follow-up when needed.
 
@@ -221,15 +215,14 @@ Branch cleanup: <success|skipped|failed>
 Source branch: <review_branch>
 Source commit: <review_commit>
 Deployed/main commit: <deployed/main commit verified live>
-Cleanup tool: dev_env_cleanup_task_branch
-Dry run: <true|false|not run>
+Cleanup method: <tool or command used|not run>
 Local status: <deleted|already_missing|skipped|failed|unknown>
 Remote status: <deleted|already_missing|skipped|failed|unknown>
-Dev lease: <released via dev_env_mark_done|not applicable|release failed: detail>
+Review environment: <released|not applicable|release failed: detail>
 Error detail: <none|tool error/check failure/operator follow-up>
 ```
 
-Post the final `live_verified` outcome only after lease release and branch cleanup have been attempted and noted. If cleanup fails, the outcome summary must say the deploy was verified but branch cleanup needs follow-up.
+Post the final `live_verified` outcome only after review environment release and branch cleanup have been attempted and noted. If cleanup fails, the outcome summary must say the deploy was verified but branch cleanup needs follow-up.
 
 ### Example deploy evidence command
 `agent_hq_record_deploy_evidence({"task_id":{{taskId}},"merged_commit":"<sha>","deployed_commit":"<sha>","deploy_target":"production","deployed_at":"<ISO timestamp>"})`

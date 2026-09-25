@@ -203,7 +203,7 @@ describe('dispatch contract template renderer', () => {
     expect(contract).toContain('agent_hq_record_review_evidence');
   });
 
-  it('requires QA lease validation in the real dev template', async () => {
+  it('requires QA to validate the recorded review environment in the real dev template', async () => {
     reloadWithContractRoot(repoContractRoot);
     const contract = await buildContractInstructions(buildContext({
       taskStatus: 'review',
@@ -251,8 +251,8 @@ describe('dispatch contract template renderer', () => {
     const devTemplate = fs.readFileSync(path.join(repoContractRoot, 'dev.md'), 'utf-8');
 
     expect(devTemplate).not.toBe(genericTemplate);
-    expect(devTemplate).toContain('Dev Environment Lease Manager MCP tool `dev_env_deploy_worktree`');
-    expect(devTemplate).toContain('dev_env_validate_qa');
+    expect(devTemplate).toContain('Critical implementation rule');
+    expect(devTemplate).toContain('Critical QA rule');
   });
 
   it('ships ops as an operational contract instead of a dev clone', () => {
@@ -291,10 +291,10 @@ describe('dispatch contract template renderer', () => {
     expect(repoTemplate).not.toContain('lifecycleJsonExample');
     expect(repoTemplate).not.toContain('HTTP fallback');
     expect(repoTemplate).not.toContain('curl -s');
-    expect(repoTemplate).toContain('Dev Environment Lease Manager');
-    expect(repoTemplate).toContain('dev_env_deploy_worktree');
-    expect(repoTemplate).toContain('agent-hq-dev');
-    expect(repoTemplate).toContain('deploy_dev_worktree');
+    // The shipped template has to fit any installation: it names the configured deployment path
+    // instead of one operator's review environments, ports, or deploy tooling.
+    expect(repoTemplate).not.toMatch(/dev_env_|deploy_dev_worktree|Lease Manager/);
+    expect(repoTemplate).not.toMatch(/agent-hq-dev|~\/|\b35[12][01]\b/);
     expect(repoTemplate).not.toMatch(/"verified_commit"\s*:/);
     expect(repoTemplate).not.toMatch(/"qa_url"\s*:/);
     expect(repoTemplate).not.toMatch(/"branch"\s*:\s*"<feature-branch>"/);
