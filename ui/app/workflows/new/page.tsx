@@ -239,7 +239,7 @@ export default function NewWorkflowPage() {
                 className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2.5 text-white text-sm font-mono focus:outline-none focus:border-amber-400"
                 value={form.repo_path}
                 onChange={e => set('repo_path', e.target.value)}
-                placeholder="/Users/nordini/agent-hq-public-prep"
+                placeholder="/srv/repos/my-app"
               />
             </div>
           )}

@@ -86,12 +86,12 @@ Use this structure unless the request is tiny:
 
 Use nearby existing tasks to infer placement.
 
-- Agent HQ UI changes usually belong on the Agency project if that is where product/support work is being managed.
+- Product changes usually belong on the project where that product's work is already managed, even when the change touches another repo. Check where similar tasks live.
 - Put tasks in the workflow that matches the operating lane the user named, not just the repo being changed.
 - Match the task to the agent that can complete it end-to-end. Do not route a frontend-heavy task to backend just because it touches data.
 - If a task spans frontend + backend and cannot be cleanly split, assign to the lane that owns the user-facing deliverable and note backend support needed.
 - Always set `task_type` when assignment rules use it. Use a concrete execution type such as `backend`, `frontend`, `fullstack`, `qa`, `pm`, or another project-standard value rather than leaving it null.
-- For Agent HQ / Agency routing today, treat missing `task_type` as a task-creation defect because it can prevent automatic review/QA pickup.
+- When assignment rules route on `task_type`, treat a missing `task_type` as a task-creation defect because it can prevent automatic review/QA pickup.
 
 ## Description quality bar
 

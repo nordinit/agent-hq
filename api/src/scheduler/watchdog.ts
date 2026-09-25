@@ -251,7 +251,7 @@ function pickLatestTimestamp(...values: Array<string | null | undefined>): numbe
 
 /**
  * Build a compact human-readable label for a watchdog notification.
- * Preferred shape: "Forge / Agency — Backend" (agent / job title)
+ * Preferred shape: "Kepler / Acme — Backend" (agent / job title)
  * Falls back to agent-only, job-only, or "unknown agent" when data is missing.
  * Appends task title in quotes when available and fits.
  */

@@ -16,9 +16,9 @@
  * names this agent. Leave it out of assignment rules and teams and it stays a credential.
  *
  * Usage:
- *   npx tsx src/bin/provision-remote-mcp-identity.ts --project-id 86
- *   npx tsx src/bin/provision-remote-mcp-identity.ts --project-id 86 --rotate-key
- *   npx tsx src/bin/provision-remote-mcp-identity.ts --project-id 86 --name "Claude Mobile" --slug claude-mobile
+ *   npx tsx src/bin/provision-remote-mcp-identity.ts --project-id 1
+ *   npx tsx src/bin/provision-remote-mcp-identity.ts --project-id 1 --rotate-key
+ *   npx tsx src/bin/provision-remote-mcp-identity.ts --project-id 1 --name "Claude Mobile" --slug claude-mobile
  */
 
 import '../config/loadRootEnv';

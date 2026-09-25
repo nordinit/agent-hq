@@ -5,7 +5,7 @@ description: Temporarily act as a Cover Agent for Agent HQ tasks by spawning a s
 
 # Cover Agent
 
-Use this skill when Masiah wants Atlas to temporarily stand in for an Agent HQ agent inside the current thread.
+Use this skill when the operator wants Atlas to temporarily stand in for an Agent HQ agent inside the current thread.
 
 ## Core rules
 

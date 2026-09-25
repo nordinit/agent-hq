@@ -252,13 +252,13 @@ router.get('/:id/schedules', (_req: Request, res: Response) => {
 // ── POST /api/v1/workflows/:id/schedules ───────────────────────────────────────
 // Task #596: workflow_job_schedules table removed.
 router.post('/:id/schedules', (_req: Request, res: Response) => {
-  return res.status(410).json({ error: 'Workflow job schedules have been removed (task #596). Use recurring task series instead.' });
+  return res.status(410).json({ error: 'Workflow job schedules have been removed. Use recurring task series instead.' });
 });
 
 // ── DELETE /api/v1/workflows/:id/schedules/:scheduleId ─────────────────────────
 // Task #596: workflow_job_schedules table removed.
 router.delete('/:id/schedules/:scheduleId', (_req: Request, res: Response) => {
-  return res.status(410).json({ error: 'Workflow job schedules have been removed (task #596).' });
+  return res.status(410).json({ error: 'Workflow job schedules have been removed. Use recurring task series instead.' });
 });
 
 export default router;

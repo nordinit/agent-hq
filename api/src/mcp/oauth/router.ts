@@ -38,8 +38,9 @@ export function resolveMcpOAuthConfigFromEnv(env: NodeJS.ProcessEnv): McpOAuthCo
   return {
     enabled: Boolean(publicUrl) && (env.AGENT_HQ_OAUTH_ENABLED ?? '1').trim() !== '0',
     publicUrl,
-      // Pre-selected on the consent screen when a client has no history. Not a restriction: every
-    // identity provisioned as a remote MCP client is selectable there.
+    // Pre-selected on the consent screen when a client has no history. Not a restriction: every
+    // identity provisioned as a remote MCP client is selectable there. The default is the slug
+    // src/bin/provision-remote-mcp-identity.ts creates when none is given.
     agentSlug: env.AGENT_HQ_OAUTH_AGENT_SLUG?.trim() || 'claude-mobile',
     allowDynamicRegistration: (env.AGENT_HQ_OAUTH_ALLOW_DCR ?? '1').trim() !== '0',
     accessTokenTtlSeconds: Number.isInteger(ttl) && ttl > 0 ? ttl : ACCESS_TOKEN_TTL_SECONDS,

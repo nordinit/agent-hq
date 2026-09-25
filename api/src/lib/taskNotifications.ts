@@ -185,7 +185,7 @@ export interface TaskStatusChangeEvent {
   taskId: number;
   fromStatus: string;
   toStatus: string;
-  /** Human-readable source label: 'Atlas', 'agency-frontend', agent slug, 'reconciler', etc. */
+  /** Human-readable source label: 'Atlas', 'nova-frontend', agent slug, 'reconciler', etc. */
   source?: string;
 }
 

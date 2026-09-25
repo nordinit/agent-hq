@@ -111,7 +111,7 @@ function readToolName(meta: Record<string, unknown>): string | null {
  * Reduce a wire tool name to something a person reads in a status line.
  *
  * MCP tools arrive fully qualified and per-agent — openclaw writes
- * `agent-hq__agent-99974437.agent_hq_post_task_outcome`. Showing that verbatim
+ * `agent-hq__agent-42.agent_hq_post_task_outcome`. Showing that verbatim
  * would leak an agent id into the UI and bury the verb, so keep the last
  * segment and drop the transport's separators.
  */

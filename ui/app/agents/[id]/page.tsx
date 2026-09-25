@@ -1394,7 +1394,7 @@ export default function AgentDetailPage() {
                 className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-amber-500 resize-y min-h-[120px]"
                 value={editForm.job_instructions}
                 onChange={e => setF({ job_instructions: e.target.value })}
-                placeholder="You are the Juno fullstack engineer for the Agency project…"
+                placeholder="You are the full-stack engineer for this project…"
               />
             </label>
           </div>

@@ -333,7 +333,7 @@ function EditForm({ workflow, onSave, onCancel }: {
           <div>
             <label className="text-xs text-slate-400 block mb-1">Repo Path</label>
             <input className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm font-mono focus:outline-none focus:border-amber-400"
-              value={form.repo_path} onChange={e => set('repo_path', e.target.value)} placeholder="/Users/nordini/agent-hq-public-prep" />
+              value={form.repo_path} onChange={e => set('repo_path', e.target.value)} placeholder="/srv/repos/my-app" />
           </div>
         )}
         {form.repo_access_mode === 'clone' && (

@@ -1136,11 +1136,11 @@ export const openApiDocument: OpenApiDocument = {
         parameters: [idParam('id', 'Task ID.')],
         requestBody: requestBody(ref('TaskOutcomeRequest'), {
           outcome: 'completed_for_review',
-          changed_by: 'cinder-backend',
+          changed_by: 'example-backend',
           payload: {
-            review_branch: 'cinder-backend/task-597-generate-and-serve-agent-hq-openapi-docu',
+            review_branch: 'example-backend/task-42-add-csv-export',
             review_commit: 'abc1234',
-            review_url: 'http://127.0.0.1:3510',
+            review_url: 'https://review.example.com',
           },
         }),
         responses: {
@@ -1160,7 +1160,7 @@ export const openApiDocument: OpenApiDocument = {
         requestBody: requestBody(ref('ReviewEvidenceRequest'), {
           review_branch: 'feature/openapi',
           review_commit: 'abc1234',
-          review_url: 'http://127.0.0.1:3510',
+          review_url: 'https://review.example.com',
           summary: 'OpenAPI endpoint ready for QA.',
         }),
         responses: {
@@ -1187,7 +1187,7 @@ export const openApiDocument: OpenApiDocument = {
         operationId: 'addTaskNote',
         parameters: [idParam('id', 'Task ID.')],
         requestBody: requestBody(ref('TaskNoteCreateRequest'), {
-          author: 'cinder-backend',
+          author: 'example-backend',
           content: 'Summary: implementation completed and tests passed.',
         }),
         responses: {
@@ -1239,7 +1239,7 @@ export const openApiDocument: OpenApiDocument = {
         summary: 'Create an agent.',
         operationId: 'createAgent',
         requestBody: requestBody(ref('AgentCreateRequest'), {
-          name: 'Cinder',
+          name: 'Example Backend',
           role: 'backend engineer',
           runtime_type: 'openclaw',
           project_id: 1,

@@ -145,7 +145,7 @@ export const STARTER_TEMPLATE_CATALOG: StarterTemplateCatalogEntry[] = [
   {
     key: 'ops',
     label: 'Ops',
-    description: 'Business operations workflow generalized from Elevation Build issue/change-order intake, impact review, approvals, and stakeholder updates.',
+    description: 'Business operations workflow covering issue and change-order intake, impact review, approvals, and stakeholder updates.',
     fully_implemented: true,
     owner_roles: ['ops', 'review', 'approval', 'pm'],
     workflow_type: 'ops',

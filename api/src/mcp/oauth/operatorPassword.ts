@@ -17,7 +17,7 @@ import type { Db } from '../../db/adapter/types';
 
 const SETTING_KEY = 'mcp_oauth_operator_password';
 
-/** scrypt parameters. N=2^15 keeps a single verification near 100ms on the Mac mini this runs on. */
+/** scrypt parameters. N=2^15 keeps a single verification near 100ms on typical server hardware. */
 const SCRYPT_N = 32768;
 const SCRYPT_R = 8;
 const SCRYPT_P = 1;
