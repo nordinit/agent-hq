@@ -2,13 +2,13 @@ import type { IncomingMessage } from 'http';
 import type { NextFunction, Request, Response } from 'express';
 import type { CorsOptions, CorsOptionsDelegate } from 'cors';
 
-// The operator API has no login of its own yet, so a web page the operator happens to visit
-// must not be able to drive it through the browser: `/api/v1` can create and test tools that
-// run on the host. Browsers always attach `Origin` to cross-origin fetches and WebSocket
-// handshakes; servers, agents, the CLI and the UI's own server-side proxy send none. So a
-// request without `Origin` passes, and a request with one must come from an allowed origin.
-// This closes cross-site request forgery. It does not replace authentication for clients that
-// can reach the port directly.
+// A web page the operator happens to visit must not be able to drive the operator API through
+// the browser: `/api/v1` can create and test tools that run on the host. Browsers always attach
+// `Origin` to cross-origin fetches and WebSocket handshakes; servers, agents, the CLI and the
+// UI's own server-side proxy send none. So a request without `Origin` passes, and a request with
+// one must come from an allowed origin. This closes cross-site request forgery, including against
+// the chat WebSocket, which authenticates with the UI's session cookie. Authentication itself is
+// lib/apiAuth.ts.
 
 const OPERATOR_API_PREFIX = '/api/v1';
 

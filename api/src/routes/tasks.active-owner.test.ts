@@ -6,11 +6,12 @@ import path from 'path';
 import type { Server } from 'http';
 import { getDb } from '../db/client';
 import {
-  authenticateMcpApiKeyIfPresent,
   authorizeMcpApiRequestIfPresent,
   issueMcpApiKeyForAgent,
   replaceAgentMcpPermissionPolicy,
 } from '../lib/mcpApiAuth';
+// Requests authenticate as the operator unless they carry an MCP key of their own.
+import { authenticateTestApiRequest, operatorFetch as fetch } from '../lib/testApiAuth';
 import tasksRouter from './tasks';
 
 function restoreDbPath(): void {
@@ -65,7 +66,7 @@ describe('task active-owner endpoint', () => {
 
     const app = express();
     app.use(express.json());
-    app.use('/api/v1', authenticateMcpApiKeyIfPresent);
+    app.use('/api/v1', authenticateTestApiRequest());
     app.use('/api/v1', authorizeMcpApiRequestIfPresent);
     app.use('/api/v1/tasks', tasksRouter);
 

@@ -2,7 +2,8 @@ import express from 'express';
 import type { Server } from 'http';
 import { getDb } from '../db/client';
 import { setupTestDb, teardownTestDb } from '../db/testDb';
-import { authenticateMcpApiKeyIfPresent, issueMcpApiKeyForAgent } from '../lib/mcpApiAuth';
+import { issueMcpApiKeyForAgent } from '../lib/mcpApiAuth';
+import { authenticateTestApiRequest } from '../lib/testApiAuth';
 
 // These fixtures exercise an administrative identity. Authority comes from the key's role now,
 // not from the agent being named Atlas, so the key has to say so.
@@ -15,7 +16,7 @@ import { AgentHqApiClient } from './apiClient';
 async function startTestServer(): Promise<{ server: Server; baseUrl: string }> {
   const app = express();
   app.use(express.json());
-  app.use('/api/v1', authenticateMcpApiKeyIfPresent);
+  app.use('/api/v1', authenticateTestApiRequest());
   app.use('/api/v1/tasks', tasksRouter);
   const server = await new Promise<Server>((resolve, reject) => {
     const bound = app.listen(0, '127.0.0.1', () => resolve(bound));

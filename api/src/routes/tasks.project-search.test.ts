@@ -3,11 +3,12 @@ import type { Server } from 'http';
 import { getDb } from '../db/client';
 import { setupTestDb, teardownTestDb } from '../db/testDb';
 import {
-  authenticateMcpApiKeyIfPresent,
   authorizeMcpApiRequestIfPresent,
   issueMcpApiKeyForAgent,
   replaceAgentMcpPermissionPolicy,
 } from '../lib/mcpApiAuth';
+// Requests authenticate as the operator unless they carry an MCP key of their own.
+import { authenticateTestApiRequest, operatorFetch as fetch } from '../lib/testApiAuth';
 import { handleJsonRequestErrors } from '../lib/jsonRequestErrors';
 import tasksRouter from './tasks';
 
@@ -15,7 +16,7 @@ async function startServer(): Promise<{ server: Server; baseUrl: string }> {
   const app = express();
   app.use(express.json());
   app.use(handleJsonRequestErrors);
-  app.use('/api/v1', authenticateMcpApiKeyIfPresent);
+  app.use('/api/v1', authenticateTestApiRequest());
   app.use('/api/v1', authorizeMcpApiRequestIfPresent);
   app.use('/api/v1/tasks', tasksRouter);
   const server = await new Promise<Server>((resolve, reject) => {

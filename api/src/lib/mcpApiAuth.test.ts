@@ -5,7 +5,6 @@ import { getDb } from '../db/client';
 import { verifyStartupSchema } from '../db/startupVerifier';
 import { setupTestDb, teardownTestDb } from '../db/testDb';
 import {
-  authenticateMcpApiKeyIfPresent,
   authorizeMcpApiRequestIfPresent,
   ensureConfiguredRuntimeMcpApiKey,
   getAgentMcpPermissionPolicy,
@@ -14,6 +13,8 @@ import {
   resolveMcpApiIdentityForKey,
   resetAgentMcpPermissionPolicy,
 } from './mcpApiAuth';
+// Requests authenticate as the operator unless they carry an MCP key of their own.
+import { authenticateTestApiRequest, operatorFetch as fetch } from './testApiAuth';
 import { handleJsonRequestErrors } from './jsonRequestErrors';
 import { getDefaultTenantId, resolveTenantIdFromRequest } from './tenantContext';
 import projectFilesRouter from '../routes/project-files';
@@ -132,7 +133,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     const app = express();
     app.use(express.json());
     app.use(handleJsonRequestErrors);
-    app.use('/api/v1', authenticateMcpApiKeyIfPresent);
+    app.use('/api/v1', authenticateTestApiRequest());
     app.use('/api/v1', authorizeMcpApiRequestIfPresent);
 
     app.get('/api/v1/tasks/:id', async (req, res) => res.json({ ok: true, task_id: Number(req.params.id), tenant_id: await resolveTenantIdFromRequest(getDb(), req) }));

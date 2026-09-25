@@ -2,7 +2,9 @@ import express from 'express';
 import type { Server } from 'http';
 import { setupTestDb, teardownTestDb } from '../db/testDb';
 import { getDb } from '../db/client';
-import { authenticateMcpApiKeyIfPresent, authorizeMcpApiRequestIfPresent, issueMcpApiKeyForAgent, replaceAgentMcpPermissionPolicy } from './mcpApiAuth';
+import { authorizeMcpApiRequestIfPresent, issueMcpApiKeyForAgent, replaceAgentMcpPermissionPolicy } from './mcpApiAuth';
+// Requests authenticate as the operator unless they carry an MCP key of their own.
+import { authenticateTestApiRequest, operatorFetch as fetch } from './testApiAuth';
 
 describe('telemetry MCP capability boundary', () => {
   let server: Server; let url: string; let scopedKey: string; let adminKey: string; let unassignedKey: string;
@@ -16,7 +18,7 @@ describe('telemetry MCP capability boundary', () => {
     adminKey = (await issueMcpApiKeyForAgent(db, 902, 'Telemetry admin', 'admin')).apiKey;
     unassignedKey = (await issueMcpApiKeyForAgent(db, 903)).apiKey;
     const app = express(); app.use(express.json());
-    app.use('/api/v1', authenticateMcpApiKeyIfPresent, authorizeMcpApiRequestIfPresent);
+    app.use('/api/v1', authenticateTestApiRequest(), authorizeMcpApiRequestIfPresent);
     app.all('/api/v1/telemetry/v2/*', (req, res) => res.json({ authorized_project_id: req.telemetryProjectId ?? null }));
     app.use((error: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => res.status(error.statusCode ?? error.status ?? 500).json({ error: error.message }));
     server = await new Promise<Server>(resolve => { const started = app.listen(0, '127.0.0.1', () => resolve(started)); });

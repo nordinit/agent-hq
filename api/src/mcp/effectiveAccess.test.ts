@@ -5,7 +5,9 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { setupTestDb, teardownTestDb } from '../db/testDb';
 import { getDb } from '../db/client';
-import { authenticateMcpApiKeyIfPresent, authorizeMcpApiRequestIfPresent, issueMcpApiKeyForAgent, replaceAgentMcpPermissionPolicy } from '../lib/mcpApiAuth';
+import { authorizeMcpApiRequestIfPresent, issueMcpApiKeyForAgent, replaceAgentMcpPermissionPolicy } from '../lib/mcpApiAuth';
+// Requests authenticate as the operator unless they carry an MCP key of their own.
+import { authenticateTestApiRequest, operatorFetch as fetch } from '../lib/testApiAuth';
 import workflowDefinitionsRouter from '../domains/workflow-definitions/router';
 import agentsRouter from '../routes/agents';
 import { AgentHqApiClient } from './apiClient';
@@ -34,7 +36,7 @@ describe('identity permissions across API and MCP transports', () => {
     adminKey = (await issueMcpApiKeyForAgent(db, 7, 'Admin on same identity', 'admin')).apiKey;
     const app = express();
     app.use(express.json());
-    app.use('/api/v1', authenticateMcpApiKeyIfPresent, authorizeMcpApiRequestIfPresent);
+    app.use('/api/v1', authenticateTestApiRequest(), authorizeMcpApiRequestIfPresent);
     app.use('/api/v1/mcp', mcpAccessRouter);
     app.use('/api/v1/workflows', workflowDefinitionsRouter);
     app.use('/api/v1/agents', agentsRouter);

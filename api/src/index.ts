@@ -8,7 +8,7 @@ if (process.env.NODE_TLS_REJECT_UNAUTHORIZED === '0') {
 }
 import express, { type Request } from 'express';
 import cors from 'cors';
-import { corsOptionsDelegate, isWebSocketOriginAllowed, parseAllowedOrigins, rejectCrossOriginRequests } from './lib/originGuard';
+import { corsOptionsDelegate, parseAllowedOrigins, rejectCrossOriginRequests } from './lib/originGuard';
 import { getDb } from './db/client';
 import { verifyStartupSchema } from './db/startupVerifier';
 import tasksRouter from './domains/tasks';
@@ -55,7 +55,8 @@ import { mcpAccessRouter } from './mcp/accessRouter';
 import { registerAgentHqMcpCatalog } from './mcp/registerCatalog';
 import { createMcpHttpRouter, resolveMcpHttpConfigFromEnv } from './mcp/httpServer';
 import { createMcpOAuthRouter, resolveMcpOAuthConfigFromEnv } from './mcp/oauth/router';
-import { authenticateMcpApiKeyIfPresent, authorizeMcpApiRequestIfPresent } from './lib/mcpApiAuth';
+import { authorizeMcpApiRequestIfPresent } from './lib/mcpApiAuth';
+import { ApiAuthConfigError, authenticateApiRequest, createChatWebSocketVerifier, resolveApiAuthConfigFromEnv } from './lib/apiAuth';
 import { handleJsonRequestErrors } from './lib/jsonRequestErrors';
 import openApiRouter from './openapi/router';
 import { getDashboardTokenUsageLast24h } from './domains/dashboard/stats';
@@ -63,10 +64,27 @@ import { resolveTenantIdFromRequest } from './lib/tenantContext';
 
 registerAgentHqMcpCatalog();
 
+function loadApiAuthConfig() {
+  try {
+    return resolveApiAuthConfigFromEnv(process.env);
+  } catch (err) {
+    if (!(err instanceof ApiAuthConfigError)) throw err;
+    console.error(`[api-auth] ${err.message}`);
+    process.exit(1);
+  }
+}
+
+const apiAuthConfig = loadApiAuthConfig();
+if (apiAuthConfig.mode === 'report') {
+  console.warn('[api-auth] AGENT_HQ_AUTH_MODE=report: /api/v1 requests without a credential are still allowed with full access, and each distinct caller is logged once as "[api-auth:report] would reject". Switch to enforce once no new lines appear.');
+  if (!apiAuthConfig.operatorToken) console.warn('[api-auth] AGENT_HQ_OPERATOR_TOKEN is not set; the UI cannot sign in until it is.');
+}
+
 const app = express();
 const PORT = process.env.PORT ?? 3501;
-// Loopback by default: the operator API has no login yet. Containers set HOST=0.0.0.0 and
-// publish the port on the host's loopback instead.
+// Loopback by default: agents run commands on this host, so the API stays off the network unless
+// the operator publishes it deliberately. Containers set HOST=0.0.0.0 and publish the port on the
+// host's loopback instead.
 const HOST = process.env.HOST ?? '127.0.0.1';
 const allowedBrowserOrigins = parseAllowedOrigins(process.env.AGENT_HQ_ALLOWED_ORIGINS);
 
@@ -75,7 +93,8 @@ app.use('/api/v1', rejectCrossOriginRequests(allowedBrowserOrigins));
 app.use(express.json({ limit: '10mb' }));
 app.use(handleJsonRequestErrors);
 
-app.use('/api/v1', authenticateMcpApiKeyIfPresent);
+// Every /api/v1 request authenticates as the operator or as an agent's MCP key; see lib/apiAuth.
+app.use('/api/v1', authenticateApiRequest(apiAuthConfig));
 app.use('/api/v1', authorizeMcpApiRequestIfPresent);
 
 function dispatchToWorkflowsAlias(req: express.Request, res: express.Response, targetUrl: string): void {
@@ -608,8 +627,9 @@ async function startServer(): Promise<void> {
   const wss = new WebSocketServer({
     server,
     path: '/api/v1/chat/ws',
-    verifyClient: ({ origin, req }: { origin: string; req: http.IncomingMessage }) =>
-      isWebSocketOriginAllowed(origin || undefined, req.headers, allowedBrowserOrigins),
+    // The browser opens this socket straight against the API port, past the UI proxy, so it
+    // authenticates with the UI's login cookie; see createWebSocketAuthenticator.
+    verifyClient: createChatWebSocketVerifier(apiAuthConfig, allowedBrowserOrigins),
   });
   console.log('[boot] calling setupChatProxy');
   setupChatProxy(wss);

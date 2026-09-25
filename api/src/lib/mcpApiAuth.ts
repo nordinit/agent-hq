@@ -84,26 +84,6 @@ async function hasColumn(db: Db, table: string, column: string): Promise<boolean
   }
 }
 
-function readHeader(req: Request, name: string): string {
-  const value = req.headers[name.toLowerCase()];
-  if (Array.isArray(value)) return String(value[0] ?? '').trim();
-  return typeof value === 'string' ? value.trim() : '';
-}
-
-export function extractMcpApiKeyFromRequest(req: Request): { key: string | null; presented: boolean } {
-  const mcpClientMarker = readHeader(req, 'x-agent-hq-mcp-client');
-  const xApiKey = readHeader(req, 'x-api-key');
-  if (xApiKey) return { key: xApiKey, presented: true };
-
-  const auth = readHeader(req, 'authorization');
-  if (auth && mcpClientMarker) {
-    const match = auth.match(/^Bearer\s+(.+)$/i);
-    return { key: match?.[1]?.trim() || null, presented: true };
-  }
-
-  return { key: null, presented: Boolean(mcpClientMarker) };
-}
-
 export function hashMcpApiKey(apiKey: string): string {
   return crypto.createHash('sha256').update(apiKey, 'utf8').digest('hex');
 }
@@ -3260,23 +3240,4 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
     reason: `Normal Agent HQ MCP keys cannot access ${method} ${requestPath}. Full administrative MCP access is required for this route.`,
     requiredCapability: 'admin.full_access',
   });
-}
-
-export async function authenticateMcpApiKeyIfPresent(req: Request, res: Response, next: NextFunction): Promise<void> {
-  try {
-    const { key, presented } = extractMcpApiKeyFromRequest(req);
-    if (!presented) return next();
-    if (!key) throw new McpApiAuthError('MCP API key is required', 401, 'mcp_api_key_missing');
-
-    req.mcpIdentity = await resolveMcpApiIdentityForKey(getDb(), key);
-    next();
-  } catch (err) {
-    const authErr = err instanceof McpApiAuthError
-      ? err
-      : new McpApiAuthError(err instanceof Error ? err.message : String(err));
-    res.status(authErr.statusCode).json({
-      error: authErr.message,
-      code: authErr.code,
-    });
-  }
 }

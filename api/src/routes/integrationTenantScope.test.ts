@@ -6,11 +6,12 @@ import os from 'os';
 import path from 'path';
 import { getDb } from '../db/client';
 import {
-  authenticateMcpApiKeyIfPresent,
   authorizeMcpApiRequestIfPresent,
   issueMcpApiKeyForAgent,
   replaceAgentMcpPermissionPolicy,
 } from '../lib/mcpApiAuth';
+// Requests authenticate as the operator unless they carry an MCP key of their own.
+import { authenticateTestApiRequest, operatorFetch as fetch } from '../lib/testApiAuth';
 import { handleJsonRequestErrors } from '../lib/jsonRequestErrors';
 import providersRouter from './providers';
 import githubIdentitiesRouter from './github-identities';
@@ -48,7 +49,7 @@ async function startTestServer(): Promise<void> {
   const app = express();
   app.use(express.json());
   app.use(handleJsonRequestErrors);
-  app.use('/api/v1', authenticateMcpApiKeyIfPresent);
+  app.use('/api/v1', authenticateTestApiRequest());
   app.use('/api/v1', authorizeMcpApiRequestIfPresent);
   app.use('/api/v1/providers', providersRouter);
   app.use('/api/v1/github-identities', githubIdentitiesRouter);

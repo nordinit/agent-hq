@@ -7,7 +7,9 @@ import path from 'path';
 import { getDb } from '../db/client';
 import { resolveWorkflowEventMapping, type ExternalEventMapping } from '../domains/routing/externalEventMappings';
 import { listWorkflowTaskRoutingRules, loadWorkflowTaskTransitionRequirements, resolveWorkflowTaskRoutingAssignment, resolveWorkflowTaskTransition, seedWorkflowTaskPolicy, seedWorkflowTypeTaskStatuses } from '../domains/routing/policy';
-import { authenticateMcpApiKeyIfPresent, authorizeMcpApiRequestIfPresent, issueMcpApiKeyForAgent, replaceAgentMcpPermissionPolicy } from '../lib/mcpApiAuth';
+import { authorizeMcpApiRequestIfPresent, issueMcpApiKeyForAgent, replaceAgentMcpPermissionPolicy } from '../lib/mcpApiAuth';
+// Requests authenticate as the operator unless they carry an MCP key of their own.
+import { authenticateTestApiRequest, operatorFetch as fetch } from '../lib/testApiAuth';
 import routingRouter from './routing';
 
 let tempDir: string;
@@ -89,7 +91,7 @@ async function resetDb(): Promise<void> {
 function startTestServer(): Promise<{ server: Server; baseUrl: string }> {
   const app = express();
   app.use(express.json());
-  app.use('/api/v1', authenticateMcpApiKeyIfPresent);
+  app.use('/api/v1', authenticateTestApiRequest());
   app.use('/api/v1', authorizeMcpApiRequestIfPresent);
   app.use('/api/v1/routing', routingRouter);
 

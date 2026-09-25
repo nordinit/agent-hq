@@ -1,9 +1,9 @@
 /**
  * Operator password for the MCP OAuth consent screen.
  *
- * Agent HQ has no user login, so the authorization endpoint had nothing to authenticate the
- * person approving a connector — and an authorization server that authorizes whoever reaches
- * the URL is not one. This is the smallest thing that closes that: one password, held as a
+ * The authorization endpoint sits at the public URL, outside the UI's operator-token login, so it
+ * had nothing to authenticate the person approving a connector — and an authorization server
+ * that authorizes whoever reaches the URL is not one. This is the smallest thing that closes that: one password, held as a
  * scrypt hash in app_settings, checked at the consent screen before any authorization code is
  * issued.
  *

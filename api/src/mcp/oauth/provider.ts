@@ -71,8 +71,9 @@ export class AgentHqOAuthProvider implements OAuthServerProvider {
    * Hands the request to the consent screen rather than issuing a code.
    *
    * The SDK has already checked the client and the redirect URI by this point. What it cannot
-   * check is whether the person driving the browser is the operator — Agent HQ has no user login
-   * — so nothing is issued until the consent form comes back with the operator password.
+   * check is whether the person driving the browser is the operator — Agent HQ has no user
+   * accounts, and the consent screen sits at the public URL rather than behind the UI's login — so
+   * nothing is issued until the consent form comes back with the operator password.
    *
    * The request travels in a signed payload inside the form. That keeps this hop stateless: no
    * pending-authorization row to strand if the operator wanders off, and an API restart mid-login

@@ -28,11 +28,12 @@ jest.mock('../lib/taskLifecycle', () => {
 import { getDb } from '../db/client';
 import externalTaskEventsRouter, { DEV_ENV_LEASE_MANAGER_SOURCE } from './external-task-events';
 import {
-  authenticateMcpApiKeyIfPresent,
   authorizeMcpApiRequestIfPresent,
   issueMcpApiKeyForAgent,
   replaceAgentMcpPermissionPolicy,
 } from '../lib/mcpApiAuth';
+// Requests authenticate as the operator unless they carry an MCP key of their own.
+import { authenticateTestApiRequest, operatorFetch as fetch } from '../lib/testApiAuth';
 import { DEV_ENV_DEPLOY_FAILURE_EVENTS, seedDefaultExternalEventMappings } from '../domains/routing/externalEventMappings';
 import { cleanupTaskExecutionLinkageForStatus } from '../lib/taskLifecycle';
 
@@ -89,7 +90,7 @@ async function resetDb(): Promise<void> {
 async function startTestServer(): Promise<{ server: Server; baseUrl: string }> {
   const app = express();
   app.use(express.json());
-  app.use('/api/v1', authenticateMcpApiKeyIfPresent);
+  app.use('/api/v1', authenticateTestApiRequest());
   app.use('/api/v1', authorizeMcpApiRequestIfPresent);
   app.use('/api/v1/external', externalTaskEventsRouter);
   const server = await new Promise<Server>((resolve) => {

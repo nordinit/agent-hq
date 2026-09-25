@@ -2,7 +2,9 @@ import express from 'express';
 import type { Server } from 'http';
 import { getDb } from '../db/client';
 import { setupTestDb, teardownTestDb } from '../db/testDb';
-import { authenticateMcpApiKeyIfPresent, authorizeMcpApiRequestIfPresent, issueMcpApiKeyForAgent } from '../lib/mcpApiAuth';
+import { authorizeMcpApiRequestIfPresent, issueMcpApiKeyForAgent } from '../lib/mcpApiAuth';
+// Requests authenticate as the operator unless they carry an MCP key of their own.
+import { authenticateTestApiRequest, operatorFetch as fetch } from '../lib/testApiAuth';
 import tasksRouter from './tasks';
 
 describe('manual MCP/admin task moves', () => {
@@ -59,7 +61,7 @@ describe('manual MCP/admin task moves', () => {
   async function withApp<T>(fn: (baseUrl: string) => Promise<T>): Promise<T> {
     const app = express();
     app.use(express.json());
-    app.use('/api/v1', authenticateMcpApiKeyIfPresent);
+    app.use('/api/v1', authenticateTestApiRequest());
     app.use('/api/v1', authorizeMcpApiRequestIfPresent);
     app.use('/api/v1/tasks', tasksRouter);
 

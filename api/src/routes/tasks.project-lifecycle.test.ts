@@ -2,7 +2,9 @@ import express from 'express';
 import type { Server } from 'http';
 import type { Db } from '../db/adapter/types';
 import { setupTestDb, teardownTestDb } from '../db/testDb';
-import { authenticateMcpApiKeyIfPresent, authorizeMcpApiRequestIfPresent, issueMcpApiKeyForAgent, replaceAgentMcpPermissionPolicy, resolveMcpApiIdentityForKey } from '../lib/mcpApiAuth';
+import { authorizeMcpApiRequestIfPresent, issueMcpApiKeyForAgent, replaceAgentMcpPermissionPolicy, resolveMcpApiIdentityForKey } from '../lib/mcpApiAuth';
+// Requests authenticate as the operator unless they carry an MCP key of their own.
+import { authenticateTestApiRequest, operatorFetch as fetch } from '../lib/testApiAuth';
 import { postTaskOutcome } from '../domains/tasks/release';
 import * as taskReadModel from '../domains/tasks/readModel';
 import tasksRouter from './tasks';
@@ -45,7 +47,7 @@ beforeEach(async () => {
   await replaceAgentMcpPermissionPolicy(db, 7, ['tasks.write_project_lifecycle', 'tasks.manage_project_tasks']);
   const app = express();
   app.use(express.json());
-  app.use('/api/v1', authenticateMcpApiKeyIfPresent);
+  app.use('/api/v1', authenticateTestApiRequest());
   app.use('/api/v1', authorizeMcpApiRequestIfPresent);
   app.use('/api/v1/tasks', tasksRouter);
   server = await new Promise<Server>(resolve => {

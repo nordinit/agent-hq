@@ -8,6 +8,7 @@ type OpenApiOperation = {
   parameters?: JsonSchema[];
   requestBody?: JsonSchema;
   responses: Record<string, JsonSchema>;
+  security?: Array<Record<string, string[]>>;
 };
 
 type OpenApiDocument = {
@@ -105,7 +106,7 @@ export const openApiDocument: OpenApiDocument = {
   servers: [
     { url: '/', description: 'Same-origin Agent HQ API server' },
   ],
-  security: [],
+  security: [{ OperatorToken: [] }, { McpApiKey: [] }, { BearerApiKey: [] }],
   tags: [
     { name: 'Health', description: 'Service health and discovery.' },
     { name: 'Setup', description: 'First-run setup state.' },
@@ -131,6 +132,7 @@ export const openApiDocument: OpenApiDocument = {
         tags: ['Health'],
         summary: 'Read API process health.',
         operationId: 'getHealth',
+        security: [],
         responses: {
           '200': response('The API process is healthy.', ref('HealthResponse'), {
             ok: true,
@@ -1582,16 +1584,21 @@ export const openApiDocument: OpenApiDocument = {
   },
   components: {
     securitySchemes: {
+      OperatorToken: {
+        type: 'http',
+        scheme: 'bearer',
+        description: 'The operator token (AGENT_HQ_OPERATOR_TOKEN) as Authorization: Bearer <token>. Full operator access; the UI proxy and the CLI use it.',
+      },
       McpApiKey: {
         type: 'apiKey',
         in: 'header',
         name: 'x-api-key',
-        description: 'Scoped MCP API key for runtime clients. Local browser/operator flows may be unauthenticated in self-hosted mode.',
+        description: 'An agent MCP API key. The request runs as that agent and is limited to its capability grants.',
       },
       BearerApiKey: {
         type: 'http',
         scheme: 'bearer',
-        description: 'Alternative MCP API key transport using Authorization: Bearer <key>.',
+        description: 'An agent MCP API key sent as Authorization: Bearer <key>. Send one credential per request.',
       },
     },
     parameters: {

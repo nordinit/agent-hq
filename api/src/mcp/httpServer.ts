@@ -89,12 +89,9 @@ function readHeaderValue(req: Request, name: string): string {
 /**
  * Reads the MCP key off the request.
  *
- * Deliberately not extractMcpApiKeyFromRequest: that one only honours `Authorization: Bearer`
- * when the caller also sends `x-agent-hq-mcp-client`, because /api/v1 serves browsers too and a
- * session's Authorization header must not be mistaken for an MCP key. This route has no such
- * ambiguity — every request to it is an MCP request — and remote connectors send a plain bearer
- * token and nothing else. Requiring a custom marker header here would make the endpoint
- * unreachable from the clients it exists for.
+ * Deliberately not lib/apiAuth's readApiCredential: /api/v1 also accepts the operator token,
+ * and this route accepts MCP keys only — the operator token is not an identity the tool surface
+ * can be scoped to. Remote connectors send a plain bearer token and nothing else.
  */
 function readMcpApiKey(req: Request): { key: string | null; presented: boolean } {
   const xApiKey = readHeaderValue(req, 'x-api-key');
