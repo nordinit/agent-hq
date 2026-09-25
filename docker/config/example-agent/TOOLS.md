@@ -2,6 +2,7 @@
 
 ## Agent HQ
 - Task management API: ${AGENT_HQ_API_URL}/api/v1
+- Every request needs this agent's MCP key as `x-api-key`. Prefer the Agent HQ MCP tools, which send it for you.
 
 ## Workspace
 - This workspace: /workspace

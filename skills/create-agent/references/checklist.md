@@ -91,7 +91,7 @@ The provisioning call owns the Agent HQ row, workspace scaffold, runtime registr
 
 The REST endpoint `POST /api/v1/agents/provision-full` also supports `runtime_type=hermes`. Supply a valid Hermes `runtime_config`, including its required isolated `profile`. The endpoint scaffolds the workspace and materializes Hermes runtime credentials without registering the agent as an OpenClaw-native agent.
 
-The current `agent_hq_provision_full_agent` MCP schema accepts OpenClaw only. Use direct REST for atomic Hermes provisioning when permitted; otherwise use `agent_hq_create_agent` and verify the runtime-specific setup separately.
+The current `agent_hq_provision_full_agent` MCP schema accepts OpenClaw only. Use direct REST for atomic Hermes provisioning when permitted, authenticated with your MCP key as `x-api-key`; otherwise use `agent_hq_create_agent` and verify the runtime-specific setup separately.
 
 ### Other Runtimes
 

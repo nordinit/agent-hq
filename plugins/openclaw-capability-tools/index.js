@@ -4,6 +4,7 @@ import { promisify } from 'node:util';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { resolveAgentHqApiAccess } from './api-credential.js';
 import {
   buildToolExecutionEnv,
   normalizeMaterializedTools,
@@ -13,7 +14,6 @@ import {
 } from './tool-contract.js';
 
 const execFileAsync = promisify(execFile);
-const DEFAULT_AGENT_HQ_API_URL = 'http://127.0.0.1:3501';
 
 function textResult(text, data) {
   return {
@@ -26,16 +26,18 @@ function jsonResult(payload) {
   return textResult(JSON.stringify(payload, null, 2), payload);
 }
 
-function getAgentHqBaseUrl() {
-  return String(process.env.AGENT_HQ_API_URL ?? process.env.AGENT_HQ_URL ?? DEFAULT_AGENT_HQ_API_URL).replace(/\/$/, '');
-}
-
-function fetchMaterializedToolsForOpenClawAgent(openclawAgentId) {
-  const baseUrl = getAgentHqBaseUrl();
-  const token = String(process.env.AGENT_HQ_API_TOKEN ?? '').trim();
-  const url = `${baseUrl}/api/v1/tools/materialized/agents/${encodeURIComponent(openclawAgentId)}`;
+function fetchMaterializedToolsForOpenClawAgent(openclawAgentId, pluginConfig) {
+  let access;
+  try {
+    access = resolveAgentHqApiAccess(pluginConfig);
+  } catch (err) {
+    throw new Error(`Failed to read the Agent HQ API token for OpenClaw agent "${openclawAgentId}": ${err instanceof Error ? err.message : String(err)}`);
+  }
+  const url = `${access.baseUrl}/api/v1/tools/materialized/agents/${encodeURIComponent(openclawAgentId)}`;
+  // The token travels in the child's environment, not its argv, which other local users can list.
   const script = `
-    const [url, token] = process.argv.slice(1);
+    const [url] = process.argv.slice(1);
+    const token = process.env.AGENT_HQ_PLUGIN_API_TOKEN;
     const headers = { Accept: 'application/json' };
     if (token) headers.Authorization = 'Bearer ' + token;
     fetch(url, { headers }).then(async (response) => {
@@ -52,10 +54,10 @@ function fetchMaterializedToolsForOpenClawAgent(openclawAgentId) {
   `;
 
   try {
-    const stdout = execFileSync(process.execPath, ['-e', script, url, token], {
+    const stdout = execFileSync(process.execPath, ['-e', script, url], {
       encoding: 'utf8',
       timeout: 10_000,
-      env: process.env,
+      env: { ...process.env, AGENT_HQ_PLUGIN_API_TOKEN: access.token ?? '' },
       maxBuffer: 1024 * 1024,
     });
     return normalizeMaterializedTools(JSON.parse(stdout));
@@ -180,7 +182,7 @@ function buildNativeTool(tool) {
   };
 }
 
-function resolveMaterializedToolsForContext(context) {
+function resolveMaterializedToolsForContext(context, pluginConfig) {
   const openclawAgentId = resolveOpenClawAgentId(context);
   if (!openclawAgentId) {
     const keys = context && typeof context === 'object' ? Object.keys(context).sort().join(', ') : 'none';
@@ -189,7 +191,7 @@ function resolveMaterializedToolsForContext(context) {
     );
   }
 
-  const tools = fetchMaterializedToolsForOpenClawAgent(openclawAgentId);
+  const tools = fetchMaterializedToolsForOpenClawAgent(openclawAgentId, pluginConfig);
   if (tools.length === 0) return null;
   return tools.map(buildNativeTool);
 }
@@ -199,6 +201,6 @@ export default definePluginEntry({
   name: 'Agent HQ capability tools',
   description: 'Registers Agent HQ-assigned capability tools as native OpenClaw tools for the active agent.',
   register(api) {
-    api.registerTool(resolveMaterializedToolsForContext);
+    api.registerTool((context) => resolveMaterializedToolsForContext(context, api.pluginConfig));
   },
 });

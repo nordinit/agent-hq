@@ -8,6 +8,19 @@
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": {}
+    "properties": {
+      "apiUrl": {
+        "type": "string",
+        "description": "Agent HQ API base URL. Defaults to AGENT_HQ_API_URL, then http://127.0.0.1:3501."
+      },
+      "apiTokenFile": {
+        "type": "string",
+        "description": "File holding the Agent HQ credential: the token alone, or dotenv lines with AGENT_HQ_OPERATOR_TOKEN (such as ~/.agent-hq/.env)."
+      },
+      "apiToken": {
+        "type": "string",
+        "description": "Agent HQ credential sent as a bearer token. Prefer apiTokenFile, which keeps the secret out of this config."
+      }
+    }
   }
 }

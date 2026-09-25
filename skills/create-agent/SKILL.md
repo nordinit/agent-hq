@@ -53,7 +53,7 @@ Use Agent HQ MCP tools when available.
 1. Read the current agents, projects, workflows, providers, and capabilities.
 2. Design the name, role, runtime, provider/model, instructions, and routing intent.
 3. For an OpenClaw agent, call `agent_hq_provision_full_agent` once. This is the MCP path over `POST /api/v1/agents/provision-full`.
-4. For a Hermes agent, use the same atomic REST endpoint when direct API access is appropriate; the current MCP provisioning schema is OpenClaw-only.
+4. For a Hermes agent, use the same atomic REST endpoint when direct API access is appropriate; the current MCP provisioning schema is OpenClaw-only. Direct calls must carry your MCP key (`x-api-key`) or the operator token; the API refuses requests without a credential.
 5. For Claude Code, webhook, or custom runtimes, use `agent_hq_create_agent` with the runtime-specific configuration supported by Agent HQ.
 6. Configure workflow repository settings separately when needed.
 7. Create or verify Assignment Rules through Agent HQ MCP. Use the `task-routing-rules` skill for scoped defaults or workflow overrides.

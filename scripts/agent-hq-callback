@@ -19,6 +19,10 @@
  *      AGENT_HQ_API_BASE, AGENT_HQ_AGENT_SLUG
  *   3. .agent-hq-run-context.json in CWD or up to 5 parent directories
  *
+ * Authentication: every Agent HQ API request must carry a credential. Set AGENT_HQ_MCP_API_KEY
+ * to the agent's own MCP key (the one in its Agent HQ MCP server config); it is sent as
+ * x-api-key. It is read from the environment only, never a flag, so it stays out of `ps`.
+ *
  * Exit codes:
  *   0 — success
  *   1 — missing required context or args
@@ -100,7 +104,7 @@ function resolveContext(flags) {
 
 // ── HTTP helpers ────────────────────────────────────────────────────────────
 
-function request(method, url, body) {
+function request(method, url, body, apiKey = process.env.AGENT_HQ_MCP_API_KEY) {
   return new Promise((resolve, reject) => {
     const parsed = new URL(url);
     const lib = parsed.protocol === 'https:' ? https : http;
@@ -115,6 +119,7 @@ function request(method, url, body) {
         headers: {
           'Content-Type': 'application/json',
           ...(data ? { 'Content-Length': Buffer.byteLength(data) } : {}),
+          ...(apiKey && apiKey.trim() ? { 'x-api-key': apiKey.trim() } : {}),
         },
       },
       (res) => {
@@ -351,6 +356,9 @@ async function main() {
         ? (result.body.error || result.body.message || JSON.stringify(result.body))
         : String(result.body);
       console.error(`[agent-hq-callback] ${command} failed (HTTP ${result.status}): ${errMsg}`);
+      if (result.status === 401 && !process.env.AGENT_HQ_MCP_API_KEY) {
+        console.error('[agent-hq-callback] Set AGENT_HQ_MCP_API_KEY to this agent\'s Agent HQ MCP key.');
+      }
       process.exit(2);
     }
   } catch (err) {

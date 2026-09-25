@@ -2,22 +2,32 @@
 
 This plugin fetches Agent HQ-assigned capability tools from the materialized endpoint and registers them inside an OpenClaw runtime as native tools.
 
-## Environment
+## Credential
 
-Optional:
-- `AGENT_HQ_API_URL` — Agent HQ API base URL. Defaults to `http://127.0.0.1:3501`.
-- `AGENT_HQ_API_TOKEN` — bearer token if your Agent HQ API is protected.
+Every Agent HQ `/api/v1` request must authenticate, so the plugin needs a credential: the operator token (`AGENT_HQ_OPERATOR_TOKEN`) or an Agent HQ MCP key with administrative access. It is read, in order, from:
+
+1. `apiToken` in the plugin's OpenClaw config.
+2. `apiTokenFile` in the plugin's OpenClaw config: a file holding the token alone, or dotenv lines with `AGENT_HQ_OPERATOR_TOKEN` (such as the `~/.agent-hq/.env` that `agent-hq start` writes). Re-read on every fetch, so a rotated token is picked up without a restart.
+3. `AGENT_HQ_API_TOKEN` in the gateway's environment.
+
+Prefer `apiTokenFile`. The gateway's environment is inherited by every shell and script tool the plugin runs, and a token in `openclaw.json` sits in a file that is often copied around while debugging.
+
+The API URL comes from `apiUrl` in the plugin config, then `AGENT_HQ_API_URL`, then `http://127.0.0.1:3501`.
 
 ## OpenClaw configuration
 
-Agent HQ local startup configures this automatically. If you install or wire the plugin manually, the OpenClaw gateway config must both load the plugin and allow its tools through the active tool policy:
+`agent-hq start` configures this automatically, including `apiUrl` and `apiTokenFile`. If you install or wire the plugin manually, the OpenClaw gateway config must load the plugin, give it a credential, and allow its tools through the active tool policy:
 
 ```json
 {
   "plugins": {
     "entries": {
       "agent-hq-capability-tools": {
-        "enabled": true
+        "enabled": true,
+        "config": {
+          "apiUrl": "http://127.0.0.1:3501",
+          "apiTokenFile": "~/.agent-hq/.env"
+        }
       }
     },
     "load": {
