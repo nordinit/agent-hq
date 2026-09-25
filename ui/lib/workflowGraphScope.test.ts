@@ -34,7 +34,7 @@ test('treats a row with no annotation as inherited rather than throwing', () => 
 });
 
 test('does not mark individually when every row shares one scope', () => {
-  // The real Agency/#115 case: all 23 assignments are overrides, so a badge on each says
+  // A real case: all 23 assignments are overrides, so a badge on each says
   // nothing. The summary line states it once instead.
   assert.equal(shouldMarkIndividually([override, override, override], true), false);
   assert.equal(shouldMarkIndividually([inherited, inherited], true), false);

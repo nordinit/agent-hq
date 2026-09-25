@@ -29,7 +29,7 @@ async function seed(): Promise<void> {
   const db = await setupTestDb();
   await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Default Tenant', 'default', 1) ON CONFLICT DO NOTHING`);
   await db.run(`INSERT INTO app_settings (key, value) VALUES ('default_tenant_id', '1'), ('active_tenant_id', '1') ON CONFLICT DO NOTHING`);
-  await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (?, ?, ?), (?, ?, ?)`, 86, 1, 'Agent HQ', 87, 1, 'Agency');
+  await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (?, ?, ?), (?, ?, ?)`, 86, 1, 'Agent HQ', 87, 1, 'Sales');
   await db.run(`
     INSERT INTO agents (id, tenant_id, project_id, name, slug, session_key, enabled, role)
     VALUES (?, ?, ?, ?, ?, ?, 1, 'Remote MCP client'),
@@ -149,7 +149,7 @@ describe('consent identity selection', () => {
     expect(html).toContain('Claude Mobile');
     expect(html).toContain('ChatGPT Mobile');
     expect(html).toContain('Agent HQ');
-    expect(html).toContain('Agency');
+    expect(html).toContain('Sales');
     expect(html).not.toContain('agent:atlas:main');
     expect(html).toMatch(/name="agent_id" value="700"/);
     expect(html).toMatch(/name="agent_id" value="701"/);

@@ -11,7 +11,7 @@ describe('describeActivity', () => {
     expect(describeActivity('tool_call', { source: 'hermes-json', name: 'patch', arguments: '{}' }))
       .toEqual({ label: 'Using patch', detail: 'patch' });
     // openclaw, fully-qualified per-agent MCP name
-    expect(describeActivity('tool_call', { name: 'agent-hq__agent-99974437.agent_hq_post_task_outcome', args: {} }))
+    expect(describeActivity('tool_call', { name: 'agent-hq__agent-42.agent_hq_post_task_outcome', args: {} }))
       .toEqual({ label: 'Using agent_hq_post_task_outcome', detail: 'agent_hq_post_task_outcome' });
   });
 
@@ -35,9 +35,9 @@ describe('prettifyToolName', () => {
   });
 
   it('strips MCP qualification so no agent id reaches the UI', () => {
-    expect(prettifyToolName('agent-hq__agent-99974437.agent_hq_post_task_outcome'))
+    expect(prettifyToolName('agent-hq__agent-42.agent_hq_post_task_outcome'))
       .toBe('agent_hq_post_task_outcome');
-    expect(prettifyToolName('mcp__agent-hq__agent-99974448__agent_hq_trace_routing'))
+    expect(prettifyToolName('mcp__agent-hq__agent-43__agent_hq_trace_routing'))
       .toBe('agent_hq_trace_routing');
   });
 });

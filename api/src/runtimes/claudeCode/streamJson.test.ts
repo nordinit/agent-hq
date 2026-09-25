@@ -20,7 +20,7 @@ const CAPTURE = fs.readFileSync(
   'utf8',
 );
 
-const CAPTURE_SESSION_ID = '9278eeca-b7af-44f7-bc1f-2e6d4c16ee09';
+const CAPTURE_SESSION_ID = 'e3b0c442-98fc-4c14-9afb-f4c8996fb924';
 
 describe('NdjsonDecoder', () => {
   it('reassembles events split across arbitrary chunk boundaries', () => {

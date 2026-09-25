@@ -57,7 +57,7 @@ describe('agent repo ownership enforcement', () => {
         body: JSON.stringify({
           name: 'Agent HQ',
           repo_access_mode: 'worktree',
-          repo_path: '/Users/nordini/agent-hq',
+          repo_path: '/home/example/agent-hq',
         }),
       });
       const body = await response.json() as Record<string, unknown>;
@@ -78,7 +78,7 @@ describe('agent repo ownership enforcement', () => {
     const db = getDb();
     await db.run(`
       INSERT INTO projects (id, tenant_id, name, repo_path, repo_url, repo_access_mode)
-      VALUES (86, 1, 'Agent HQ', '/Users/nordini/agent-hq', NULL, 'worktree')
+      VALUES (86, 1, 'Agent HQ', '/home/example/agent-hq', NULL, 'worktree')
     `);
 
     const { server, baseUrl } = await startTestServer();
@@ -102,7 +102,7 @@ describe('agent repo ownership enforcement', () => {
       const project = await db.get(`SELECT name, repo_path, repo_url, repo_access_mode FROM projects WHERE id = 86`) as Record<string, unknown>;
       expect(project).toEqual({
         name: 'Agent HQ',
-        repo_path: '/Users/nordini/agent-hq',
+        repo_path: '/home/example/agent-hq',
         repo_url: null,
         repo_access_mode: 'worktree',
       });
@@ -120,7 +120,7 @@ describe('agent repo ownership enforcement', () => {
     const db = getDb();
     await db.run(`
       INSERT INTO projects (id, tenant_id, name, repo_path, repo_url, repo_access_mode)
-      VALUES (86, 1, 'Agent HQ', '/Users/nordini/agent-hq', NULL, 'worktree')
+      VALUES (86, 1, 'Agent HQ', '/home/example/agent-hq', NULL, 'worktree')
     `);
 
     const { server, baseUrl } = await startTestServer();
@@ -151,7 +151,7 @@ describe('agent repo ownership enforcement', () => {
         repo_access_mode: string | null;
       };
       expect(project).toEqual({
-        repo_path: '/Users/nordini/agent-hq',
+        repo_path: '/home/example/agent-hq',
         repo_url: null,
         repo_access_mode: 'worktree',
       });
@@ -167,7 +167,7 @@ describe('agent repo ownership enforcement', () => {
     const db = getDb();
     await db.run(`
       INSERT INTO projects (id, tenant_id, name, repo_path, repo_url, repo_access_mode)
-      VALUES (86, 1, 'Agent HQ', '/Users/nordini/agent-hq', NULL, 'worktree')
+      VALUES (86, 1, 'Agent HQ', '/home/example/agent-hq', NULL, 'worktree')
     `);
     await db.run(`
       INSERT INTO agents (id, tenant_id, name, role, session_key, runtime_type, preferred_provider, project_id)
@@ -197,7 +197,7 @@ describe('agent repo ownership enforcement', () => {
         repo_access_mode: string | null;
       };
       expect(project).toEqual({
-        repo_path: '/Users/nordini/agent-hq',
+        repo_path: '/home/example/agent-hq',
         repo_url: null,
         repo_access_mode: 'worktree',
       });
@@ -210,7 +210,7 @@ describe('agent repo ownership enforcement', () => {
     const db = getDb();
     await db.run(`
       INSERT INTO projects (id, tenant_id, name, repo_path, repo_url, repo_access_mode)
-      VALUES (86, 1, 'Agent HQ', '/Users/nordini/agent-hq', NULL, 'worktree')
+      VALUES (86, 1, 'Agent HQ', '/home/example/agent-hq', NULL, 'worktree')
     `);
 
     const { server, baseUrl } = await startTestServer();
@@ -247,7 +247,7 @@ describe('agent repo ownership enforcement', () => {
     const db = getDb();
     await db.run(`
       INSERT INTO projects (id, tenant_id, name, repo_path, repo_url, repo_access_mode)
-      VALUES (86, 1, 'Agent HQ', '/Users/nordini/agent-hq', NULL, 'worktree')
+      VALUES (86, 1, 'Agent HQ', '/home/example/agent-hq', NULL, 'worktree')
     `);
     await db.run(`
       INSERT INTO workflows (id, tenant_id, project_id, name, workflow_type)
@@ -288,7 +288,7 @@ describe('agent repo ownership enforcement', () => {
     const db = getDb();
     await db.run(`
       INSERT INTO projects (id, tenant_id, name, repo_path, repo_url, repo_access_mode)
-      VALUES (86, 1, 'Agent HQ', '/Users/nordini/agent-hq', NULL, 'worktree')
+      VALUES (86, 1, 'Agent HQ', '/home/example/agent-hq', NULL, 'worktree')
     `);
     await db.run(`
       INSERT INTO agents (id, tenant_id, name, role, session_key, runtime_type, preferred_provider, project_id, repo_url, repo_access_mode)
@@ -302,7 +302,7 @@ describe('agent repo ownership enforcement', () => {
       expect(initialAgent.repo_url).toBe('git@github.com:legacy/fallback.git');
       expect(initialAgent.repo_access_mode).toBe('clone');
       expect(initialAgent.repo_config_source).toBe('agent_legacy');
-      expect(initialAgent.project_repo_path).toBe('/Users/nordini/agent-hq');
+      expect(initialAgent.project_repo_path).toBe('/home/example/agent-hq');
       expect(initialAgent.project_repo_url).toBeNull();
       expect(initialAgent.legacy_repo_url).toBe('git@github.com:legacy/fallback.git');
       expect(initialAgent.legacy_repo_access_mode).toBe('clone');
@@ -330,13 +330,13 @@ describe('agent repo ownership enforcement', () => {
       const finalProject = await fetch(`${baseUrl}/api/v1/projects/86`).then(async (res) => res.json() as Promise<Record<string, unknown>>);
       const finalAgent = await fetch(`${baseUrl}/api/v1/agents/94`).then(async (res) => res.json() as Promise<Record<string, unknown>>);
       expect(finalProject.name).toBe('Agent HQ Renamed');
-      expect(finalProject.repo_path).toBe('/Users/nordini/agent-hq');
+      expect(finalProject.repo_path).toBe('/home/example/agent-hq');
       expect(finalProject.repo_url).toBeNull();
       expect(finalProject.repo_access_mode).toBe('worktree');
       expect(finalAgent.repo_path).toBeNull();
       expect(finalAgent.repo_url).toBe('git@github.com:legacy/fallback.git');
       expect(finalAgent.repo_access_mode).toBe('clone');
-      expect(finalAgent.project_repo_path).toBe('/Users/nordini/agent-hq');
+      expect(finalAgent.project_repo_path).toBe('/home/example/agent-hq');
       expect(finalAgent.project_repo_url).toBeNull();
       expect(finalAgent.repo_config_source).toBe('agent_legacy');
       expect(finalAgent.legacy_repo_url).toBe('git@github.com:legacy/fallback.git');

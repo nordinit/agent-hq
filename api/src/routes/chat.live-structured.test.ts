@@ -340,7 +340,7 @@ describe('chat websocket live structured persistence', () => {
     const sessionKey = 'agent:atlas:web:direct:8fa72628-c1d7-401c-a106-9190b2b623d6';
     await db.run(`
       INSERT INTO job_instances (id, tenant_id, agent_id, task_id, session_key, status, run_stage, durable_run_id)
-      VALUES (99974585, ?, 2, NULL, ?, 'done', 'chat', 'chat-existing')
+      VALUES (4585, ?, 2, NULL, ?, 'done', 'chat', 'chat-existing')
     `, TENANT_ID, sessionKey);
     const client = connectProxyClient();
 

@@ -182,9 +182,9 @@ describe('routing config audit', () => {
     await createRule(baseUrl, {
       project_id: projectId, workflow_id: workflowId, workflow_type: 'dev',
       task_type: null, status: 'ready', agent_id: agentId,
-    }, { 'X-Actor': 'masiah' });
+    }, { 'X-Actor': 'alex' });
     const [row] = await auditRows();
-    expect(row).toMatchObject({ actor: 'masiah', actor_kind: 'user' });
+    expect(row).toMatchObject({ actor: 'alex', actor_kind: 'user' });
   });
 
   it('does not record a change that failed validation', async () => {

@@ -24,7 +24,7 @@ async function seedFixture(): Promise<void> {
     INSERT INTO agents (
       id, tenant_id, project_id, workflow_id, name, role, session_key, runtime_type
     ) VALUES (
-      96, 1, 86, 42, 'Talon (QA)', 'QA Engineer', 'agency-qa', 'openclaw'
+      96, 1, 86, 42, 'Talon (QA)', 'QA Engineer', 'talon-qa', 'openclaw'
     )
   `);
   await db.run(`

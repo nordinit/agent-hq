@@ -3,26 +3,26 @@ import os from 'os';
 import path from 'path';
 import { claudeProjectSlug, claudeSessionTranscriptPath, resolveResumableSessionId } from './resume';
 
-const SESSION_ID = '9278eeca-b7af-44f7-bc1f-2e6d4c16ee09';
+const SESSION_ID = 'e3b0c442-98fc-4c14-9afb-f4c8996fb924';
 
 describe('claudeProjectSlug', () => {
   it('matches the directory names the CLI actually writes', () => {
     // Verified against ~/.claude/projects on 2026-08-15: separators and dots both
     // collapse to '-', which is why a dotted directory yields a doubled dash.
-    expect(claudeProjectSlug('/Users/nordini/agent-hq')).toBe('-Users-nordini-agent-hq');
-    expect(claudeProjectSlug('/Users/nordini/.agent-hq/workspaces/atlas'))
-      .toBe('-Users-nordini--agent-hq-workspaces-atlas');
+    expect(claudeProjectSlug('/home/example/agent-hq')).toBe('-home-example-agent-hq');
+    expect(claudeProjectSlug('/home/example/.agent-hq/workspaces/atlas'))
+      .toBe('-home-example--agent-hq-workspaces-atlas');
   });
 
   it('normalizes a relative or untidy path before slugifying', () => {
-    expect(claudeProjectSlug('/Users/nordini/agent-hq/'))
-      .toBe(claudeProjectSlug('/Users/nordini/agent-hq'));
+    expect(claudeProjectSlug('/home/example/agent-hq/'))
+      .toBe(claudeProjectSlug('/home/example/agent-hq'));
   });
 });
 
 describe('resolveResumableSessionId', () => {
   let configHome: string;
-  const cwd = '/Users/nordini/agent-hq';
+  const cwd = '/home/example/agent-hq';
 
   beforeEach(() => {
     configHome = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-resume-'));
@@ -54,7 +54,7 @@ describe('resolveResumableSessionId', () => {
   it('starts fresh when the session belongs to another working directory', () => {
     // `--resume` only reaches sessions of the project it runs in, so an id
     // recorded while the agent pointed elsewhere is not resumable from here.
-    writeTranscript(SESSION_ID, '/Users/nordini/some-other-repo');
+    writeTranscript(SESSION_ID, '/home/example/some-other-repo');
     expect(resolveResumableSessionId({ requested: SESSION_ID, cwd, claudeConfigHome: configHome }))
       .toBeNull();
   });

@@ -781,18 +781,18 @@ fetch(${JSON.stringify(url)} + '/' + process.argv[3], { signal: AbortSignal.time
     const runtime = new OpenClawRuntime();
 
     const result = await runtime.dispatch(dispatchParams({
-      workspaceRoot: '/Users/nordini/.openclaw/workspace-agent-hq-backend',
-      activeRepoRoot: '/Users/nordini/.openclaw/workspace-agent-hq-backend/task-375',
+      workspaceRoot: '/home/example/.openclaw/workspace-agent-hq-backend',
+      activeRepoRoot: '/home/example/.openclaw/workspace-agent-hq-backend/task-375',
       repoAccessMode: 'worktree',
-      repoSource: 'worktree:/Users/nordini/agent-hq',
-      repoWorkspacePath: '/Users/nordini/.openclaw/workspace-agent-hq-backend/task-375',
+      repoSource: 'worktree:/home/example/agent-hq',
+      repoWorkspacePath: '/home/example/.openclaw/workspace-agent-hq-backend/task-375',
       repoBranch: 'prism-frontend/task-386-bug-atlas-chat-panel-opens-with-floating',
       pathMetadata: {
         pathMode: 'worktree',
         repoRootSource: 'worktree',
         workspaceRootSource: 'workspace',
-        worktreeRoot: '/Users/nordini/.openclaw/workspace-agent-hq-backend/task-375',
-        runtimeConfigWorkingDirectory: '/Users/nordini/.openclaw/workspace-agent-hq-backend',
+        worktreeRoot: '/home/example/.openclaw/workspace-agent-hq-backend/task-375',
+        runtimeConfigWorkingDirectory: '/home/example/.openclaw/workspace-agent-hq-backend',
       },
     }));
 
@@ -811,18 +811,18 @@ fetch(${JSON.stringify(url)} + '/' + process.argv[3], { signal: AbortSignal.time
     expect(message).toContain('Implement task');
     expect(message).toContain('## Active Repo Context');
     expect(message).toContain('Use this path as the current working directory for repo, file, and git operations:');
-    expect(message).toContain('/Users/nordini/.openclaw/workspace-agent-hq-backend/task-375');
+    expect(message).toContain('/home/example/.openclaw/workspace-agent-hq-backend/task-375');
     expect(message).toContain('Repo access mode: worktree');
     expect(message).toContain('Path mode: worktree');
-    expect(message).toContain('Repo source: worktree:/Users/nordini/agent-hq');
-    expect(message).toContain('Prepared repo workspace: /Users/nordini/.openclaw/workspace-agent-hq-backend/task-375');
+    expect(message).toContain('Repo source: worktree:/home/example/agent-hq');
+    expect(message).toContain('Prepared repo workspace: /home/example/.openclaw/workspace-agent-hq-backend/task-375');
     expect(message).toContain('Branch: prism-frontend/task-386-bug-atlas-chat-panel-opens-with-floating');
-    expect(message).toContain('Parent workspace root: /Users/nordini/.openclaw/workspace-agent-hq-backend');
+    expect(message).toContain('Parent workspace root: /home/example/.openclaw/workspace-agent-hq-backend');
     expect(message).toContain('Repo root source: worktree');
     expect(message).toContain('Workspace root source: workspace');
 
     expect(logSpy).toHaveBeenCalledWith(
-      '[OpenClawRuntime] dispatch path resolution: sessionKey=agent:cinder-backend:hook:atlas:jobrun:383 mode=worktree cwd=/Users/nordini/.openclaw/workspace-agent-hq-backend/task-375 activeRepoRoot=/Users/nordini/.openclaw/workspace-agent-hq-backend/task-375 workspaceRoot=/Users/nordini/.openclaw/workspace-agent-hq-backend worktreeRoot=/Users/nordini/.openclaw/workspace-agent-hq-backend/task-375 runtimeConfigWorkingDirectory=/Users/nordini/.openclaw/workspace-agent-hq-backend repoRootSource=worktree workspaceRootSource=workspace',
+      '[OpenClawRuntime] dispatch path resolution: sessionKey=agent:cinder-backend:hook:atlas:jobrun:383 mode=worktree cwd=/home/example/.openclaw/workspace-agent-hq-backend/task-375 activeRepoRoot=/home/example/.openclaw/workspace-agent-hq-backend/task-375 workspaceRoot=/home/example/.openclaw/workspace-agent-hq-backend worktreeRoot=/home/example/.openclaw/workspace-agent-hq-backend/task-375 runtimeConfigWorkingDirectory=/home/example/.openclaw/workspace-agent-hq-backend repoRootSource=worktree workspaceRootSource=workspace',
     );
   });
 

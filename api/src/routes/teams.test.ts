@@ -259,7 +259,7 @@ describe('teams API', () => {
 
       const res = await fetch(`${baseUrl}/api/v1/workflows/${workflowId}/team/apply-routing`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json', 'x-actor': 'nordini' },
+        headers: { 'content-type': 'application/json', 'x-actor': 'alex' },
         body: '{}',
       });
       const plan = await res.json() as any;
@@ -271,7 +271,7 @@ describe('teams API', () => {
       expect(Number(rules[0].agent_id)).toBe(nova);
 
       const audits = await getDb().all(`SELECT * FROM routing_config_audit_log ORDER BY id ASC`);
-      expect(audits[0]).toMatchObject({ actor: 'nordini', actor_kind: 'user' });
+      expect(audits[0]).toMatchObject({ actor: 'alex', actor_kind: 'user' });
     });
 
     it('refuses to apply routing for a workflow with no team', async () => {

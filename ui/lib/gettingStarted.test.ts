@@ -99,6 +99,5 @@ test('guide copy describes base defaults and manual configuration generically', 
   assert.match(guideText, /Base installs/i);
   assert.match(guideText, /base defaults/i);
   assert.match(guideText, /optional manual configuration/i);
-  assert.doesNotMatch(guideText, /Masiah/i);
-  assert.doesNotMatch(guideText, /\/Users\/nordini/i);
+  assert.doesNotMatch(guideText, /\/Users\/|\/home\//);
 });

@@ -53,7 +53,7 @@ test('task board columns include every status regardless of allowed_transitions 
 // ── Mobile column union ──────────────────────────────────────────────────────
 //
 // Regression cover for a mobile-only board bug: a project mixing workflow types showed only the
-// first type's status columns on mobile, so a status defined by just one type (Agency's
+// first type's status columns on mobile, so a status defined by just one type (a
 // lead_generation `closed`) had no chip to tap and could not be selected at all.
 
 test('unionBoardColumns spans every workflow type, first-seen order', () => {

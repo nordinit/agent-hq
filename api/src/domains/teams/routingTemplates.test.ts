@@ -289,7 +289,7 @@ describe('team routing template application', () => {
     const workflowId = await createWorkflow(teamId);
 
     await applyTeamRouting(getDb(), {
-      workflowId, batchId: 'batch-42', actor: 'nordini', actorKind: 'user',
+      workflowId, batchId: 'batch-42', actor: 'alex', actorKind: 'user',
     });
 
     const audits = await getDb().all(
@@ -298,7 +298,7 @@ describe('team routing template application', () => {
     );
     expect(audits).toHaveLength(2);
     expect(audits[0]).toMatchObject({
-      entity_table: 'workflow_task_routing_rules', action: 'created', actor: 'nordini', actor_kind: 'user',
+      entity_table: 'workflow_task_routing_rules', action: 'created', actor: 'alex', actor_kind: 'user',
     });
   });
 

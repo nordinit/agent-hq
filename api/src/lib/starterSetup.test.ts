@@ -53,14 +53,14 @@ describe('starter workspace setup', () => {
     const tenantId = await seedTenant(db);
     await db.run(`
       INSERT INTO projects (id, tenant_id, name, description, context_md, created_at)
-      VALUES (991, ?, 'Agency', '', '', CURRENT_TIMESTAMP)
+      VALUES (991, ?, 'Sales', '', '', CURRENT_TIMESTAMP)
     `, tenantId);
     // "Business Development" contains the substring "development". Role text must never be
     // used to infer who implements work — this agent is in sales and cannot write code.
     await db.run(`
       INSERT INTO agents (id, tenant_id, project_id, name, role, job_title, session_key, workspace_path, status)
       VALUES
-        (7701, ?, 991, 'James', 'Business Development', '', 'agent:james', '', 'idle'),
+        (7701, ?, 991, 'Riley', 'Business Development', '', 'agent:riley', '', 'idle'),
         (7702, ?, 991, 'Kepler', 'Backend Engineer', '', 'agent:kepler', '', 'idle')
     `, tenantId, tenantId);
 

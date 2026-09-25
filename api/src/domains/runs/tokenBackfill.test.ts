@@ -10,7 +10,7 @@ jest.mock('child_process', () => ({
 
 const mockSpawnSync = spawnSync as jest.MockedFunction<typeof spawnSync>;
 
-const INSTANCE_ID = 99974450;
+const INSTANCE_ID = 4450;
 
 /**
  * job_instances.agent_id is NOT NULL and a real foreign key in both baselines, which the old
@@ -26,7 +26,7 @@ async function seedInstance(): Promise<void> {
   );
   await db.run(
     `INSERT INTO job_instances (id, tenant_id, agent_id, status, created_at, session_key)
-     VALUES (?, 1, ?, 'done', to_char(now() AT TIME ZONE 'utc' - interval '5 minutes', 'YYYY-MM-DD HH24:MI:SS'), 'run:99974450:d6252a6b-6160-4f62-b288-4ad972449e65')`,
+     VALUES (?, 1, ?, 'done', to_char(now() AT TIME ZONE 'utc' - interval '5 minutes', 'YYYY-MM-DD HH24:MI:SS'), 'run:4450:d6252a6b-6160-4f62-b288-4ad972449e65')`,
     INSTANCE_ID,
     Number(agent.lastInsertId),
   );
@@ -49,7 +49,7 @@ describe('backfillInstanceTokens', () => {
       status: 0,
       stdout: JSON.stringify({
         sessions: [{
-          key: 'agent:anchor-devops:run:99974450:e5d24260-cd3c-46d5-a508-68380d9c8856',
+          key: 'agent:example-devops:run:4450:e5d24260-cd3c-46d5-a508-68380d9c8856',
           inputTokens: 1621,
           outputTokens: 115,
           totalTokens: 59349,
@@ -87,7 +87,7 @@ describe('backfillInstanceTokens', () => {
     );
     await db.run(
       `INSERT INTO job_instances (id, tenant_id, agent_id, status, created_at, session_key)
-       VALUES (?, 1, ?, 'done', to_char(now() AT TIME ZONE 'utc' - interval '5 minutes', 'YYYY-MM-DD HH24:MI:SS'), 'run:99974450:d6252a6b-6160-4f62-b288-4ad972449e65')`,
+       VALUES (?, 1, ?, 'done', to_char(now() AT TIME ZONE 'utc' - interval '5 minutes', 'YYYY-MM-DD HH24:MI:SS'), 'run:4450:d6252a6b-6160-4f62-b288-4ad972449e65')`,
       INSTANCE_ID,
       Number(agent.lastInsertId),
     );

@@ -27,7 +27,7 @@ describe('resolveSessionContext', () => {
     `);
     await db.run(`
       INSERT INTO job_instances (id, agent_id, task_id, session_key, status, run_stage, durable_run_id)
-      VALUES (99974585, 1, NULL, ?, 'done', 'chat', 'chat-existing')
+      VALUES (4585, 1, NULL, ?, 'done', 'chat', 'chat-existing')
     `, sessionKey);
 
     expect(await resolveSessionContext(sessionKey)).toMatchObject({

@@ -759,7 +759,7 @@ describe('tenant workspace isolation', () => {
       expect(acmeAtlas.openclaw_agent_id).toBe('atlas-acme');
       expect(acmeAtlas.workspace_path).toContain('workspace-atlas-acme');
       expect(acmeAtlas.job_instructions).toContain('tenant data isolated');
-      expect(acmeAtlas.job_instructions).not.toMatch(/Masiah|Dev Environment Lease Manager|agent-hq-dev|workspace-agent-hq-backend|\/Users\/nordini/);
+      expect(acmeAtlas.job_instructions).not.toMatch(/Dev Environment Lease Manager|agent-hq-dev|workspace-agent-hq-backend/);
       expect(betaAtlas.name).toBe(ATLAS_AGENT_NAME);
       expect(betaAtlas.tenant_id).toBe(beta.tenant.id);
       expect(betaAtlas.project_id).toBe(betaProject.id);
@@ -787,7 +787,7 @@ describe('tenant workspace isolation', () => {
       for (const doc of ['SOUL.md', 'IDENTITY.md', 'USER.md', 'TOOLS.md', 'MEMORY.md', 'AGENTS.md']) {
         const docPath = path.join(acmeAtlas.workspace_path, doc);
         expect(fs.existsSync(docPath)).toBe(true);
-        expect(fs.readFileSync(docPath, 'utf-8')).not.toMatch(/Masiah|Dev Environment Lease Manager|agent-hq-dev|workspace-agent-hq-backend|\/Users\/nordini/);
+        expect(fs.readFileSync(docPath, 'utf-8')).not.toMatch(/Dev Environment Lease Manager|agent-hq-dev|workspace-agent-hq-backend/);
       }
     } finally {
       await stopServer(server);

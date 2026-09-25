@@ -120,7 +120,7 @@ describe('workflow field schema seeding', () => {
 
     await db.run(`
       INSERT INTO projects (id, tenant_id, name, description, context_md, created_at)
-      VALUES (990, ?, 'Agency', '', '', CURRENT_TIMESTAMP)
+      VALUES (990, ?, 'Sales', '', '', CURRENT_TIMESTAMP)
     `, tenantId);
     await db.run(`
       INSERT INTO workflows (id, tenant_id, project_id, name, goal, workflow_type, status, task_policy_seeded_at, length_kind, length_value, created_at)

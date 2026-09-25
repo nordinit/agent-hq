@@ -2236,22 +2236,22 @@ describe('routing rules API', () => {
 
     try {
       const db = getDb();
-      await db.run(`INSERT INTO workflow_types (tenant_id, key, name, is_system, status_seeded_at) VALUES (1, 'elevation_build', 'Elevation Build', 0, CURRENT_TIMESTAMP)`);
+      await db.run(`INSERT INTO workflow_types (tenant_id, key, name, is_system, status_seeded_at) VALUES (1, 'home_build', 'Home Build', 0, CURRENT_TIMESTAMP)`);
       await db.run(`
         INSERT INTO workflow_type_task_statuses (
           tenant_id, workflow_type_key, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json
         )
         VALUES
-          (1, 'elevation_build', 'intake', 'Intake', 'cyan', 0, 0, '["framing"]', 0, 1, '{}'),
-          (1, 'elevation_build', 'framing', 'Framing', 'amber', 0, 0, '["complete"]', 1, 0, '{}'),
-          (1, 'elevation_build', 'complete', 'Complete', 'green', 1, 0, '[]', 2, 0, '{}')
+          (1, 'home_build', 'intake', 'Intake', 'cyan', 0, 0, '["framing"]', 0, 1, '{}'),
+          (1, 'home_build', 'framing', 'Framing', 'amber', 0, 0, '["complete"]', 1, 0, '{}'),
+          (1, 'home_build', 'complete', 'Complete', 'green', 1, 0, '[]', 2, 0, '{}')
       `);
 
       const validResponse = await fetch(`${baseUrl}/api/v1/routing/workflow-event-mappings`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          workflow_type: 'elevation_build',
+          workflow_type: 'home_build',
           source: 'construction_events',
           event_name: 'estimate_received',
           status_includes: ['intake'],
@@ -2271,7 +2271,7 @@ describe('routing rules API', () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          workflow_type: 'elevation_build',
+          workflow_type: 'home_build',
           source: 'construction_events',
           event_name: 'legacy_dev_status',
           action_kind: 'status',
@@ -2287,7 +2287,7 @@ describe('routing rules API', () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          workflow_type: 'elevation_build',
+          workflow_type: 'home_build',
           source: 'construction_events',
           event_name: 'bad_guard',
           status_excludes: ['dev_deploying'],

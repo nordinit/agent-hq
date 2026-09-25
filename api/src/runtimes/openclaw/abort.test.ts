@@ -9,12 +9,12 @@ beforeEach(() => rpc.mockReset());
 describe('OpenClaw exact-run cancellation', () => {
   it('routes the Harlow short key to its agent and supplies the gateway run ID', async () => {
     rpc.mockResolvedValue({ ok: true, payload: { ok: true, aborted: true, runIds: ['gateway-run'] } });
-    await expect(abortOpenClawRun('gateway-run', 'run:99983474:durable', {
-      agentSessionKey: 'agent:agency-tooling-pm:main',
+    await expect(abortOpenClawRun('gateway-run', 'run:3474:durable', {
+      agentSessionKey: 'agent:tooling-pm:main',
     })).resolves.toMatchObject({ ok: true, confirmed: true, status: 'signalled' });
     expect(rpc).toHaveBeenCalledWith(expect.objectContaining({
       method: 'chat.abort',
-      rpcParams: { sessionKey: 'agent:agency-tooling-pm:run:99983474:durable', runId: 'gateway-run' },
+      rpcParams: { sessionKey: 'agent:tooling-pm:run:3474:durable', runId: 'gateway-run' },
     }));
   });
 

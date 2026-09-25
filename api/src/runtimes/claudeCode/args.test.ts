@@ -13,7 +13,7 @@ import {
  * surface stays last, but cannot replace adapter-owned boundary flags.
  */
 
-const SESSION_ID = '9278eeca-b7af-44f7-bc1f-2e6d4c16ee09';
+const SESSION_ID = 'e3b0c442-98fc-4c14-9afb-f4c8996fb924';
 
 function config(
   overrides: Partial<NormalizedClaudeCodeRuntimeConfig> = {},

@@ -186,7 +186,7 @@ describe('applyTaskOutcome scoped routing_config resolution', () => {
       taskId: 417,
       outcome: 'ready_for_intake',
       changedBy: 'cinder-backend',
-      summary: 'Elevation Build-style intake handoff',
+      summary: 'Construction-style intake handoff',
     });
 
     expect(result).toMatchObject({

@@ -31,8 +31,8 @@ async function setupDb(): Promise<Db> {
   const db = await setupTestDb();
 
   await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Default', 'default', 1)`);
-  await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (86, 1, 'Elevation')`);
-  await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name, goal, workflow_type, status) VALUES (10, 1, 86, 'Elevation Built', 'Goal', 'dev', 'active')`);
+  await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (86, 1, 'Renovation')`);
+  await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name, goal, workflow_type, status) VALUES (10, 1, 86, 'Renovation Build', 'Goal', 'dev', 'active')`);
   await db.run(`INSERT INTO agents (id, tenant_id, name, job_title, job_instructions, enabled, timeout_seconds, session_key, runtime_type) VALUES (1, 1, 'Old Agent', 'Old', 'Old', 1, 900, 'agent:old', 'openclaw')`);
   await db.run(`INSERT INTO agents (id, tenant_id, name, job_title, job_instructions, enabled, timeout_seconds, session_key, runtime_type) VALUES (2, 1, 'Addison', 'PM', 'Review', 1, 900, 'agent:addison', 'openclaw')`);
   return db;

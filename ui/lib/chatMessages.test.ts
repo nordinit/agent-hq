@@ -165,7 +165,7 @@ describe('transcript tool grouping', () => {
       msg({ id: 't2', event_type: 'tool_result', content: 'ok' }),
       msg({ id: 't3', event_type: 'tool_call', content: 'bash' }),
       msg({ id: 't4', event_type: 'tool_result', content: 'ok' }),
-      msg({ id: 'a1', content: 'Hi Masiah.', timestamp: '2026-08-08T03:19:50.000Z' }),
+      msg({ id: 'a1', content: 'Hi Sam.', timestamp: '2026-08-08T03:19:50.000Z' }),
     ]);
 
     assert.deepEqual(rows.map(r => r.kind), ['message', 'tools', 'message']);

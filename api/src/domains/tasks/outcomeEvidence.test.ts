@@ -8,15 +8,15 @@ jest.mock('./readModel', () => ({ ...jest.requireActual('./readModel'), enrichTa
 jest.mock('./mutations', () => ({ ...jest.requireActual('./mutations'), maybeTriggerDispatch: jest.fn() }));
 jest.mock('../../integrations/telegram', () => ({ notifyTelegram: jest.fn() }));
 
-const proof = 'https://www.freelancer.com/projects/40691397#bid_493880589';
-const payload = { submission_proof_url: proof, platform_bid_id: '493880589' };
+const proof = 'https://marketplace.example.com/projects/1234#bid_5678';
+const payload = { submission_proof_url: proof, platform_bid_id: '5678' };
 let db: Db;
 
 beforeEach(async () => {
   db = await setupTestDb();
   await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Test', 'test', 1)`);
   await db.run(`INSERT INTO app_settings (key, value) VALUES ('default_tenant_id', '1'), ('active_tenant_id', '1')`);
-  await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (1, 1, 'Agency')`);
+  await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (1, 1, 'Sales')`);
   await db.run(`INSERT INTO workflow_types (tenant_id, key, name) VALUES (1, 'lead_generation', 'Lead Generation')`);
   await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name, workflow_type) VALUES (10, 1, 1, 'Leads', 'lead_generation')`);
   await db.run(`INSERT INTO workflow_task_statuses (workflow_id, status_key, label, terminal, stage_order)

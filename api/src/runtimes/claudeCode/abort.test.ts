@@ -54,7 +54,7 @@ describe('parseClaudeCodeInstanceIdFromRunId', () => {
     // session_key uses the SAME prefix with a uuid, so this must not parse as
     // an instance id — the two namespaces are easy to confuse.
     expect(
-      parseClaudeCodeInstanceIdFromRunId('claude-code:9278eeca-b7af-44f7-bc1f-2e6d4c16ee09'),
+      parseClaudeCodeInstanceIdFromRunId('claude-code:e3b0c442-98fc-4c14-9afb-f4c8996fb924'),
     ).toBeNull();
   });
 

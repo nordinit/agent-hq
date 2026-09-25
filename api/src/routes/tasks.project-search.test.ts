@@ -41,7 +41,7 @@ function authHeaders(apiKey: string): Record<string, string> {
   };
 }
 
-async function seedProjectTaskSearchFixture(): Promise<{ agencyKey: string; otherProjectKey: string; otherTenantKey: string }> {
+async function seedProjectTaskSearchFixture(): Promise<{ salesKey: string; otherProjectKey: string; otherTenantKey: string }> {
   const db = getDb();
 
   await db.run(`
@@ -64,7 +64,7 @@ async function seedProjectTaskSearchFixture(): Promise<{ agencyKey: string; othe
   await db.run(`
     INSERT INTO projects (id, tenant_id, name, description, context_md)
     VALUES (?, ?, ?, '', ''), (?, ?, ?, '', ''), (?, ?, ?, '', '')
-  `, 99, 1, 'Agency', 100, 1, 'Other Project', 200, 2, 'Tenant Two Project');
+  `, 99, 1, 'Sales', 100, 1, 'Other Project', 200, 2, 'Tenant Two Project');
   await db.run(`
     INSERT INTO workflows (id, tenant_id, project_id, name, goal, workflow_type, status)
     VALUES (?, ?, ?, ?, '', 'lead_generation', 'active'),
@@ -76,7 +76,7 @@ async function seedProjectTaskSearchFixture(): Promise<{ agencyKey: string; othe
     VALUES (?, ?, ?, ?, ?, ?, ?, 'running'),
            (?, ?, ?, ?, ?, ?, ?, 'running'),
            (?, ?, ?, ?, ?, ?, ?, 'running')
-  `, 7, 1, 99, 'James', 'Agency Worker', 'agent:james:test', '/tmp/james', 8, 1, 100, 'Other Worker', 'Other Worker', 'agent:other:test', '/tmp/other', 9, 2, 200, 'Tenant Two Worker', 'Tenant Two Worker', 'agent:tenant-two:test', '/tmp/tenant-two');
+  `, 7, 1, 99, 'Riley', 'Sales Worker', 'agent:riley:test', '/tmp/riley', 8, 1, 100, 'Other Worker', 'Other Worker', 'agent:other:test', '/tmp/other', 9, 2, 200, 'Tenant Two Worker', 'Tenant Two Worker', 'agent:tenant-two:test', '/tmp/tenant-two');
   await db.run(`
     INSERT INTO tasks (
       id, tenant_id, title, description, status, priority, project_id, workflow_id, agent_id,
@@ -88,9 +88,9 @@ async function seedProjectTaskSearchFixture(): Promise<{ agencyKey: string; othe
       (?, ?, ?, '', ?, 'medium', ?, ?, ?, ?, ?, ?),
       (?, ?, ?, '', ?, 'medium', ?, ?, ?, ?, ?, ?),
       (?, ?, ?, '', ?, 'medium', ?, ?, ?, ?, ?, ?)
-  `, 9101, 1, 'Follow up Acme lead', 'in_progress', 99, 501, 7, 'lead_generation', JSON.stringify({ crm_lead_id: 'crm-123', unique_string: 'exact-string', external_project_id: 'ext-abc', lead_score: 42, approved: true, optional_note: null, 'source.id': 'dot-123' }), '2026-07-20 10:00:00', 9102, 1, 'Completed Acme lead', 'done', 99, 501, 7, 'lead_generation', JSON.stringify({ crm_lead_id: 'crm-123', external_project_id: 'ext-abc', lead_score: 7, approved: false, optional_note: 'present', 'source.id': 'dot-other' }), '2026-07-20 09:00:00', 9103, 1, 'Other project Acme lead', 'in_progress', 100, 502, 8, 'lead_generation', JSON.stringify({ crm_lead_id: 'crm-123', external_project_id: 'ext-abc', lead_score: 42, approved: true, optional_note: null, 'source.id': 'dot-123' }), '2026-07-20 11:00:00', 9104, 2, 'Other tenant Acme lead', 'in_progress', 200, 601, 9, 'lead_generation', JSON.stringify({ crm_lead_id: 'crm-123', external_project_id: 'ext-abc', lead_score: 42, approved: true, optional_note: null, 'source.id': 'dot-123' }), '2026-07-20 12:00:00', 9105, 1, 'Different Agency lead', 'review', 99, 501, 7, 'lead_generation', JSON.stringify({ crm_lead_id: 'crm-999', external_project_id: 'ext-999', lead_score: 7, approved: false, optional_note: 'present', 'source.id': 'dot-other' }), '2026-07-20 13:00:00');
+  `, 9101, 1, 'Follow up Acme lead', 'in_progress', 99, 501, 7, 'lead_generation', JSON.stringify({ crm_lead_id: 'crm-123', unique_string: 'exact-string', external_project_id: 'ext-abc', lead_score: 42, approved: true, optional_note: null, 'source.id': 'dot-123' }), '2026-07-20 10:00:00', 9102, 1, 'Completed Acme lead', 'done', 99, 501, 7, 'lead_generation', JSON.stringify({ crm_lead_id: 'crm-123', external_project_id: 'ext-abc', lead_score: 7, approved: false, optional_note: 'present', 'source.id': 'dot-other' }), '2026-07-20 09:00:00', 9103, 1, 'Other project Acme lead', 'in_progress', 100, 502, 8, 'lead_generation', JSON.stringify({ crm_lead_id: 'crm-123', external_project_id: 'ext-abc', lead_score: 42, approved: true, optional_note: null, 'source.id': 'dot-123' }), '2026-07-20 11:00:00', 9104, 2, 'Other tenant Acme lead', 'in_progress', 200, 601, 9, 'lead_generation', JSON.stringify({ crm_lead_id: 'crm-123', external_project_id: 'ext-abc', lead_score: 42, approved: true, optional_note: null, 'source.id': 'dot-123' }), '2026-07-20 12:00:00', 9105, 1, 'Different Sales lead', 'review', 99, 501, 7, 'lead_generation', JSON.stringify({ crm_lead_id: 'crm-999', external_project_id: 'ext-999', lead_score: 7, approved: false, optional_note: 'present', 'source.id': 'dot-other' }), '2026-07-20 13:00:00');
 
-  const agencyKey = (await issueMcpApiKeyForAgent(db, 7)).apiKey;
+  const salesKey = (await issueMcpApiKeyForAgent(db, 7)).apiKey;
   const otherProjectKey = (await issueMcpApiKeyForAgent(db, 8)).apiKey;
   const otherTenantKey = (await issueMcpApiKeyForAgent(db, 9)).apiKey;
   for (const agentId of [7, 8, 9]) {
@@ -100,19 +100,19 @@ async function seedProjectTaskSearchFixture(): Promise<{ agencyKey: string; othe
           ]);
   }
 
-  return { agencyKey, otherProjectKey, otherTenantKey };
+  return { salesKey, otherProjectKey, otherTenantKey };
 }
 
 describe('POST /api/v1/tasks/project-search', () => {
   let server: Server | undefined;
   let baseUrl: string;
-  let agencyKey: string;
+  let salesKey: string;
   let otherProjectKey: string;
   let otherTenantKey: string;
 
   beforeEach(async () => {
     await setupTestDb();
-    ({ agencyKey, otherProjectKey, otherTenantKey } = await seedProjectTaskSearchFixture());
+    ({ salesKey, otherProjectKey, otherTenantKey } = await seedProjectTaskSearchFixture());
     ({ server, baseUrl } = await startServer());
   });
 
@@ -124,7 +124,7 @@ describe('POST /api/v1/tasks/project-search', () => {
   it('finds an active same-project task by exact crm_lead_id with minimal summaries', async () => {
     const response = await fetch(`${baseUrl}/api/v1/tasks/project-search`, {
       method: 'POST',
-      headers: authHeaders(agencyKey),
+      headers: authHeaders(salesKey),
       body: JSON.stringify({
         workflow_id: 501,
         task_type: 'lead_generation',
@@ -156,7 +156,7 @@ describe('POST /api/v1/tasks/project-search', () => {
   it('finds by exact external_project_id and applies bounded pagination', async () => {
     const response = await fetch(`${baseUrl}/api/v1/tasks/project-search`, {
       method: 'POST',
-      headers: authHeaders(agencyKey),
+      headers: authHeaders(salesKey),
       body: JSON.stringify({
         statuses: ['in_progress', 'review'],
         custom_fields: { external_project_id: 'ext-abc' },
@@ -182,7 +182,7 @@ describe('POST /api/v1/tasks/project-search', () => {
   ])('matches %s custom-field values exactly', async (_label, key, value) => {
     const response = await fetch(`${baseUrl}/api/v1/tasks/project-search`, {
       method: 'POST',
-      headers: authHeaders(agencyKey),
+      headers: authHeaders(salesKey),
       body: JSON.stringify({ custom_fields: { [key]: value } }),
     });
     const body = await response.json() as { tasks: Array<Record<string, unknown>>; total: number };
@@ -200,7 +200,7 @@ describe('POST /api/v1/tasks/project-search', () => {
   it('does not reveal another project or tenant when matching filters exist elsewhere', async () => {
     const otherWorkflowResponse = await fetch(`${baseUrl}/api/v1/tasks/project-search`, {
       method: 'POST',
-      headers: authHeaders(agencyKey),
+      headers: authHeaders(salesKey),
       body: JSON.stringify({
         workflow_id: 502,
         custom_fields: { crm_lead_id: 'crm-123' },
@@ -238,7 +238,7 @@ describe('POST /api/v1/tasks/project-search', () => {
   it('rejects unsafe custom-field filter shapes before querying', async () => {
     const response = await fetch(`${baseUrl}/api/v1/tasks/project-search`, {
       method: 'POST',
-      headers: authHeaders(agencyKey),
+      headers: authHeaders(salesKey),
       body: JSON.stringify({
         custom_fields: { 'crm_lead_id")) OR 1=1 --': 'crm-123' },
       }),

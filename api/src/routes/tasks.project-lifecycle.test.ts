@@ -24,7 +24,7 @@ beforeEach(async () => {
   db = await setupTestDb();
   await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Test', 'test', 1), (2, 'Other', 'other', 0)`);
   await db.run(`INSERT INTO app_settings (key, value) VALUES ('default_tenant_id', '1'), ('active_tenant_id', '1')`);
-  await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (1, 1, 'Agency'), (2, 1, 'Other project'), (3, 2, 'Other tenant')`);
+  await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (1, 1, 'Sales'), (2, 1, 'Other project'), (3, 2, 'Other tenant')`);
   await db.run(`INSERT INTO workflow_types (tenant_id, key, name) VALUES (1, 'lead_generation', 'Lead Generation')`);
   await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name, workflow_type)
     VALUES (10, 1, 1, 'Leads', 'lead_generation'), (11, 1, 2, 'Other leads', 'lead_generation'), (12, 2, 3, 'Tenant leads', 'lead_generation')`);

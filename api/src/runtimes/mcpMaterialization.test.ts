@@ -51,7 +51,7 @@ describe('materializeAgentMcpConfig', () => {
     await getDb().run(`INSERT INTO agents (id, tenant_id, name, session_key) VALUES (1, 1, 'Agent', 'agent:test-1:main')`);
     await getDb().run(`INSERT INTO mcp_servers (id, tenant_id, name, slug, command, args) VALUES (40, 1, 'CRM', 'crm', '/bin/bash', '["/crm/run-mcp.sh"]')`);
     await getDb().run(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id, overrides) VALUES (1,40,?)`, JSON.stringify({
-      enforce_tool_allowlist: true, tool_allowlist: ['correction'], env: { CRM_AGENT_KEY_FILE: '/private/keys/james.env' },
+      enforce_tool_allowlist: true, tool_allowlist: ['correction'], env: { CRM_AGENT_KEY_FILE: '/private/keys/sales-agent.env' },
     }));
     const workingDirectory = makeTempDir('agent-hq-gateway-');
     const result = await materializeAgentMcpConfig({ db: getDb(), agentId: 1, workingDirectory });
@@ -61,7 +61,7 @@ describe('materializeAgentMcpConfig', () => {
     expect(server.args[0]).toMatch(/mcp-tool-gateway\.js$/);
     expect(server.args.join(' ')).not.toContain('/private/keys');
     expect(JSON.parse(server.env.AGENT_HQ_MCP_UPSTREAM)).toMatchObject({ command: '/bin/bash', args: ['/crm/run-mcp.sh'], allowedTools: ['correction'] });
-    expect(server.env.CRM_AGENT_KEY_FILE).toBe('/private/keys/james.env');
+    expect(server.env.CRM_AGENT_KEY_FILE).toBe('/private/keys/sales-agent.env');
     expect(server.toolFilter.include).toEqual(['correction']);
     expect(server.enforce_tool_allowlist).toBeUndefined();
   });
@@ -186,7 +186,7 @@ describe('materializeAgentMcpConfig', () => {
         'crm_update_lead_status',
         'crm_log_activity',
         'crm_submit_proposal_to_platform',
-        'crm_submit_freelancer_bid',
+        'crm_submit_marketplace_bid',
       ],
       developmentQa: [
         'crm_search_accounts',
@@ -206,7 +206,7 @@ describe('materializeAgentMcpConfig', () => {
       { id: 103, name: 'Sales Ops', assignmentId: 79888, tools: crmToolsByRole.salesOps },
       { id: 104, name: 'Development QA', assignmentId: 79889, tools: crmToolsByRole.developmentQa },
     ];
-    await getDb().run(`INSERT INTO mcp_servers (id, tenant_id, name, slug, command, args) VALUES (40, 1, 'Agency CRM', 'agency-crm', 'node', '["crm-mcp.js"]')`);
+    await getDb().run(`INSERT INTO mcp_servers (id, tenant_id, name, slug, command, args) VALUES (40, 1, 'Example CRM', 'example-crm', 'node', '["crm-mcp.js"]')`);
     const effectiveToolsByRole = new Map<string, string[]>();
 
     for (const agent of agents) {
@@ -226,7 +226,7 @@ describe('materializeAgentMcpConfig', () => {
               workingDirectory,
             });
       const config = JSON.parse(fs.readFileSync(path.join(workingDirectory, '.mcp.json'), 'utf8'));
-      const server = config.mcpServers[`agency-crm__agent-${agent.id}`];
+      const server = config.mcpServers[`example-crm__agent-${agent.id}`];
       effectiveToolsByRole.set(agent.name, server.toolFilter.include);
 
       expect(result.ok).toBe(true);
@@ -234,7 +234,7 @@ describe('materializeAgentMcpConfig', () => {
       expect(server.toolFilter.include).toHaveLength(agent.tools.length);
       expect(server.agentHqAssignment).toMatchObject({
         id: agent.assignmentId,
-        mcpServerSlug: 'agency-crm',
+        mcpServerSlug: 'example-crm',
         toolAllowlist: {
           source: 'assignment_override',
           malformed: false,
@@ -250,13 +250,13 @@ describe('materializeAgentMcpConfig', () => {
     expect(effectiveToolsByRole.get('Development QA')).toHaveLength(9);
     expect(effectiveToolsByRole.get('Sales Ops')).toEqual(expect.arrayContaining([
       'crm_submit_proposal_to_platform',
-      'crm_submit_freelancer_bid',
+      'crm_submit_marketplace_bid',
     ]));
     expect(effectiveToolsByRole.get('Development QA')).not.toEqual(expect.arrayContaining([
       'crm_upsert_lead',
       'crm_record_approval',
       'crm_submit_proposal_to_platform',
-      'crm_submit_freelancer_bid',
+      'crm_submit_marketplace_bid',
     ]));
   });
 
@@ -266,7 +266,7 @@ describe('materializeAgentMcpConfig', () => {
       INSERT INTO agents (id, tenant_id, name, session_key)
       VALUES (1, 1, 'Missing', 'agent:missing:main'), (2, 1, 'Malformed', 'agent:malformed:main')
     `);
-    await getDb().run(`INSERT INTO mcp_servers (id, tenant_id, name, slug, command, args) VALUES (40, 1, 'Agency CRM', 'agency-crm', 'node', '["crm-mcp.js"]')`);
+    await getDb().run(`INSERT INTO mcp_servers (id, tenant_id, name, slug, command, args) VALUES (40, 1, 'Example CRM', 'example-crm', 'node', '["crm-mcp.js"]')`);
     await getDb().run(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id, overrides) VALUES (1, 40, '{}')`);
     await getDb().run(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id, overrides) VALUES (2, 40, '{"allowed_tools":"crm_search_leads"}')`);
 
@@ -278,7 +278,7 @@ describe('materializeAgentMcpConfig', () => {
               workingDirectory,
             });
       const config = JSON.parse(fs.readFileSync(path.join(workingDirectory, '.mcp.json'), 'utf8'));
-      const server = config.mcpServers[`agency-crm__agent-${agentId}`];
+      const server = config.mcpServers[`example-crm__agent-${agentId}`];
 
       expect(result.ok).toBe(true);
       expect(server.toolFilter.include).toEqual(['__agent_hq_no_allowed_mcp_tools__']);
@@ -295,7 +295,7 @@ describe('materializeAgentMcpConfig', () => {
   it('does not materialize disabled MCP assignments or disabled MCP servers', async () => {
     await createRegistryTables();
     await getDb().run(`INSERT INTO agents (id, tenant_id, name, session_key) VALUES (1, 1, 'Agent', 'agent:test-1:main')`);
-    await getDb().run(`INSERT INTO mcp_servers (id, tenant_id, name, slug, command, args, enabled) VALUES (40, 1, 'Agency CRM', 'agency-crm', 'node', '["crm-mcp.js"]', 1)`);
+    await getDb().run(`INSERT INTO mcp_servers (id, tenant_id, name, slug, command, args, enabled) VALUES (40, 1, 'Example CRM', 'example-crm', 'node', '["crm-mcp.js"]', 1)`);
     await getDb().run(`INSERT INTO mcp_servers (id, tenant_id, name, slug, command, args, enabled) VALUES (41, 1, 'Disabled CRM', 'disabled-crm', 'node', '["crm-mcp.js"]', 0)`);
     await getDb().run(`
       INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id, overrides, enabled)
@@ -714,7 +714,7 @@ describe('materializeAgentMcpConfig', () => {
       },
     }), 'utf8');
     const hermesHome = makeTempDir('agent-hq-hermes-cleanup-');
-    await getDb().run(`INSERT INTO agents (id, tenant_id, name, session_key, openclaw_agent_id, runtime_type, workspace_path) VALUES (1, 1, 'Harlow', 'agent:agency-tooling-pm:main', 'agency-tooling-pm', 'hermes', ?)`, hermesHome);
+    await getDb().run(`INSERT INTO agents (id, tenant_id, name, session_key, openclaw_agent_id, runtime_type, workspace_path) VALUES (1, 1, 'Tooling PM', 'agent:tooling-pm:main', 'tooling-pm', 'hermes', ?)`, hermesHome);
     await getDb().run(`INSERT INTO mcp_servers (id, tenant_id, name, slug, command, args) VALUES (30, 1, 'Agent HQ', 'agent-hq', 'node', '["server.js"]')`);
     await getDb().run(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (1, 30)`);
 
@@ -928,7 +928,7 @@ describe('materializeAgentMcpConfig', () => {
         defaults: { workspace: path.join(root, 'ws-default') },
         list: [
           { id: 'main', default: true },
-          { id: 'agency-tooling-pm', workspace: openClawWorkspace },
+          { id: 'tooling-pm', workspace: openClawWorkspace },
         ],
       },
       mcp: {
@@ -943,9 +943,9 @@ describe('materializeAgentMcpConfig', () => {
       },
     }), 'utf8');
     await getDb().run(`INSERT INTO agents (id, tenant_id, name, session_key, openclaw_agent_id, runtime_type, workspace_path)
-       VALUES (99974444, 1, 'Harlow', 'agent:agency-tooling-pm:main', 'agency-tooling-pm', 'openclaw', ?)`, storedWorkspace);
+       VALUES (4444, 1, 'Tooling PM', 'agent:tooling-pm:main', 'tooling-pm', 'openclaw', ?)`, storedWorkspace);
     await getDb().run(`INSERT INTO mcp_servers (id, tenant_id, name, slug, command, args) VALUES (30, 1, 'Agent HQ', 'agent-hq', 'node', '["server.js"]')`);
-    await getDb().run(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (99974444, 30)`);
+    await getDb().run(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (4444, 30)`);
     const refreshOpenClawPluginRegistry = jest.fn(() => ({
       ok: true,
       command: 'openclaw',
@@ -955,7 +955,7 @@ describe('materializeAgentMcpConfig', () => {
 
     const result = await syncAssignedMcpForAgent({
           db: getDb(),
-          agentId: 99974444,
+          agentId: 4444,
           materializeOpenClawGlobalConfig: true,
           refreshOpenClawPluginRegistry,
         });
@@ -964,21 +964,21 @@ describe('materializeAgentMcpConfig', () => {
 
     expect(result.ok).toBe(true);
     expect(result.workingDirectory).toBe(openClawWorkspace);
-    expect(bundleConfig.mcpServers['agent-hq__agent-99974444'].env.AGENT_HQ_MCP_API_KEY).toMatch(/^ahq_mcp_/);
+    expect(bundleConfig.mcpServers['agent-hq__agent-4444'].env.AGENT_HQ_MCP_API_KEY).toMatch(/^ahq_mcp_/);
     expect(fs.existsSync(path.join(storedWorkspace, '.openclaw', 'extensions', 'agent-hq-mcp', '.mcp.json'))).toBe(false);
     expect(openClawConfig.plugins.entries['agent-hq-mcp']).toEqual({ enabled: true });
-    expect(openClawConfig.mcp.servers['agent-hq__agent-99974444']).toMatchObject({
+    expect(openClawConfig.mcp.servers['agent-hq__agent-4444']).toMatchObject({
       command: 'node',
       args: ['server.js'],
-      codex: { agents: ['agency-tooling-pm'] },
+      codex: { agents: ['tooling-pm'] },
     });
-    expect(openClawConfig.mcp.servers['agent-hq__agent-99974444'].env.AGENT_HQ_MCP_API_KEY).toBe(
-      bundleConfig.mcpServers['agent-hq__agent-99974444'].env.AGENT_HQ_MCP_API_KEY,
+    expect(openClawConfig.mcp.servers['agent-hq__agent-4444'].env.AGENT_HQ_MCP_API_KEY).toBe(
+      bundleConfig.mcpServers['agent-hq__agent-4444'].env.AGENT_HQ_MCP_API_KEY,
     );
     expect(openClawConfig.mcp.servers['agent-hq__agent-94'].env.AGENT_HQ_MCP_API_KEY).toBe('other-agent-key');
     expect(refreshOpenClawPluginRegistry).toHaveBeenCalledTimes(1);
     expect(refreshOpenClawPluginRegistry).toHaveBeenCalledWith(expect.objectContaining({
-      agentId: 99974444,
+      agentId: 4444,
       workingDirectory: openClawWorkspace,
       materializedCount: 1,
     }));

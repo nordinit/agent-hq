@@ -138,7 +138,7 @@ test('allocates lanes deterministically regardless of input order', () => {
 });
 
 test('handles the real-world worst case without exploding lane count', () => {
-  // Agency / Internal Tool Development: 14 statuses, 39 distinct node pairs.
+  // A production-sized workflow: 14 statuses, 39 distinct node pairs.
   const ids = Array.from({ length: 14 }, (_, index) => `s${index}`);
   const edges: LayoutInputEdge[] = [];
   let id = 1;

@@ -2379,7 +2379,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       method: 'POST',
       headers: authHeaders(normalKey),
       body: JSON.stringify({
-        title: 'Agency defect follow-up',
+        title: 'Sales defect follow-up',
         project_id: 86,
         workflow_id: 42,
         task_type: 'dev',

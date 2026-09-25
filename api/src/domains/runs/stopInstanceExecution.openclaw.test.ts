@@ -14,7 +14,7 @@ jest.mock('../../runtimes/openclaw/gatewayClient', () => ({
 const rpc = jest.mocked(gatewayRpcCall);
 const send = jest.mocked(gatewayWsSend);
 let db: Db;
-const target = { runtimeType: 'openclaw', runId: 'gateway-old', sessionKey: 'agent:agency-tooling-pm:run:700:durable' };
+const target = { runtimeType: 'openclaw', runId: 'gateway-old', sessionKey: 'agent:tooling-pm:run:700:durable' };
 
 beforeEach(async () => {
   db = await setupTestDb();
@@ -23,7 +23,7 @@ beforeEach(async () => {
     INSERT INTO projects (id, tenant_id, name) VALUES (1, 1, 'Test');
     INSERT INTO workflows (id, tenant_id, project_id, name) VALUES (1, 1, 1, 'Test');
     INSERT INTO agents (id, tenant_id, name, session_key, runtime_type)
-      VALUES (91, 1, 'Harlow', 'agent:agency-tooling-pm:main', 'openclaw');
+      VALUES (91, 1, 'Harlow', 'agent:tooling-pm:main', 'openclaw');
     INSERT INTO tasks (id, tenant_id, project_id, workflow_id, title, status, agent_id)
       VALUES (1792, 1, 1, 1, 'Test stop', 'in_progress', 91);
     INSERT INTO job_instances (id, tenant_id, agent_id, task_id, status, session_key, response)
