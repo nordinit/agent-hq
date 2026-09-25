@@ -3,8 +3,9 @@ import type { Scalar, TelemetryResult } from './telemetryTypes.ts';
 import { createClientId } from './clientId.ts';
 
 export const dashboardId = createClientId;
+// `templates` counts enabled agents (/api/v1/stats enabledTemplates); job templates were merged into agents, and the key stays because saved pages reference it.
 export const operationLabels: Record<DashboardOperation, string> = {
-  agents: 'Total agents', active_runs: 'Active runs', templates: 'Enabled templates', runs: 'Runs · last 24h',
+  agents: 'Total agents', active_runs: 'Active runs', templates: 'Enabled agents', runs: 'Runs · last 24h',
   completed_runs: 'Completed runs · last 24h', tokens: 'Tokens · last 24h', failed_runs: 'Failed runs · last 24h',
   failures: 'Recent failures', completed_tasks: 'Completed tasks · last 24h', links: 'Quick links',
 };
