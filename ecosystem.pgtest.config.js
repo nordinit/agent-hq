@@ -19,7 +19,7 @@
  *   createdb agent_hq_pgtest
  *   cd api && npm run build
  *   DATABASE_URL=postgresql://localhost/agent_hq_pgtest npm run db:install
- *   pm2 start ecosystem.pgtest.config.js
+ *   AGENT_HQ_PGTEST_OPERATOR_TOKEN=$(openssl rand -hex 32) pm2 start ecosystem.pgtest.config.js
  *   pm2 logs agent-hq-pgtest-api
  */
 const fs = require('fs');
@@ -31,6 +31,8 @@ const apiPort = process.env.AGENT_HQ_PGTEST_API_PORT || '3531';
 const uiPort = process.env.AGENT_HQ_PGTEST_UI_PORT || '3530';
 const databaseUrl = process.env.AGENT_HQ_PGTEST_DATABASE_URL
   || 'postgresql://localhost/agent_hq_pgtest';
+// Its own token, so signing in here never signs in to production on the same host.
+const operatorToken = process.env.AGENT_HQ_PGTEST_OPERATOR_TOKEN;
 
 const nodeBin = [
   process.env.AGENT_HQ_NODE_BIN,
@@ -63,6 +65,7 @@ module.exports = {
         WORKSPACE_PARENT: path.join(repoRoot, '.pgtest-workspaces'),
         WORKSPACE_ROOT: path.join(repoRoot, '.pgtest-workspaces'),
         AGENT_HQ_UPLOADS_DIR: path.join(repoRoot, '.pgtest-uploads'),
+        AGENT_HQ_OPERATOR_TOKEN: operatorToken,
       },
       autorestart: false, // a crash should stay visible during testing, not restart-loop
       watch: false,
@@ -78,6 +81,7 @@ module.exports = {
         PORT: uiPort,
         AGENT_HQ_INTERNAL_BASE_URL: `http://127.0.0.1:${apiPort}`,
         NEXT_PUBLIC_API_URL: `http://127.0.0.1:${apiPort}`,
+        AGENT_HQ_OPERATOR_TOKEN: operatorToken,
       },
       autorestart: false,
       watch: false,

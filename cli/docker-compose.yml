@@ -66,6 +66,9 @@ services:
       WORKSPACE_PARENT: /app/workspaces
       AGENT_CONTRACT_ROOT: /app/agent-contracts
       AGENT_HQ_UPLOADS_DIR: /app/uploads
+      # Every /api/v1 request must present this token or an agent MCP key; the UI signs in with it.
+      AGENT_HQ_OPERATOR_TOKEN: &operator-token "${AGENT_HQ_OPERATOR_TOKEN:?AGENT_HQ_OPERATOR_TOKEN is required - generate one with openssl rand -hex 32 and put it in the .env file next to this compose file (agent-hq start does this for you)}"
+      AGENT_HQ_AUTH_MODE: ${AGENT_HQ_AUTH_MODE:-enforce}
     volumes:
       - agent-hq-workspaces:/app/workspaces
       - agent-hq-contracts:/app/agent-contracts
@@ -90,11 +93,13 @@ services:
       NODE_ENV: production
       PORT: "3500"
       AGENT_HQ_INTERNAL_BASE_URL: http://agent-hq-api:3501
+      AGENT_HQ_OPERATOR_TOKEN: *operator-token
     depends_on:
       agent-hq-api:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:3500"]
+      # The sign-in page is the one page that answers without a session.
+      test: ["CMD", "wget", "-qO-", "http://localhost:3500/login"]
       interval: 30s
       timeout: 10s
       retries: 5

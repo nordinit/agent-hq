@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { localStart, localStop, localStatus, ensureBundledOpenClawPluginConfig } from './local.mjs';
 import { cmdInit } from './init.mjs';
 import { printRuntimeStatus, runInit as runApiOnboarding } from './onboarding.mjs';
+import { ensureOperatorToken, readOperatorToken, signedInUiUrl, withOperatorAuth } from './operator-token.mjs';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const COMPOSE_SOURCE = join(__dirname, '..', 'docker-compose.yml');
@@ -26,7 +27,8 @@ Commands:
   restart   Restart Agent HQ
   stop      Stop Agent HQ
   status    Show current runtime status
-  open      Open the Agent HQ UI in a browser
+  open      Open the Agent HQ UI in a browser, signed in
+  token     Print the operator token that signs in to the UI and API
   help      Show this help message
 
 Options:
@@ -52,6 +54,9 @@ Init options:
 Agent HQ defaults to Docker Compose, including PostgreSQL 17.
 Native mode is explicit and requires DATABASE_URL or AGENT_HQ_DATABASE_URL.
 
+The first start generates an operator token and keeps it in ~/.agent-hq/.env
+(mode 0600). AGENT_HQ_OPERATOR_TOKEN in the environment takes precedence.
+
 Examples:
   agent-hq init --dry-run
   agent-hq onboard --api-url http://localhost:3501 --template software-qa
@@ -62,6 +67,7 @@ Examples:
   agent-hq start --docker
   agent-hq start --port-ui 8080
   agent-hq status
+  agent-hq token | pbcopy
   agent-hq stop
 `.trim();
 
@@ -147,11 +153,32 @@ function ensureDataDir() {
   return DATA_DIR;
 }
 
+/** The stored operator token, created on first use. Compose refuses to run without one. */
+function operatorToken() {
+  try {
+    const result = ensureOperatorToken(DATA_DIR);
+    if (result.created) info(`Generated an operator token in ${result.file}.`);
+    return result.token;
+  } catch (error) {
+    die(error instanceof Error ? error.message : String(error));
+  }
+}
+
+/** The operator token if one exists; never creates one. */
+function existingOperatorToken() {
+  try {
+    return readOperatorToken(DATA_DIR);
+  } catch (error) {
+    die(error instanceof Error ? error.message : String(error));
+  }
+}
+
 function compose(args, opts = {}) {
   const cwd = ensureDataDir();
   const cmd = ['docker', 'compose', ...args].join(' ');
+  const env = { ...process.env, AGENT_HQ_OPERATOR_TOKEN: operatorToken() };
   try {
-    execSync(cmd, { cwd, stdio: 'inherit', ...opts });
+    execSync(cmd, { cwd, stdio: 'inherit', env, ...opts });
   } catch (e) {
     if (!opts.ignoreError) {
       die(`Command failed: ${cmd}`);
@@ -264,7 +291,7 @@ function cmdStart(flags) {
   success(`Agent HQ is starting!`);
   console.log(`  UI:  http://localhost:${uiPort}`);
   console.log(`  API: http://localhost:${apiPort}`);
-  console.log(`\n  Run \x1b[1magent-hq open\x1b[0m to open the UI in your browser.`);
+  console.log(`\n  Run \x1b[1magent-hq open\x1b[0m to open the UI signed in, or \x1b[1magent-hq token\x1b[0m to print the operator token.`);
 }
 
 function cmdStop(flags) {
@@ -316,7 +343,8 @@ async function cmdStatus(flags) {
   if (flags.noDocker || (!flags.docker && localState?.mode === 'local')) {
     localStatus();
     if (localState?.mode === 'local') {
-      await printRuntimeStatus(`http://localhost:${localState.apiPort}`).catch(error => {
+      const fetchAsOperator = withOperatorAuth(fetch, existingOperatorToken());
+      await printRuntimeStatus(`http://localhost:${localState.apiPort}`, fetchAsOperator).catch(error => {
         warn(`Runtime status unavailable: ${error.message}`);
       });
     }
@@ -330,10 +358,24 @@ async function cmdStatus(flags) {
 
 function cmdOpen(flags) {
   setPortEnv(flags);
-  const uiPort = getUiPort();
-  const url = `http://localhost:${uiPort}`;
-  info(`Opening ${url}…`);
-  openBrowser(url);
+  const base = `http://localhost:${getUiPort()}`;
+  const token = existingOperatorToken();
+  if (!token) {
+    warn('No operator token found yet; the UI will ask for one. Run `agent-hq start` first.');
+    info(`Opening ${base}…`);
+    openBrowser(base);
+    return;
+  }
+  // The URL carries the token once; the UI signs in and redirects it out of the address bar.
+  info(`Opening ${base}, signed in…`);
+  openBrowser(signedInUiUrl(base, token));
+}
+
+function cmdToken() {
+  const token = existingOperatorToken();
+  if (!token) die('No operator token yet. Run `agent-hq start` to generate one.');
+  // Bare on stdout so it can be piped; paste it on the UI's sign-in page.
+  console.log(token);
 }
 
 /** Read local state without importing local.mjs dependency (avoids circular). */
@@ -360,7 +402,7 @@ export async function run(argv) {
       break;
     }
     case 'onboard':
-      await runApiOnboarding(flags, { openBrowser });
+      await runApiOnboarding(flags, { openBrowser, operatorToken: existingOperatorToken() });
       break;
     case 'start':
       cmdStart(flags);
@@ -376,6 +418,9 @@ export async function run(argv) {
       break;
     case 'open':
       cmdOpen(flags);
+      break;
+    case 'token':
+      cmdToken();
       break;
     case 'help':
     case '--help':

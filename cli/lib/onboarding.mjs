@@ -1,6 +1,7 @@
 import { createInterface } from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
 import { spawnSync } from 'node:child_process';
+import { withOperatorAuth } from './operator-token.mjs';
 
 export const PROVIDERS = [
   {
@@ -673,7 +674,8 @@ async function runStarterTemplateSetup(apiBase, io, fetchImpl, flags = {}) {
 
 export async function runInit(flags = {}, deps = {}) {
   const io = deps.io || createPromptIo();
-  const fetchImpl = deps.fetch || fetch;
+  // The API requires a credential; onboarding acts as the operator.
+  const fetchImpl = withOperatorAuth(deps.fetch || fetch, deps.operatorToken);
   const openBrowser = deps.openBrowser || (() => {});
   const apiBase = normalizeApiBase(flags.apiUrl);
 

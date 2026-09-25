@@ -22,6 +22,7 @@ import {
 import { delimiter, dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { OPERATOR_TOKEN_ENV, ensureOperatorToken, operatorEnvFile } from './operator-token.mjs';
 
 const DATA_DIR = join(homedir(), '.agent-hq');
 const SOURCE_DIR = join(DATA_DIR, 'source');
@@ -180,13 +181,13 @@ function readPluginVersion(pluginDir) {
   }
 }
 
-function ensureAgentHqOpenClawPluginConfig(sourceDir) {
+function ensureAgentHqOpenClawPluginConfig(sourceDir, apiPort) {
   const pluginDir = join(sourceDir, AGENT_HQ_OPENCLAW_PLUGIN_RELATIVE_PATH);
   if (!existsSync(join(pluginDir, 'openclaw.plugin.json'))) {
     warn(`Agent HQ OpenClaw capability tools plugin was not found at ${pluginDir}.`);
     return false;
   }
-  return configureOpenClawPluginAt(pluginDir);
+  return configureOpenClawPluginAt(pluginDir, apiPort);
 }
 
 /**
@@ -195,7 +196,7 @@ function ensureAgentHqOpenClawPluginConfig(sourceDir) {
  * the data dir — npx caches are ephemeral, and openclaw.json keeps an absolute
  * path — then wire it into the OpenClaw config.
  */
-export function ensureBundledOpenClawPluginConfig() {
+export function ensureBundledOpenClawPluginConfig(apiPort = process.env.AGENT_HQ_API_PORT || '3501') {
   const candidates = [
     // Published package layout: <package root>/plugin
     join(MODULE_DIR, '..', 'plugin'),
@@ -216,10 +217,10 @@ export function ensureBundledOpenClawPluginConfig() {
     warn(`Could not copy the Agent HQ OpenClaw plugin to ${managedDir}.\n  ${error instanceof Error ? error.message : String(error)}`);
     return false;
   }
-  return configureOpenClawPluginAt(managedDir);
+  return configureOpenClawPluginAt(managedDir, apiPort);
 }
 
-function configureOpenClawPluginAt(pluginDir) {
+function configureOpenClawPluginAt(pluginDir, apiPort) {
   let config;
   try {
     config = readJsonObjectFile(OPENCLAW_CONFIG_FILE);
@@ -235,10 +236,23 @@ function configureOpenClawPluginAt(pluginDir) {
   const entries = plugins.entries && typeof plugins.entries === 'object' && !Array.isArray(plugins.entries)
     ? plugins.entries
     : {};
-  const existingEntry = entries[AGENT_HQ_OPENCLAW_PLUGIN_ID];
+  const existingEntry = entries[AGENT_HQ_OPENCLAW_PLUGIN_ID] && typeof entries[AGENT_HQ_OPENCLAW_PLUGIN_ID] === 'object' && !Array.isArray(entries[AGENT_HQ_OPENCLAW_PLUGIN_ID])
+    ? entries[AGENT_HQ_OPENCLAW_PLUGIN_ID]
+    : {};
+  const existingPluginConfig = existingEntry.config && typeof existingEntry.config === 'object' && !Array.isArray(existingEntry.config)
+    ? existingEntry.config
+    : {};
   entries[AGENT_HQ_OPENCLAW_PLUGIN_ID] = {
-    ...(existingEntry && typeof existingEntry === 'object' && !Array.isArray(existingEntry) ? existingEntry : {}),
+    ...existingEntry,
     enabled: true,
+    // The plugin calls the API, which requires a credential. It reads the operator token from the
+    // file on each call, so the secret itself stays out of openclaw.json and out of the
+    // gateway's environment, which every tool the plugin runs inherits.
+    config: {
+      ...existingPluginConfig,
+      apiUrl: `http://127.0.0.1:${apiPort}`,
+      apiTokenFile: operatorEnvFile(DATA_DIR),
+    },
   };
 
   const load = plugins.load && typeof plugins.load === 'object' && !Array.isArray(plugins.load)
@@ -562,7 +576,7 @@ export function localStart(flags) {
     if (apiAlive && uiAlive) {
       const sourceForConfig = resolveAvailableSourceForOpenClawConfig();
       if (sourceForConfig) {
-        ensureAgentHqOpenClawPluginConfig(sourceForConfig);
+        ensureAgentHqOpenClawPluginConfig(sourceForConfig, existing.apiPort);
       }
       info('Agent HQ is already running (local mode).');
       console.log(`  UI:  http://localhost:${existing.uiPort}`);
@@ -574,10 +588,17 @@ export function localStart(flags) {
   }
 
   const databaseUrl = localDatabaseUrl();
+  let operatorToken;
+  try {
+    operatorToken = ensureOperatorToken(DATA_DIR);
+  } catch (error) {
+    die(error instanceof Error ? error.message : String(error));
+  }
+  if (operatorToken.created) info(`Generated an operator token in ${operatorToken.file}.`);
 
   // 1. Fetch / update source
   const sourceDir = ensureSource();
-  ensureAgentHqOpenClawPluginConfig(sourceDir);
+  ensureAgentHqOpenClawPluginConfig(sourceDir, apiPort);
 
   // 2. Build API
   buildPackage(sourceDir, 'api');
@@ -611,6 +632,7 @@ export function localStart(flags) {
         NODE_ENV: 'production',
         PORT: apiPort,
         AGENT_HQ_DATA_DIR: DATA_DIR,
+        [OPERATOR_TOKEN_ENV]: operatorToken.token,
         PATH: runtimePath,
       }),
     },
@@ -630,9 +652,10 @@ export function localStart(flags) {
         ...process.env,
         NODE_ENV: 'production',
         PORT: uiPort,
-        // Loopback only: the API behind this UI has no login yet.
+        // Loopback by default: agents run commands on this host.
         HOSTNAME: process.env.AGENT_HQ_UI_HOST || '127.0.0.1',
         NEXT_PUBLIC_API_URL: `http://localhost:${apiPort}`,
+        [OPERATOR_TOKEN_ENV]: operatorToken.token,
         PATH: runtimePath,
       },
     });
@@ -655,6 +678,7 @@ export function localStart(flags) {
           NODE_ENV: 'production',
           PORT: uiPort,
           NEXT_PUBLIC_API_URL: `http://localhost:${apiPort}`,
+          [OPERATOR_TOKEN_ENV]: operatorToken.token,
           PATH: runtimePath,
         },
       },
@@ -678,7 +702,7 @@ export function localStart(flags) {
   console.log('  DB:  PostgreSQL');
   console.log(`  Gateway: start and configure OpenClaw separately from Agent HQ.`);
   console.log(
-    `\n  Run \x1b[1magent-hq open\x1b[0m to open the UI in your browser.`,
+    `\n  Run \x1b[1magent-hq open\x1b[0m to open the UI signed in, or \x1b[1magent-hq token\x1b[0m to print the operator token.`,
   );
 }
 

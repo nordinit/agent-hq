@@ -58,6 +58,9 @@ module.exports = {
         TELEGRAM_BOT_TOKEN: env.TELEGRAM_BOT_TOKEN,
         TELEGRAM_CHAT_ID: env.TELEGRAM_CHAT_ID,
         NODE_TLS_REJECT_UNAUTHORIZED: env.NODE_TLS_REJECT_UNAUTHORIZED,
+        // Required: every /api/v1 request authenticates. `report` only logs refusals.
+        AGENT_HQ_OPERATOR_TOKEN: env.AGENT_HQ_OPERATOR_TOKEN,
+        AGENT_HQ_AUTH_MODE: env.AGENT_HQ_AUTH_MODE,
       },
       autorestart: true,
       watch: false,
@@ -75,6 +78,8 @@ module.exports = {
         AGENT_HQ_UI_HOST: env.AGENT_HQ_UI_HOST || '127.0.0.1',
         AGENT_HQ_INTERNAL_BASE_URL: env.AGENT_HQ_INTERNAL_BASE_URL || `http://127.0.0.1:${apiPort}`,
         NEXT_PUBLIC_API_URL: env.NEXT_PUBLIC_API_URL || `http://127.0.0.1:${apiPort}`,
+        // The sign-in page checks it and the /api/v1 proxy sends it; the browser never sees it.
+        AGENT_HQ_OPERATOR_TOKEN: env.AGENT_HQ_OPERATOR_TOKEN,
       },
       autorestart: true,
       watch: false,
