@@ -53,8 +53,9 @@ Development servers:
 # API: reads the repository-root .env
 cd api && npm run dev
 
-# UI: does not read the root .env, so pass the API address and the same token
-cd ui && AGENT_HQ_INTERNAL_BASE_URL=http://localhost:3501 AGENT_HQ_OPERATOR_TOKEN=<token> npm run dev
+# UI: does not read the root .env, so pass the API address and the same token.
+# -H 127.0.0.1 keeps the Next.js dev server on loopback (it otherwise listens on all interfaces).
+cd ui && AGENT_HQ_INTERNAL_BASE_URL=http://localhost:3501 AGENT_HQ_OPERATOR_TOKEN=<token> npm run dev -- -H 127.0.0.1
 ```
 
 Default ports:

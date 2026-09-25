@@ -623,8 +623,10 @@ Run the UI:
 cd ui
 AGENT_HQ_INTERNAL_BASE_URL=http://localhost:3501 \
 AGENT_HQ_OPERATOR_TOKEN=<same token as .env> \
-npm run dev
+npm run dev -- -H 127.0.0.1
 ```
+
+`-H 127.0.0.1` keeps the Next.js development server on loopback; without it, it listens on all interfaces.
 
 Default ports:
 
