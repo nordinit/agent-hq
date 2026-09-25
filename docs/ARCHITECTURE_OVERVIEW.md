@@ -1,6 +1,6 @@
 # Agent HQ Architecture Overview
 
-This document is the public-facing system overview for Agent HQ. It complements the deeper implementation notes in [INFRASTRUCTURE.md](../INFRASTRUCTURE.md).
+This document is the public-facing system overview for Agent HQ. It complements the deeper implementation notes in [INFRASTRUCTURE.md](INFRASTRUCTURE.md).
 
 ## System map
 
@@ -19,8 +19,11 @@ flowchart TB
     DB[("PostgreSQL 17<br/>tasks · agents · instances · transcripts")]
 
     subgraph Runtimes["Agent runtimes"]
-      OpenClaw["OpenClaw<br/>local hooks + chat"]
-      Claude["Claude Code<br/>local SDK / subprocess"]
+      OpenClaw["OpenClaw<br/>gateway sessions + chat"]
+      Claude["Claude Code<br/>local CLI process"]
+      Codex["Codex<br/>local CLI process"]
+      Hermes["Hermes<br/>local CLI process"]
+      Webhook["Webhook<br/>HTTP POST"]
     end
 
     Human --> UI
@@ -32,8 +35,14 @@ flowchart TB
     API --> Watchdog
     Dispatcher --> OpenClaw
     Dispatcher --> Claude
+    Dispatcher --> Codex
+    Dispatcher --> Hermes
+    Dispatcher --> Webhook
     OpenClaw --> API
     Claude --> API
+    Codex --> API
+    Hermes --> API
+    Webhook --> API
 ```
 
 ## Core components
@@ -49,9 +58,13 @@ flowchart TB
 
 Agent HQ supports multiple execution backends behind one workflow model:
 
-- `OpenClaw`: local agents with hooks, chat sessions, shell access, and workspace tools.
-- `Claude Code`: local SDK/subprocess-based runs with Agent HQ-provided context and callback contracts.
-The dispatcher chooses the correct runtime from the agent record. Task lifecycle and routing semantics stay consistent across runtimes.
+- `openclaw` (the default): agent sessions on an OpenClaw gateway, reached over its WebSocket API, with chat, shell access, and workspace tools.
+- `claude-code`: the Claude Code CLI, run as a local process with Agent HQ-provided context and callback contracts.
+- `codex`: the Codex CLI, run as a local process.
+- `hermes`: the Hermes CLI, run as a local process. See [hermes-runtime.md](hermes-runtime.md).
+- `webhook`: an HTTP POST of the task to a URL you configure, with an optional abort URL.
+
+The dispatcher chooses the runtime from the agent record (`api/src/runtimes/index.ts`). There is no runtime plugin interface: another agent system connects through the webhook runtime or a new `AgentRuntime` implementation in the codebase. Whatever the runtime, agents report lifecycle, evidence, and outcomes through the Agent HQ MCP tools, so task lifecycle and routing semantics stay consistent across runtimes. The local-runtime run contract is in [architecture/agent-runtime-boundary-v1.md](architecture/agent-runtime-boundary-v1.md).
 
 ## Workflow model
 

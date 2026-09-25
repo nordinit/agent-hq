@@ -2,13 +2,15 @@
 
 Operational architecture, data model, and execution flow for Agent HQ.
 
-This document is the implementation-facing companion to `README.md`.
+This document is the implementation-facing companion to `README.md` and
+[ARCHITECTURE_OVERVIEW.md](ARCHITECTURE_OVERVIEW.md). For installation, see
+[SELF_HOSTING.md](SELF_HOSTING.md).
 
 ---
 
 ## 1. System overview
 
-Agent HQ is a local orchestration layer that sits between human planning and AI agent execution.
+Agent HQ is an orchestration layer that sits between human planning and AI agent execution.
 
 It provides:
 - task/project/workflow state
@@ -26,86 +28,108 @@ It provides:
 ```text
 ┌────────────────────────────────────────────────────────────┐
 │                        Agent HQ UI                         │
-│                  Next.js · localhost:3500                   │
+│               Next.js · default 127.0.0.1:3500             │
 │                                                            │
-│  Dashboard | Tasks | Agents | Chat | Workflows | Routing   │
-│  Capabilities | Workspaces | Telemetry | Projects | Logs   │
+│  Dashboard | Agents | Teams | Tasks | Projects | Workflows │
+│  Workflow Definitions | Task Routing | Model Routing       │
+│  Telemetry | Capabilities | Workspaces | Chat | Settings   │
 └─────────────────────────┬──────────────────────────────────┘
-                          │ HTTP
+                          │ HTTP (server-side proxy, operator token)
                           ▼
 ┌────────────────────────────────────────────────────────────┐
 │                       Agent HQ API                         │
-│               Express/TypeScript · localhost:3501           │
+│          Express/TypeScript · default 127.0.0.1:3501       │
 │                                                            │
-│  Routes: tasks, agents, instances, projects, workflows,    │
-│          routing, telemetry, logs, chat, tools,             │
-│          dispatch, providers, github-identities             │
+│  /api/v1 REST · /mcp (Streamable HTTP MCP) · MCP OAuth     │
 │                                                            │
 │  Responsibilities:                                         │
 │  - task persistence + lifecycle                            │
 │  - routing rule resolution                                 │
 │  - job dispatch via runtime abstraction                    │
-│  - instance lifecycle (start/heartbeat/outcome/complete)   │
-│  - contract generation (workflow + transport)               │
+│  - instance lifecycle (start/check-in/outcome/complete)    │
+│  - contract generation (workflow + transport)              │
 │  - release evidence + integrity                            │
-│  - runtime end-event ingestion for transcript truth         │
+│  - runtime end-event ingestion for transcript truth        │
+│  - telemetry capture and queries                           │
 └───────────────┬───────────────────────┬────────────────────┘
                 │                       │
                 ▼                       ▼
-       PostgreSQL 17           Agent Runtimes
-      agent_hq database           │
-                                  ├─ OpenClaw Gateway (localhost:18789)
-                                  │    └─ local agents via hooks protocol
-                                  ├─ Claude Code (local subprocess)
-                                  ├─ Hermes (local CLI subprocess)
-                                  └─ Webhook (generic HTTP)
+         PostgreSQL 17           Agent runtimes
+                                  │
+                                  ├─ OpenClaw gateway (WebSocket, default port 18789)
+                                  ├─ Claude Code (local `claude` CLI process)
+                                  ├─ Codex (local `codex` CLI process)
+                                  ├─ Hermes (local `hermes` CLI process)
+                                  └─ Webhook (HTTP POST to a configured URL)
 ```
 
 ---
 
-## 3. Host environment
+## 3. Processes, ports, and background work
 
-- **Machine:** Mac mini (Apple Silicon / arm64)
-- **OS:** macOS / Darwin 24.6.0
-- **Node:** v24.14.0
-- **Repo path:** `~/agent-hq` ← canonical working repo
+Agent HQ runs as two processes, the API and the UI, plus PostgreSQL. The Docker Compose stack
+adds a one-shot migration container that must succeed before the API starts.
+
+| Service | Default | Notes |
+|--------|---------|-------|
+| UI | `127.0.0.1:3500` | `PORT`, `AGENT_HQ_UI_HOST`; reaches the API at `AGENT_HQ_INTERNAL_BASE_URL` |
+| API | `127.0.0.1:3501` | `PORT`, `HOST` |
+| PostgreSQL | `DATABASE_URL` | PostgreSQL 17; not published to the host by Compose |
+| OpenClaw gateway | `127.0.0.1:18789` | `OPENCLAW_GATEWAY_URL`, or the port in `~/.openclaw/openclaw.json` |
+
+Compose publishes the UI and API ports on `AGENT_HQ_BIND_ADDRESS` (default `127.0.0.1`).
+`ecosystem.dev.config.js` runs a second instance on 3510/3511 against
+`AGENT_HQ_DEV_DATABASE_URL`, for installs that keep a development copy beside production.
+
+The API process also runs the background loops. They start only after the startup schema
+check passes:
+
+| Loop | Interval | What it does |
+|---|---|---|
+| Reconciler | ~12s | Runtime execution reconciliation, missing-outcome handling after a runtime ends, recurring task series, per-project dispatch, review routing, orphaned in-progress recovery, token backfill |
+| Watchdog | 60s | Startup, heartbeat, and execution-timeout detection; stops and records stale runs |
+| Worktree prune | 30 min | Removes orphaned task worktrees |
+| Workflow check | 5 min | Completes workflows that reached their time or run limit |
+| Telemetry workers | continuous | Project captured observations; run queued telemetry queries |
+
+`AGENT_HQ_DISABLE_AUTOMATION=1` turns off the reconciler and watchdog (telemetry capture keeps
+running). Task mutations also trigger an immediate dispatch pass for the affected project.
 
 ---
 
-## 4. Ports
+## 4. Key paths
 
-| Service | Port | Notes |
-|--------|------|------|
-| Agent HQ Production UI | 3500 | live Next.js app |
-| Agent HQ Production API | 3501 | live Express API |
-| Agent HQ Dev UI | 3510 | implementation + QA/review environment |
-| Agent HQ Dev API | 3511 | implementation + QA/review environment |
-| OpenClaw Gateway | 18789 | runtime, chat, hook-backed orchestration |
-## 5. Key directories
-
-| Purpose | Path |
+| Purpose | Default |
 |--------|------|
-| Agent HQ repo | `~/agent-hq` |
-| PostgreSQL connection | `DATABASE_URL` (production) / `AGENT_HQ_DEV_DATABASE_URL` (dev config input) |
-| OpenClaw root | `~/.openclaw/` |
-| Agent sessions | `~/.openclaw/agents/*/sessions/` |
-| Agent workspaces | `~/.openclaw/workspace-*` |
+| CLI data directory | `~/.agent-hq/` (operator token in `.env`, `config.json`, `local.json`, native-mode `source/`, the packaged `docker-compose.yml`) |
+| Agent contract templates | `agent-contracts/` in the repository, or `AGENT_CONTRACT_ROOT` |
+| Uploaded files | `uploads/` in the repository, or `AGENT_HQ_UPLOADS_DIR` |
+| Starter agent workspaces | `~/.openclaw/workspace-<tenant>-<agent>`, or under `WORKSPACE_PARENT` |
+| Task worktrees | `task-<id>` under the agent's workspace (or the OS user's workspaces directory when the agent runs as a separate OS user) |
+| OpenClaw configuration | `~/.openclaw/openclaw.json`, or `OPENCLAW_CONFIG_PATH` |
 
 ---
 
-## 6. Major subsystems
+## 5. Major subsystems
 
-### 6.1 Task system
-Tasks are the canonical work units. They store project/workflow placement, agent assignment, task type, blockers, dependencies, notes, attachments, release evidence, routing metadata, story points, and observability metadata.
+### 5.1 Task system
+Tasks are the canonical work units. They store project/workflow placement, agent assignment, task type, relationships, notes, attachments, release evidence, routing metadata, story points, and observability metadata.
 
-### 6.2 Routing system
+### 5.2 Routing system
 Routing is deterministic, built from:
-- **workflow task transitions** — workflow + task_type + from_status + outcome -> to_status
+- **workflow task transitions** — workflow + task_type + from_status + outcome → to_status
 - **assignment rules** (`workflow_task_routing_rules`) — workflow + task_type + status → agent (multi-rule, priority-ordered). A status with no matching rule does not dispatch.
 - **transition requirements** — evidence gates per outcome and task type, scoped to a workflow or workflow type. There is no global fallback.
-- **system policies** — stall detection, auto-retry, dispatched_unclaim
+- **workflow event mappings** (`external_event_mappings`) — runtime, dispatcher, and external events mapped to a status change or an outcome.
 
-### 6.3 Contract system (task #632)
+Transitions, rules, and requirements can be scoped to a workflow type within a project or to a
+single workflow. Teams can stamp a routing template onto the workflows they own; the template is
+materialized as ordinary assignment rules.
+
+Background passes never change a task's visible status. Visible movement comes from outcomes,
+workflow events, or operator edits.
+
+### 5.3 Contract system
 Separates **workflow semantics** from **runtime transport**.
 
 **Workflow contract** (`services/contracts/workflowContract.ts`):
@@ -119,12 +143,14 @@ Separates **workflow semantics** from **runtime transport**.
 - `remote-direct` — HTTP dispatch to an external URL; agents still report lifecycle through Agent HQ MCP/capability tools
 - `resolveTransportMode()` selects transport from runtime type + config
 
-Hermes runtime support is implemented as a local CLI-backed adapter. Host setup, runtime config, lifecycle assumptions, and troubleshooting notes live in [Hermes Runtime Support](hermes-runtime.md).
+Contract text is rendered from the templates in `agent-contracts/` (one per starter workflow type), which operators can edit.
 
-### 6.4 Job dispatch / run tracking
-Job instances track: dispatched/started/completed timestamps, session key, heartbeats, artifacts, token usage, abort state, and worktree path.
+Hermes runtime setup, config, and troubleshooting live in [Hermes Runtime Support](hermes-runtime.md). The cross-runtime run contract for local CLI runtimes is in [architecture/agent-runtime-boundary-v1.md](architecture/agent-runtime-boundary-v1.md).
 
-### 6.5 Release truth
+### 5.4 Job dispatch / run tracking
+Job instances track: dispatched/started/completed timestamps, session key, heartbeats, artifacts, token usage, abort state, and worktree path. Local CLI runtimes also record durable runtime executions and checkpoints so a restarted API can decide what happened to a run.
+
+### 5.5 Release truth
 Evidence gates are config-driven. Code validates configured requirement rows and does not infer required evidence from workflow phase labels, status names, or outcome names.
 
 Canonical evidence is stored and returned through workflow-defined `custom_fields` plus resolved field schema metadata:
@@ -133,142 +159,193 @@ Canonical evidence is stored and returned through workflow-defined `custom_field
 - Deploy: `merged_commit`, `deployed_commit`, `deploy_target`, `deployed_at`
 - Live verification: `live_verified_by`, `live_verified_at`
 
-Requirement rows can be blocking or warning-only. `required` checks can use `field_a|field_b` when either evidence field is acceptable, `match` checks compare one field to another, and `from_status` checks ensure an outcome is only accepted from the configured task status.
+Requirement rows can be blocking (`block`) or warning-only (`warn`). `required` checks can use `field_a|field_b` when either evidence field is acceptable, `match` checks compare one field to another, and `from_status` checks ensure an outcome is only accepted from the configured task status.
 
-Dev environment: `3510/3511`. Production: `3500/3501`.
+The starter Development workflow gates `completed_for_review` on `review_branch` and `review_commit`, and `qa_pass` on status `review` plus a `qa_verified_commit` that matches `review_commit`.
 
-### 6.6 Telemetry
-Task cycle time, QA breakdown, model usage, agent efficiency, creation/outcome quality tracking.
+### 5.6 Telemetry
+Configurable telemetry (`/api/v1/telemetry/v2`): database triggers capture observations from canonical tables into an outbox inside the writer's transaction; versioned metric, profile, report, and dashboard definitions are evaluated against them, and every result keeps its contributing records. See [telemetry-capture-inventory.md](telemetry-capture-inventory.md), [telemetry-analysis-and-dashboards.md](telemetry-analysis-and-dashboards.md), and [dashboard-pages.md](dashboard-pages.md).
+
+### 5.7 Authentication
+Every `/api/v1` request carries the operator token or an agent MCP key; `/mcp` authenticates its own key or OAuth grant. See [SELF_HOSTING.md#authentication](SELF_HOSTING.md#authentication).
 
 ---
 
-## 7. Core routes
+## 6. Core routes
+
+All routes are under `api/src/routes/`.
 
 | Route file | Prefix | Purpose |
 |---|---|---|
-| `agents.ts` | `/api/v1/agents` | CRUD, provision, claude-md, docs |
-| `artifacts.ts` | `/api/v1/artifacts` | Workspace file browsing |
-| `chat.ts` | `/api/v1/chat` | WebSocket chat proxy + transcript |
+| `agents.ts` | `/api/v1/agents` | Agent CRUD, provisioning, docs, MCP access |
+| `artifacts.ts` | `/api/v1/artifacts` | Workspace file browsing and editing |
+| `chat.ts` | `/api/v1/chat` | Chat send/abort, transcripts, attachments, WebSocket proxy |
 | `dispatch.ts` | `/api/v1/dispatch` | Manual trigger, reconcile, status, log |
-| `github-identities.ts` | `/api/v1/github-identities` | Per-agent GitHub credential CRUD |
+| `external-task-events.ts` | `/api/v1/external` | Workflow events from trusted external systems |
+| `github-identities.ts` | `/api/v1/github-identities` | GitHub credential CRUD |
 | `instances.ts` | `/api/v1/instances` | Lifecycle: start, check-in, complete, stop |
-| `jobs.ts` | `/api/v1/jobs` | Job template CRUD (legacy compat) |
 | `logs.ts` | `/api/v1/logs` | System log viewer |
-| `model-routing.ts` | `/api/v1/model-routing` | Story point → model mapping |
+| `mcp-servers.ts` | `/api/v1/mcp-servers` | External MCP server registry and agent assignments |
+| `model-routing.ts` | `/api/v1/model-routing` | Model routing rules (scope + story points → model settings) |
 | `project-files.ts` | `/api/v1/projects/:id/files` | Project file uploads |
-| `projects.ts` | `/api/v1/projects` | Project CRUD + stats |
+| `projects.ts` | `/api/v1/projects` | Project CRUD, stats, export/import |
+| `provider-connections.ts` | `/api/v1/provider-connections` | Runtime provider connections and validation |
 | `providers.ts` | `/api/v1/providers` | Provider config CRUD + validation |
-| `routing.ts` | `/api/v1/routing` | Rules, transitions, statuses, types, requirements, policies |
-| `settings.ts` | `/api/v1/settings` | Telegram config |
-| `setup.ts` | `/api/v1/setup` | Onboarding/health check |
+| `recurring-task-series.ts` | `/api/v1/recurring-task-series` | Recurring task schedules |
+| `routing.ts` | `/api/v1/routing` | Rules, transitions, statuses, requirements, graph, preview, trace, audit |
+| `runtime-drivers.ts` | `/api/v1/runtime-drivers` | Runtime diagnostics |
+| `sessions.ts` | `/api/v1/sessions` | Canonical chat/run sessions and transcript ingest |
+| `settings.ts` | `/api/v1/settings` | Telegram, notifications, OpenClaw gateway config |
+| `setup.ts` | `/api/v1/setup` | Onboarding and health checks |
 | `skills.ts` | `/api/v1/skills` | Skill directory management |
-| `tasks.ts` | `/api/v1/tasks` | Task CRUD + outcome + evidence + integrity + notes + blockers + attachments |
-| `telemetry-v2.ts` | `/api/v1/telemetry/v2` | Configurable telemetry: catalog, metrics, profiles, saved views/reports, dashboard pages, queries, export/import |
+| `tasks.ts` | `/api/v1/tasks` | Task CRUD + outcome + evidence + integrity + notes + relationships + attachments |
+| `teams.ts` | `/api/v1/teams` | Teams, members, shared grants, routing templates |
+| `telemetry-v2.ts` | `/api/v1/telemetry/v2` | Configurable telemetry: catalog, metrics, profiles, reports, dashboard pages, queries, export/import |
+| `tenants.ts` | `/api/v1/tenants` | Tenants and the active tenant |
 | `tools.ts` | `/api/v1/tools` | Tool registry CRUD + agent assignments |
 | `workflow-files.ts` | `/api/v1/projects/:projectId/workflows/:workflowId/files` | Workflow-scoped file uploads and version history |
 | `workflows.ts` | `/api/v1/workflows` | Workflow CRUD + metrics; workflow types under `/types` |
 
+The MCP catalog is served at `/api/v1/mcp/catalog`, the OpenAPI document at `/openapi.json`,
+and the health check at `/health`.
+
 ---
 
-## 8. Data model
+## 7. Data model
 
-### 8.1 agents
-1:1 mapping between identity and execution configuration. Merged from job_templates (task #459).
+### 7.1 agents
+One row per agent identity and its execution configuration.
 
-Key fields: id, name, role, session_key, workspace_path, status, runtime_type, runtime_config, Remote Gateway URL (`hooks_url` compatibility column), Remote Gateway Auth Header (`hooks_auth_header` compatibility column), github_identity_id, model, project_id, dispatch_mode, job_instructions, skill_names, enabled, timeout_seconds, os_user. The legacy `schedule` column is internal/deprecated; recurring task series own scheduling.
+Key fields: id, tenant_id, project_id, name, role, session_key, workspace_path, status, runtime_type, runtime_config, Remote Gateway URL (`hooks_url` compatibility column), Remote Gateway Auth Header (`hooks_auth_header` compatibility column), github_identity_id, model, preferred_provider, dispatch_mode, job_instructions, skill_names, enabled, timeout_seconds, os_user. The legacy `schedule` column is internal/deprecated; recurring task series own scheduling.
 
 Legacy/internal compatibility: older databases may still retain `agents.job_title` and `agents.workflow_id`, but new agent configuration must not use them. Agents belong to projects; workflow-specific dispatch is configured with `workflow_task_routing_rules` using project/workflow or workflow type + task type + status → agent.
 
-### 8.2 job_instances
-Concrete runs. Key fields: id, agent_id, task_id, status, session_key, dispatched_at, started_at, completed_at, run_id, task_outcome, token_total, effective_model, payload_sent, response, error, abort_*, worktree_path.
+### 7.2 job_instances
+Concrete runs. Key fields: id, agent_id, task_id, status, session_key, dispatched_at, started_at, completed_at, run_id, task_outcome, token_total, effective_model, payload_sent, response, error, abort_*, runtime_abort_target, worktree_path. `runtime_executions` and `runtime_checkpoints` hold the durable execution record for local CLI runs; `dispatch_context_bundles` keeps the context each run was given.
 
-### 8.3 tasks
+### 7.3 tasks
 Key fields: id, title, description, status, priority, agent_id, project_id, workflow_id, task_type, story_points, active_instance_id, retry_count, max_retries, routing_reason, review_owner_agent_id, custom_fields_json. Lifecycle/release evidence such as review branch/commit/url, QA verified commit/tested URL, deploy commit/target/timestamp, and live verification metadata is canonical in `custom_fields_json` and exposed through task `custom_fields`.
 
-### 8.4 Routing tables
-- `workflow_task_transitions` — primary workflow transitions (workflow, task_type, from_status, outcome, to_status)
-- `workflow_task_routing_rules` — primary task→agent routing (workflow, task_type, status, agent, priority)
+### 7.4 Routing tables
+- `workflow_task_transitions` — workflow transitions (workflow, task_type, from_status, outcome, to_status)
+- `workflow_task_routing_rules` — task→agent assignment rules (workflow, task_type, status, agent, priority)
 - `workflow_task_transition_requirements` — evidence gates per outcome, scoped to a workflow type
   or a single workflow. The only place gates live: a global `transition_requirements` fallback
   was moved into the dev workflow default and dropped by migration 15.
-- `routing_config` / `lifecycle_rules` — legacy configuration tables retained for compatibility and migration; runtime task outcome routing must use explicit `workflow_task_transitions`
-- `system_policies` — stall detection, auto-retry
+- `external_event_mappings` — workflow event mappings
+- `story_point_model_routing` — model routing rules
+- `routing_config_audit_log` — audit trail of routing configuration changes
+- `routing_config` / `lifecycle_rules` / `routing_transitions` — legacy configuration tables retained for compatibility and migration; runtime task outcome routing uses explicit `workflow_task_transitions`
+- `system_policies` — retained from the baseline schema; no current reader or writer
 
-### 8.5 Observability tables
+### 7.5 Observability tables
 - `instance_artifacts` — per-instance stage, summary, commit, branch, heartbeat timestamps, stale flag
 - `chat_messages` — transcript with event types (text, thought, tool_call, tool_result, turn_start, system, error)
 - `logs` — execution logs per instance/agent
 - `telemetry_*` — configurable telemetry (`/api/v1/telemetry/v2`): versioned definitions, captured observations, retained query results, coverage
 - `task_outcome_metrics` — legacy per-task summary; task creation maintains `spawned_defects`, read by task reads and reflection context
 - `task_events` — task status transitions, read by routing traces and telemetry backfill
-- `integrity_events` — handoff/evidence anomalies written by task lifecycle code; no current reader
 - `task_creation_events`, `telemetry_schema_config` — retained legacy data; no current writer or reader
 
-### 8.6 Supporting tables
-projects, workflows, task_notes, task_history, task_dependencies, task_attachments, provider_config, github_identities, tools, agent_tool_assignments, story_point_model_routing, app_settings, security_events, dispatch_log.
+See [telemetry-legacy-consumers.md](telemetry-legacy-consumers.md) for the removed v1 telemetry API.
+
+### 7.6 Supporting tables
+tenants, projects, workflows, workflow types and their statuses/outcomes/task types/relationship types, task_field_schemas, task_notes, task_history, task_relationships, task_dependencies, task_attachments, project_files, workflow_files, recurring_task_series, recurring_task_runs, teams, team_members, provider_config, provider_connections, github_identities, tools, agent_tool_assignments, mcp_servers, agent_mcp_assignments, agent_mcp_capability_policies, mcp_api_keys, mcp_oauth_*, skills, app_settings, notification_records, security_events, dispatch_log.
+
+Schema changes are numbered files in `db/pg-migrations/`; see
+[database-migration-runbook.md](database-migration-runbook.md).
 
 ---
 
-## 9. Task lifecycle
+## 8. Task lifecycle
 
 ### Statuses
-`todo → ready → dispatched → in_progress → review → ready_to_merge → deployed → done`
+The starter Development workflow uses:
 
-Also: `stalled`, `failed`, `cancelled`.
+`todo → ready → in_progress → review → ready_to_merge → deployed → done`
+
+Also: `dev_deploy_queued`, `dev_deploying`, `blocked`, `stalled`, `needs_attention`, `failed`, `cancelled`.
+
+Other workflow types define their own statuses. The starter Generic (Backlog) workflow uses
+`todo`, `ready`, `in_progress`, `review`, and `done`; Operations and Lead Generation have their
+own status sets.
 
 ### Statuses, Outcomes, Workflow Phases
-Statuses are task board states. Outcomes are agent-reported transition requests such as `completed_for_review`, `qa_pass`, `approved_for_merge`, `deployed_live`, `live_verified`, `blocked`, or `failed`. `qa_pass` is a QA outcome, not a board status; the standard Development route moves `review + qa_pass` directly to `ready_to_merge`. Workflow phase is derived internally from status and outcome configuration for contract phrasing; it is not persisted on transition rows and does not control dispatch.
+Statuses are task board states. Outcomes are agent-reported transition requests such as `completed_for_review`, `qa_pass`, `qa_fail`, `deployed_live`, `live_verified`, `blocked`, or `failed`. `qa_pass` is a QA outcome, not a board status; the starter Development route moves `review + qa_pass` directly to `ready_to_merge`. Workflow phase is derived internally from status and outcome configuration for contract phrasing; it is not persisted on transition rows and does not control dispatch.
 
 The configured transition rows decide which outcomes are valid from each status and where they move the task next. The configured requirement rows decide which evidence fields block that outcome.
 
+When a run starts, the default `agent_started` workflow event mapping moves the task to `in_progress`.
+
 ---
 
-## 10. Dispatch model
+## 9. Dispatch model
 
 Fully autonomous — no external cron jobs.
 
-- **Reconciler** runs every ~60s: eligibility + dispatch across all projects
-- **Eligibility pass**: promotes ready tasks, gates retries, auto-advances QA-passed tasks
-- **Dispatcher**: selects eligible tasks, resolves runtime, builds contract, fires via runtime.dispatch()
-- Task mutations trigger opportunistic background dispatch immediately
+- **Reconciler** runs every ~12s: runtime reconciliation, recurring series, and a dispatch pass per project
+- **Dispatcher**: selects eligible tasks, resolves the agent from assignment rules, resolves the runtime, builds the contract, and fires `runtime.dispatch()`
+- Task mutations trigger an immediate dispatch pass for the affected project
 
 ### Runtime dispatch
 
 | Runtime | Method | Stop |
 |---|---|---|
-| OpenClaw | POST /hooks/agent on gateway | Abort via hooks protocol |
-| Claude Code | Local subprocess | Kill process |
-| Webhook | POST to dispatchUrl | POST to abortUrl (if configured) |
+| OpenClaw | `chat.send` on the gateway WebSocket, into an agent-scoped session | `chat.abort` RPC |
+| Claude Code | Local `claude --print` process with stream-json output | SIGTERM to the process group, SIGKILL after a grace period |
+| Codex | Local `codex exec --json` process | SIGTERM to the process group, SIGKILL after a grace period |
+| Hermes | Local `hermes` CLI process | SIGTERM to the process group, SIGKILL after a grace period |
+| Webhook | POST to `dispatchUrl` | POST to `abortUrl` (if configured) |
+
+The runtime is chosen by `agents.runtime_type` (`api/src/runtimes/index.ts`); an unset value means `openclaw`.
 
 ### Model routing
-Story-point-based: 1-2pt → haiku, 3-4pt → sonnet, 5+pt → opus. Agent override takes precedence.
+Model routing rules (`story_point_model_routing`) are scoped to a project, a workflow type (within
+a project or for all projects), or a single workflow; the most specific scope wins. Within a scope, a rule for the
+agent's preferred provider wins over a provider-less rule, and the smallest `max_points`
+bucket that covers the task's story points is chosen. A rule sets the model, thinking level,
+fast mode, max turns, and max budget. A matching rule's model takes precedence over the agent's
+own model. The default install adds project rules for up to 2, 5, and 13 story points.
 
 ---
 
-## 11. Scheduler and watchdog
+## 10. Watchdog
 
-| Module | Function | Interval |
-|---|---|---|
-| scheduler | Legacy per-agent job scheduler disabled; recurring task series scheduler owns scheduled task creation | startup no-op |
-| watchdog | Stalled/timeout detection, worktree cleanup, Telegram alerts | 60s poll |
-| reconciler | Eligibility + dispatch sweep | ~60s |
+| Check | Default |
+|---|---|
+| Poll interval | 60s |
+| Start check-in grace | 5 min (per-agent override) |
+| Heartbeat stale | 10 min (per-agent override) |
+| Execution timeout | 20 min, or the agent's `timeout_seconds` |
+| Orphaned worktree prune | every 30 min |
 
-Watchdog thresholds: startup grace 60min, execution timeout per-agent (default 20min), heartbeat stale 30min, worktree cleanup >24hr.
-
----
-
-## 12. GitHub identity management
-
-Per-agent GitHub credentials (task #613): `github_identities` table with fine-grained PATs per lane (dev, qa, release, shared). `injectGitHubCredentials()` writes env file to workspace. `buildGitHubIdentityContext()` adds instructions to dispatch prompt.
+The legacy per-agent job scheduler is disabled; the recurring task series scheduler, run from the
+reconciler, owns scheduled task creation.
 
 ---
 
-## 13. CI/CD
+## 11. GitHub identity management
 
-Push to `main` triggers self-hosted GitHub Actions: pull → build API → restart API → build UI → restart UI → health check. Process manager: PM2.
+`github_identities` holds fine-grained GitHub tokens per lane (for example dev, qa, release,
+shared). An agent uses its own identity (`agents.github_identity_id`), or else the first enabled
+`shared` identity. `injectGitHubCredentials()` writes the token and git config into the task
+workspace. Which delivery paths reach the agent depends on the runtime; see
+[github-identity-runtime-support.md](github-identity-runtime-support.md).
 
 ---
 
-## 14. Documentation maintenance rule
+## 12. CI and releases
+
+`.github/workflows/ci.yml` runs on pushes to `main` and on pull requests: API lint, tests
+against PostgreSQL 17, and build; the workflow terminology check; UI verify and build; CLI and
+OpenClaw plugin tests; and Docker image builds. CI does not deploy anything.
+
+`.github/workflows/release-images.yml` builds and pushes the multi-arch API and UI images to
+Docker Hub on version tags or a manual run. Deploying a self-hosted install is an operator
+step; see [SELF_HOSTING.md](SELF_HOSTING.md#upgrades).
+
+---
+
+## 13. Documentation maintenance rule
 
 Update this document when changing: dispatch/contract architecture, routing semantics, release gating, schema fields, stop/run control, runtime integrations, or major UX structure. Code wins over docs when they disagree.
