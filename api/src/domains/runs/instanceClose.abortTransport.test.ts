@@ -3,10 +3,6 @@ import { closeInstance } from './instanceClose';
 import { abortInstanceExecutionTransport } from './stopInstanceExecution';
 import { type Db } from '../../db/adapter/types';
 
-jest.mock('../../services/browserPool', () => ({
-  destroyAgentContext: jest.fn(() => Promise.resolve()),
-}));
-
 // Transport selection stays real — sending a runtime session key to the gateway
 // is the exact failure this guards, and the gateway reports success for it.
 jest.mock('./stopInstanceExecution', () => {

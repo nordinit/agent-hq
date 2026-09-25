@@ -4,11 +4,6 @@ import { getDb } from '../db/client';
 import { setupTestDb, teardownTestDb } from '../db/testDb';
 import instancesRouter from './instances';
 
-jest.mock('../services/browserPool', () => ({
-  createAgentContext: jest.fn(() => Promise.resolve({})),
-  destroyAgentContext: jest.fn(() => Promise.resolve()),
-}));
-
 async function seedFixture(): Promise<void> {
   const db = await setupTestDb();
   await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Agent HQ', 'agent-hq', 1)`);

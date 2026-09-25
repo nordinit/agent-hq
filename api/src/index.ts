@@ -32,7 +32,6 @@ import workflowFilesRouter from './routes/workflow-files';
 import telemetryV2Router from './routes/telemetry-v2';
 import { startTelemetryCaptureWorker } from './domains/telemetry/capture';
 import { startTelemetryQueryWorker } from './domains/telemetry/queries';
-import browserRouter from './routes/browser';
 import setupRouter from './routes/setup';
 import settingsRouter from './routes/settings';
 import tenantsRouter from './routes/tenants';
@@ -49,7 +48,6 @@ import githubIdentitiesRouter from './routes/github-identities';
 import sessionsRouter from './routes/sessions';
 import recurringTaskSeriesRouter from './routes/recurring-task-series';
 import runtimeDriversRouter from './routes/runtime-drivers';
-import { shutdownPool as shutdownBrowserPool } from './services/browserPool';
 import { getMcpCatalog } from './mcp/catalog';
 import { mcpAccessRouter } from './mcp/accessRouter';
 import { registerAgentHqMcpCatalog } from './mcp/registerCatalog';
@@ -506,7 +504,6 @@ app.use('/api/v1/routing/model-routing', modelRoutingRouter);
 app.use('/api/v1/routing/story-point-routing', modelRoutingRouter);
 app.use('/api/v1/routing/model-routing-rules', modelRoutingRouter);
 app.use('/api/v1/routing/model-routes', modelRoutingRouter);
-app.use('/api/v1/browser', browserRouter);
 app.use('/api/v1/setup', setupRouter);
 app.use('/api/v1/settings', settingsRouter);
 app.use('/api/v1/tools', toolsRouter);
@@ -651,14 +648,5 @@ void startServer().catch((err) => {
   console.error(err instanceof Error ? err.message : String(err));
   process.exit(1);
 });
-
-// Graceful shutdown: close browser pool
-for (const sig of ['SIGINT', 'SIGTERM'] as const) {
-  process.on(sig, async () => {
-    console.log(`[shutdown] Received ${sig}, shutting down browser pool...`);
-    await shutdownBrowserPool();
-    process.exit(0);
-  });
-}
 
 export default app;

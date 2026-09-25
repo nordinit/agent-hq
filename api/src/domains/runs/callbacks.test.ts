@@ -2,11 +2,6 @@ import { completeRunInstance, startRunInstance } from './callbacks';
 import { setupTestDb, teardownTestDb } from '../../db/testDb';
 import { type Db } from "../../db/adapter/types";
 
-jest.mock('../../services/browserPool', () => ({
-  createAgentContext: jest.fn(() => Promise.resolve({})),
-  destroyAgentContext: jest.fn(() => Promise.resolve()),
-}));
-
 jest.mock('../../integrations/telegram', () => ({
   notifyTelegram: jest.fn(() => Promise.resolve()),
 }));

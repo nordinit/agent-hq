@@ -1,8 +1,6 @@
-import { createAgentContext, destroyAgentContext } from '../../services/browserPool';
 import { resolveWorkflow } from '../../services/contracts/workflowContract';
 import { upsertCanonicalSessionForInstance } from '../../lib/canonicalSessions';
 import { insertRuntimeLog } from '../../lib/runtimeTenantScope';
-import { resolveRuntimeAgentSlug } from '../../lib/sessionKeys';
 import { scheduleEndedActiveInstanceLinkageCleanup } from '../../lib/taskLifecycle';
 import { markTaskNeedsAttentionForMissingSemanticHandoff, taskRequiresSemanticOutcome } from './lifecycleHandoff';
 import { recordRunCheckIn } from './observability';
@@ -172,27 +170,6 @@ export async function startRunInstance(
             level: 'info',
             message: `Agent started — session key: ${sessionKey}`,
           });
-  }
-
-  const agentRow = await db.get(`
-    SELECT a.session_key as agent_session_key, a.openclaw_agent_id, a.name
-    FROM job_instances ji
-    JOIN agents a ON a.id = ji.agent_id
-    WHERE ji.id = ?
-  `, instanceId) as {
-    agent_session_key: string | null;
-    openclaw_agent_id: string | null;
-    name: string | null;
-  } | undefined;
-  const agentSlug = resolveRuntimeAgentSlug({
-    session_key: agentRow?.agent_session_key ?? null,
-    openclaw_agent_id: agentRow?.openclaw_agent_id ?? null,
-    name: agentRow?.name ?? null,
-  });
-  if (agentSlug) {
-    createAgentContext(agentSlug, instanceId).catch(err => {
-      console.warn(`[instances] Browser context creation failed for instance ${instanceId} (non-fatal):`, err instanceof Error ? err.message : err);
-    });
   }
 
   await upsertCanonicalSessionForInstance(db, instanceId, sessionKey);
@@ -426,27 +403,6 @@ export async function completeRunInstance(
         level: 'info',
         message: `Job instance ${instanceId} marked ${finalStatus} via agent callback`,
       });
-
-  const completedAgentRow = await db.get(`
-    SELECT a.session_key as agent_session_key, a.openclaw_agent_id, a.name
-    FROM job_instances ji
-    JOIN agents a ON a.id = ji.agent_id
-    WHERE ji.id = ?
-  `, instanceId) as {
-    agent_session_key: string | null;
-    openclaw_agent_id: string | null;
-    name: string | null;
-  } | undefined;
-  const completedAgentSlug = resolveRuntimeAgentSlug({
-    session_key: completedAgentRow?.agent_session_key ?? null,
-    openclaw_agent_id: completedAgentRow?.openclaw_agent_id ?? null,
-    name: completedAgentRow?.name ?? null,
-  });
-  if (completedAgentSlug) {
-    destroyAgentContext(completedAgentSlug, instanceId).catch(err => {
-      console.warn(`[instances] Browser context cleanup failed for instance ${instanceId} (non-fatal):`, err instanceof Error ? err.message : err);
-    });
-  }
 
   console.log(`[instances] Instance ${instanceId} marked ${finalStatus}${summary ? ` — ${summary}` : ''}`);
 

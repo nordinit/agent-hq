@@ -1,5 +1,4 @@
 import { abortInstanceExecutionTransport } from './stopInstanceExecution';
-import { destroyAgentContext } from '../../services/browserPool';
 import { recordRunCheckIn } from './observability';
 import { isTerminalInstanceOutcome } from '../../lib/outcomeCatalog';
 import { scheduleEndedActiveInstanceLinkageCleanup } from '../../lib/taskLifecycle';
@@ -279,17 +278,7 @@ export async function closeInstance(opts: CloseInstanceOptions): Promise<CloseIn
     // Non-fatal in minimal-schema environments
   }
 
-  // ── 3. Destroy browser context ────────────────────────────────────────────
-  const agentSessionKey = instance.agent_session_key as string | null;
-  const slugMatch = agentSessionKey?.match(/^agent:([^:]+):/);
-  const agentSlug = slugMatch ? slugMatch[1] : null;
-  if (agentSlug) {
-    destroyAgentContext(agentSlug, instanceId).catch((err: unknown) => {
-      console.warn(`[instanceClose] Browser context cleanup failed for instance ${instanceId} (non-fatal):`, err instanceof Error ? err.message : err);
-    });
-  }
-
-  // ── 4. Terminate agent session (async, fire-and-forget) ───────────────────
+  // ── 3. Terminate agent session (async, fire-and-forget) ───────────────────
   // Routed by the agent's runtime, not assumed to be OpenClaw. Sending a
   // claude-code/codex/hermes session key to the gateway aborts nothing and
   // reports success, which is the same silent mismatch the send and stop paths

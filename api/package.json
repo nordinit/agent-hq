@@ -60,7 +60,6 @@
     "node-fetch": "^3.3.2",
     "pg": "^8.22.0",
     "pg-copy-streams": "^7.0.0",
-    "playwright-core": "^1.58.2",
     "re2js": "2.8.6",
     "simple-git": "^3.36.0",
     "ws": "^8.21.0",

@@ -39,7 +39,7 @@ It provides:
 │                                                            │
 │  Routes: tasks, agents, instances, projects, workflows,    │
 │          routing, telemetry, logs, chat, tools,             │
-│          dispatch, providers, github-identities, browser    │
+│          dispatch, providers, github-identities             │
 │                                                            │
 │  Responsibilities:                                         │
 │  - task persistence + lifecycle                            │
@@ -148,7 +148,6 @@ Task cycle time, QA breakdown, model usage, agent efficiency, creation/outcome q
 |---|---|---|
 | `agents.ts` | `/api/v1/agents` | CRUD, provision, claude-md, docs |
 | `artifacts.ts` | `/api/v1/artifacts` | Workspace file browsing |
-| `browser.ts` | `/api/v1/browser` | Playwright browser pool |
 | `chat.ts` | `/api/v1/chat` | WebSocket chat proxy + transcript |
 | `dispatch.ts` | `/api/v1/dispatch` | Manual trigger, reconcile, status, log |
 | `github-identities.ts` | `/api/v1/github-identities` | Per-agent GitHub credential CRUD |

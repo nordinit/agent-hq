@@ -6,10 +6,6 @@ jest.mock('./stopInstanceExecution', () => ({
   abortInstanceExecutionTransport: jest.fn(async () => ({ result: { ok: true, status: 'succeeded' } })),
 }));
 
-jest.mock('../../services/browserPool', () => ({
-  destroyAgentContext: jest.fn(() => Promise.resolve()),
-}));
-
 const TENANT_ID = 8801;
 const PROJECT_ID = 8802;
 const WORKFLOW_ID = 8803;
