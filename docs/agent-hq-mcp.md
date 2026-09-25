@@ -254,14 +254,14 @@ Supported schedules are the same as the API/UI recurring task scheduler: `every 
 
 Start with `agent_hq_list_telemetry_catalog` using the desired project, workflow/type, and task type. Its `definition_contract` contains self-contained JSON Schema documents for metrics, predicates, value expressions, journeys, profiles, reports, and scope, plus examples and guidance. Resolve each document's local `$ref` against that same document. MCP `tools/list` also publishes the corresponding structured input schemas for validation, previews, queries, saves, and revisions.
 
-The catalog examples cover title regex, combined AND/OR/NOT filters, custom-field arithmetic, agent grouping, journey-entry attribution, profile signals, component metric references, and dashboard widgets. Replace uppercase placeholders with IDs from the scoped catalog or saved revisions before submitting them.
+The catalog examples cover title regex, combined AND/OR/NOT filters, custom-field arithmetic, agent grouping, journey-entry attribution, profile signals, component metric references, a saved view, and a dashboard page. Replace uppercase placeholders with IDs from the scoped catalog or saved revisions before submitting them.
 
 - Use `fields[].id` for custom-field references and `statuses[].id` / `outcomes[].id` for canonical workflow signals.
 - Store persistent conditions in `definition.population`. Query and widget `filter` overrides further narrow that population. Workflow type and task type can be selected together in `scope`.
 - Use `group_by: [{"field":"agent_id"}]` to group by the metric's attribution policy. `assigned_agent_at_entry` requires journey grain and an explicit `journey.start`; current task counts use `assigned_agent_current`.
 - The UI's **Journeys to include** setting uses the existing `journey.denominator` key (`evaluated`, `successful`, or `all_started`). It is separate from a ratio measure's numeric denominator.
 - `signal_ref` resolves a named signal through a pinned profile revision. `metric_ref` resolves a compatible saved aggregate metric revision. Profiles and query/widget filter overrides use explicit predicates.
-- Reports store saved views (`presentation: "view"`, one widget) and dashboards (`presentation: "dashboard"`, up to ten widgets). Widgets support display type, grouping, filters, time settings, and layout. Historical line charts require a historical measurement and a time bucket.
+- Reports store saved views (`presentation: "view"`, one widget) and multi-metric reports (up to ten widgets). Widgets support display type, grouping, filters, and time settings. Build dashboards with `agent_hq_save_telemetry_dashboard` and `agent_hq_revise_telemetry_dashboard` as pages of sections, columns and blocks; the UI does not show reports saved with `presentation: "dashboard"`. Historical line charts require a historical measurement and a time bucket.
 
 The schemas describe structure. The shared REST compiler still checks scope, references, history, field types, attribution, expression limits, and display compatibility. Validate and preview a metric before saving it; neither structural validation nor a successful save establishes historical coverage.
 

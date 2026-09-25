@@ -102,7 +102,7 @@ export const telemetryWidgetInputSchema = telemetryWidgetSchema.safeExtend({
 export const telemetryReportSchema = reportSchema.safeExtend({
   metrics: z.array(telemetryWidgetInputSchema).min(1).max(10),
   group_by: z.array(telemetryValueSchema).max(3).optional(),
-}).describe('Pinned report, saved view (exactly one widget), or dashboard (up to 10 widgets). Widget filters narrow metric populations. Line charts require a historical metric and time bucket.');
+}).describe('Pinned report (up to 10 widgets) or saved view (exactly one widget). Dashboards are separate page resources; presentation dashboard is accepted only so older stored reports remain valid. Widget filters narrow metric populations. Line charts require a historical metric and time bucket.');
 
 export const telemetryDefinitionSchemas = {
   dashboard: dashboardSchema, metric: telemetryMetricSchema, profile: telemetryProfileSchema, report: telemetryReportSchema,

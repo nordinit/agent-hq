@@ -50,13 +50,12 @@ export const telemetryDefinitionExamples = {
     description: 'Replace METRIC_REVISION_ID with a compatible aggregate metric revision. The referenced metric must match grain, time basis and attribution.',
     definition: { ...leadCount, key: 'component_count', name: 'Component count', measure: { metric_ref: 'METRIC_REVISION_ID' } },
   },
-  dashboard: {
-    description: 'Replace METRIC_REVISION_ID with a saved metric revision. presentation:view instead creates a saved single-metric view. Table/bar/card support current counts; line charts require historical measurements and a bucket.',
+  saved_view: {
+    description: 'A saved single-metric view. Save with save_telemetry_report; it pins METRIC_REVISION_ID (replace it with a saved metric revision) and can be added to dashboard pages. Table/bar/card support current counts; line charts require historical measurements and a bucket. For a dashboard, use dashboard_page instead.',
     definition: {
-      presentation: 'dashboard', metrics: [{
+      presentation: 'view', metrics: [{
         id: 'lead_search_agents', metric_revision_id: 'METRIC_REVISION_ID', title: 'Lead searches by agent', display: 'bar',
         view: { group_by: [{ field: 'agent_id' }], filter: leadCount.population, bucket: null, sort: 'value_desc' },
-        layout: { width: 6, height: 'regular' },
       }],
     },
   },
@@ -87,7 +86,7 @@ function buildContract() {
       'Metric signal_ref requires a pinned profile revision; metric_ref requires a compatible pinned aggregate metric revision. Profiles and query/widget filter overrides use explicit predicates.',
       'Current snapshots cannot be historical trends. Use an explicit created_at population predicate for a creation cohort, or event/journey grain with from/to, timezone and bucket for historical measurements.',
       'The shared backend validates canonical references, scope, type/basis compatibility, RE2 patterns, journey/attribution requirements and bounded expressions (500 nodes, depth 12). Structural schemas do not replace semantic validation.',
-      'Validate and preview a metric before saving. Save/revise reports for saved metric views and legacy dashboards. Save/revise dashboards for configurable pages with sections, columns and blocks. Revisions require expected_revision_id. Inspect query contributors using the retained query_id and exact JSON group key.',
+      'Validate and preview a metric before saving. Save/revise reports for saved metric views and multi-metric reports. Build dashboards only with the dashboard tools: pages have sections, columns and blocks, and the UI no longer shows reports saved with presentation dashboard. Revisions require expected_revision_id. Inspect query contributors using the retained query_id and exact JSON group key.',
     ],
     examples: telemetryDefinitionExamples,
   };

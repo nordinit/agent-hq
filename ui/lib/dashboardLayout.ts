@@ -1,5 +1,5 @@
 import type { DashboardBlock, DashboardColumn, DashboardDocument, DashboardDraft, DashboardOperation, DashboardSection } from './dashboardTypes.ts';
-import type { Scalar, TelemetryReport, TelemetryResult } from './telemetryTypes.ts';
+import type { Scalar, TelemetryResult } from './telemetryTypes.ts';
 import { createClientId } from './clientId.ts';
 
 export const dashboardId = createClientId;
@@ -29,30 +29,6 @@ export function operationsDashboard(): DashboardDraft {
     dashboardSection('', [{ id: dashboardId(), type: 'operation', operation: 'completed_tasks' }]),
     dashboardSection('', [{ id: dashboardId(), type: 'operation', operation: 'links' }])];
   return draft;
-}
-/** Read-only conversion: immutable metric pins, exact boundaries and saved overrides survive. */
-export function dashboardFromReport(report: TelemetryReport): DashboardDraft {
-  const source = structuredClone(report.definition);
-  const metrics = source.metrics.map(metric => ({ ...metric, id: metric.id ?? dashboardId() }));
-  const agencyIds = ['searches', 'raw_hits', 'reviewed', 'qualification_rate', 'qualified_per_search', 'drafts_per_search', 'rejection_rate', 'average_score', 'commercial_refusal'];
-  const agency = agencyIds.every(id => metrics.some(metric => metric.id === id)) && metrics.length === 9;
-  const titles: Record<string, string> = { searches: 'Verified searches', raw_hits: 'Retrieved entries', reviewed: 'Fresh candidates reviewed', qualification_rate: 'Qualification rate', qualified_per_search: 'Qualified per search', drafts_per_search: 'Drafts per search', rejection_rate: 'Screening rejection', average_score: 'Weighted score / 10', commercial_refusal: 'Commercial refusals' };
-  const ordered = agency ? agencyIds.map(id => metrics.find(metric => metric.id === id)!) : metrics;
-  const colors = ['blue', 'cyan', 'violet', 'green', 'amber', 'blue'] as const;
-  const icons = ['search', 'layers', 'users', 'check', 'target', 'file'] as const;
-  const blocks: DashboardBlock[] = ordered.map((metric, i) => ({ id: dashboardId(), type: 'metric', binding_id: metric.id, title: agency ? titles[metric.id] : metric.title,
-    display: 'card', precision: agency && ['qualification_rate', 'rejection_rate', 'commercial_refusal'].includes(metric.id) ? 1 : 2, accent: colors[i % colors.length], icon: icons[i % icons.length] }));
-  const sections = [dashboardSection('', agency ? blocks.slice(0, 6) : blocks, 3)];
-  if (agency) {
-    const section = dashboardSection('Query performance & outcomes', [], 2);
-    section.columns[0].width = 8; section.columns[1].width = 4;
-    section.columns[0].blocks = [{ id: dashboardId(), title: 'Query performance', type: 'comparison', binding_ids: ['qualified_per_search', 'drafts_per_search', 'qualification_rate'], rows: 9, sort: 'value_desc', sort_by: 'qualified_per_search' }];
-    section.columns[1].blocks = blocks.slice(6).map(block => ({ ...block, surface: 'plain', accent: 'neutral' }));
-    sections.push(section);
-  }
-  if (report.description) sections.push({ ...dashboardSection('About these metrics', [{ id: dashboardId(), type: 'note', text: report.description, surface: 'plain' }]), collapsed: true });
-  return { name: report.name, definition: { version: 1, template: agency ? 'agency' : 'imported', description: agency ? 'Search activity, candidate quality, and outreach outcomes.' : report.description?.slice(0, 2000),
-    metrics, sections, appearance: { density: 'comfortable', width: 'wide' }, scope: { include_archived: true, ...report.scope, ...source.scope }, from: source.from, to: source.to, timezone: source.timezone ?? 'UTC' } };
 }
 export function dashboardBlocks(page: DashboardDocument) { return page.sections.flatMap(section => section.columns.flatMap(column => column.blocks)); }
 export function findDashboardBlock(page: DashboardDocument, id: string) { return dashboardBlocks(page).find(block => block.id === id); }

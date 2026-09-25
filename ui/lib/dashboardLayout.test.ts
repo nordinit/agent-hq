@@ -1,8 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { blankDashboard, dashboardBlocks, dashboardFromReport, dashboardSection, formatDashboardValue, moveDashboardBlock, removeDashboardBlock, resizeDashboardColumns, setDashboardColumns } from './dashboardLayout.ts';
+import { blankDashboard, dashboardBlocks, dashboardSection, formatDashboardValue, moveDashboardBlock, removeDashboardBlock, resizeDashboardColumns, setDashboardColumns } from './dashboardLayout.ts';
 import type { DashboardBlock } from './dashboardTypes.ts';
-import type { TelemetryReport } from './telemetryTypes.ts';
 
 test('presentation rounds exact decimals without float conversion, including carry, zero places and percentages', () => {
   assert.equal(formatDashboardValue({ decimal: '2.444444444444444444444444' }), '2.44');
@@ -34,14 +33,4 @@ test('removing a duplicate retains its shared query until the final reference is
   page.sections = [dashboardSection('', [{ id: 'a', type: 'metric', binding_id: 'source' }, { id: 'b', type: 'comparison', binding_ids: ['source'] }])];
   const first = removeDashboardBlock(page, 'a'); assert.equal(first.metrics.length, 1);
   const second = removeDashboardBlock(first, 'b'); assert.equal(second.metrics.length, 0);
-});
-test('Agency conversion keeps every metric pin, exact historical boundary and local override without mutating the original', () => {
-  const ids = ['searches', 'raw_hits', 'reviewed', 'qualification_rate', 'qualified_per_search', 'drafts_per_search', 'rejection_rate', 'average_score', 'commercial_refusal'];
-  const report: TelemetryReport = { id: 'agency', name: 'Agency', key: 'agency', latest_revision_id: 'r1', revision: 1, scope: { project_id: 99 }, definition: { presentation: 'dashboard', metrics: ids.map(id => ({ id, metric_revision_id: `${id}-v1`, view: { group_by: [{ field: 'title' }], filter: { field: 'id', op: 'ne', value: 12 } } })), from: '2026-11-01T01:30:00-04:00', timezone: 'America/New_York' } };
-  const before = JSON.stringify(report), converted = dashboardFromReport(report);
-  assert.equal(converted.definition.template, 'agency'); assert.equal(converted.definition.metrics.length, 9);
-  assert.deepEqual(converted.definition.metrics, report.definition.metrics);
-  assert.equal(converted.definition.scope?.project_id, 99); assert.equal(converted.definition.from, report.definition.from);
-  assert.equal(dashboardBlocks(converted.definition).filter(block => block.type === 'metric').length, 9);
-  assert.equal(JSON.stringify(report), before);
 });

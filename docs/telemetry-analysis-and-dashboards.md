@@ -18,6 +18,6 @@ Existing invalid definitions are not rewritten. Analyze flags missing journey co
 
 ## Persistence and API
 
-No database migration is needed. Existing report resources support `presentation: "view" | "dashboard" | "report"`; legacy reports remain compatible. A view has one metric; dashboards have at most ten. Entries retain `metric_revision_id` and may include `id`, `metric_id`, `title`, `display`, `view`, and `layout`. Layout widths are 4, 6, or 12 columns; heights are compact, regular, or tall.
+A saved view is a report resource with `presentation: "view"` and exactly one metric; a multi-metric report omits `presentation` (or uses `"report"`) and holds up to ten. Dashboards are separate page resources. `presentation: "dashboard"` and the widget `layout` field stay valid so older stored report revisions still load, but nothing renders them. Entries retain `metric_revision_id` and may include `id`, `metric_id`, `title`, `display`, and `view`.
 
 Query requests accept `bucket` as an override (or null to remove a bucket). Saved report widgets apply their own group, filter, scope, and time settings. Global and widget population filters intersect. Contributor requests accept `group` as a JSON-encoded exact group key and filter before pagination. `metric_index` disambiguates repeated uses of the same metric revision.

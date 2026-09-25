@@ -10,7 +10,7 @@ test('documented basic metric examples remain valid in the shared evaluator', ()
   }
   expect(telemetryPredicateSchema.parse(examples.combined_filter.filter)).toEqual(examples.combined_filter.filter);
   expect(telemetryProfileSchema.parse(examples.profile.definition)).toEqual(examples.profile.definition);
-  expect(telemetryReportSchema.parse(examples.dashboard.definition)).toEqual(examples.dashboard.definition);
+  expect(telemetryReportSchema.parse(examples.saved_view.definition)).toEqual(examples.saved_view.definition);
 });
 
 test('input schemas preserve symbolic references, runtime recipes, duration, and funnel definitions', () => {
@@ -29,7 +29,7 @@ test('structural schemas reject unknown operators and malformed widget settings'
   expect(telemetryPredicateSchema.safeParse({ field: 'title', op: 'sql', value: 'anything' }).success).toBe(false);
   expect(telemetryPredicateSchema.safeParse({ field: 'title', op: 'matches_regex', value: 'x'.repeat(513) }).success).toBe(false);
   expect(telemetryValueSchema.safeParse({ op: 'javascript', args: [] }).success).toBe(false);
-  const widget = examples.dashboard.definition.metrics[0];
+  const widget = examples.saved_view.definition.metrics[0];
   expect(telemetryReportSchema.safeParse({ metrics: [{ ...widget, layout: { width: 5, height: 'huge' } }] }).success).toBe(false);
   expect(telemetryReportSchema.safeParse({ presentation: 'view', metrics: [widget, { ...widget, id: 'second' }] }).success).toBe(false);
 });

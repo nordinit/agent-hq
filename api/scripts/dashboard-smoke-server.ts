@@ -56,8 +56,24 @@ async function main() {
     } });
     metrics.push({ id: key, title: name, metric_id: metric.id, metric_revision_id: metric.latest_revision_id, display: 'table', view: { bucket: null } });
   }
-  const report = await createDefinition(db, access, 'report', { key: 'agency_preview', name: 'Agency overview', scope,
-    description: 'Synthetic preview: sample records only.', definition: { presentation: 'dashboard', scope, timezone: 'UTC', metrics } });
+  // The Agency page layout: six summary cards, a query comparison beside three outcome rates, and a collapsed note.
+  const cardTitles: Record<string, string> = { searches: 'Verified searches', raw_hits: 'Retrieved entries', reviewed: 'Fresh candidates reviewed', qualification_rate: 'Qualification rate', qualified_per_search: 'Qualified per search', drafts_per_search: 'Drafts per search', rejection_rate: 'Screening rejection', average_score: 'Weighted score / 10', commercial_refusal: 'Commercial refusals' };
+  const accents = ['blue', 'cyan', 'violet', 'green', 'amber', 'blue'], icons = ['search', 'layers', 'users', 'check', 'target', 'file'];
+  const card = (key: string, i: number) => ({ id: `${key}_card`, type: 'metric', binding_id: key, title: cardTitles[key], display: 'card',
+    precision: ['qualification_rate', 'rejection_rate', 'commercial_refusal'].includes(key) ? 1 : 2, accent: accents[i % accents.length], icon: icons[i % icons.length] });
+  const summary = metrics.slice(0, 6).map((metric, i) => card(metric.id, i));
+  const dashboard = await createDefinition(db, access, 'dashboard', { key: 'agency_preview', name: 'Agency overview', scope,
+    description: 'Synthetic preview: sample records only.', definition: {
+      version: 1, template: 'agency', description: 'Search activity, candidate quality, and outreach outcomes.', scope, timezone: 'UTC',
+      appearance: { width: 'wide', density: 'comfortable' }, metrics, sections: [
+        { id: 'summary', title: '', columns: [0, 1, 2].map(column => ({ id: `summary_${column}`, width: 4, blocks: summary.filter((_, i) => i % 3 === column) })) },
+        { id: 'performance', title: 'Query performance & outcomes', columns: [
+          { id: 'performance_table', width: 8, blocks: [{ id: 'query_performance', type: 'comparison', title: 'Query performance', binding_ids: ['qualified_per_search', 'drafts_per_search', 'qualification_rate'], rows: 9, sort: 'value_desc', sort_by: 'qualified_per_search' }] },
+          { id: 'performance_rates', width: 4, blocks: metrics.slice(6).map((metric, i) => ({ ...card(metric.id, i + 6), surface: 'plain', accent: 'neutral' })) },
+        ] },
+        { id: 'about', title: 'About these metrics', collapsed: true, columns: [{ id: 'about_notes', width: 12, blocks: [{ id: 'about_note', type: 'note', text: 'Synthetic preview: sample records only.', surface: 'plain' }] }] },
+      ],
+    } });
   const app = express(); app.use(cors()); app.use(express.json({ limit: '10mb' }));
   app.use('/api/v1/telemetry/v2', telemetryRouter);
   app.get('/api/v1/projects', async (_req, res) => res.json(await db.all('SELECT id,name,tenant_id FROM projects WHERE tenant_id=1')));
@@ -70,7 +86,7 @@ async function main() {
   const stopCapture = startTelemetryCaptureWorker(db), stopQueries = startTelemetryQueryWorker(db);
   const server = app.listen(56183, '127.0.0.1');
   await new Promise<void>(resolve => server.once('listening', resolve));
-  console.log(JSON.stringify({ api_url: 'http://127.0.0.1:56183', preview_url: `http://127.0.0.1:3560/?dashboard=${report.id}`, database: 'disposable synthetic fixture' }));
+  console.log(JSON.stringify({ api_url: 'http://127.0.0.1:56183', preview_url: `http://127.0.0.1:3560/?dashboard=${dashboard.id}`, database: 'disposable synthetic fixture' }));
   let closing = false;
   const close = async () => {
     if (closing) return; closing = true; stopCapture(); stopQueries();

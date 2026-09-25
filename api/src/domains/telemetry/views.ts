@@ -22,6 +22,8 @@ export const telemetryWidgetSchema = z.object({
 
 export const reportSchema = z.object({
   metrics: z.array(telemetryWidgetSchema).min(1).max(10),
+  // 'dashboard' is no longer a UI surface, but stored report revisions carry it and dashboard pages
+  // validate their metric bindings through this schema with it.
   presentation: z.enum(['report', 'view', 'dashboard']).optional(),
   scope: scopeSchema.optional(), from: z.string().optional(), to: z.string().optional(), timezone: z.string().optional(), group_by: z.array(z.unknown()).max(3).optional(),
   comparison: z.object({ compatible: z.boolean(), key: z.string().min(1), semantic_version: z.string().min(1) }).strict().optional(),

@@ -92,7 +92,7 @@ describe('telemetry MCP uses the shared REST API', () => {
     ['metric', telemetryDefinitionExamples.profile_metric.definition],
     ['metric', telemetryDefinitionExamples.component_metric.definition],
     ['profile', telemetryDefinitionExamples.profile.definition],
-    ['report', telemetryDefinitionExamples.dashboard.definition],
+    ['report', telemetryDefinitionExamples.saved_view.definition],
     ['dashboard', telemetryDefinitionExamples.dashboard_page.definition],
   ])('save and revise %s preserve their specific definition contract', async (kind, definition) => {
     const { api, tools } = registry();
