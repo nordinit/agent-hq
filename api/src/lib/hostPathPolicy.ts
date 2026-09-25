@@ -3,9 +3,8 @@
  *
  * An agent's workspace_path is the cwd its runtime launches in, the root the artifacts API reads
  * and writes, and where skill and MCP bundles are materialized. Accepting any string made the
- * artifacts endpoints a read/write primitive for the whole host (`workspace_path: "/"`), and let
- * one agent point at another tenant's workspace. A workspace must now live where Agent HQ puts
- * workspaces:
+ * artifacts endpoints a read/write primitive for the whole host (`workspace_path: "/"`). A
+ * workspace must now live where Agent HQ puts workspaces:
  *
  *   - under the Agent HQ workspace parent (AGENT_HQ_WORKSPACE_PARENT, or AGENT_HQ_DATA_DIR/
  *     workspaces, or ~/.agent-hq/workspaces), strictly below it;

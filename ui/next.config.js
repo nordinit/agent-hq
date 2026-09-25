@@ -11,12 +11,14 @@ const nextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
   // The operator UI drives host-executing tools with a click, so no other site may frame it.
+  // No Content-Security-Policy here: Next keeps a header set by this config over the same header
+  // from a route handler, which would replace the sandbox policy the API sends with uploaded
+  // files proxied through /api/v1.
   async headers() {
     return [{
       source: '/:path*',
       headers: [
         { key: 'X-Frame-Options', value: 'DENY' },
-        { key: 'Content-Security-Policy', value: "frame-ancestors 'none'" },
         { key: 'X-Content-Type-Options', value: 'nosniff' },
         { key: 'Referrer-Policy', value: 'same-origin' },
       ],
