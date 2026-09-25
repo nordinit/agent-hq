@@ -57,10 +57,11 @@ services:
     container_name: agent-hq-api
     restart: unless-stopped
     ports:
-      - "${AGENT_HQ_API_PORT:-3501}:3501"
+      - "${AGENT_HQ_BIND_ADDRESS:-127.0.0.1}:${AGENT_HQ_API_PORT:-3501}:3501"
     environment:
       <<: *database-url
       NODE_ENV: production
+      HOST: 0.0.0.0
       PORT: "3501"
       WORKSPACE_PARENT: /app/workspaces
       AGENT_CONTRACT_ROOT: /app/agent-contracts
@@ -84,7 +85,7 @@ services:
     container_name: agent-hq-ui
     restart: unless-stopped
     ports:
-      - "${AGENT_HQ_UI_PORT:-3500}:3500"
+      - "${AGENT_HQ_BIND_ADDRESS:-127.0.0.1}:${AGENT_HQ_UI_PORT:-3500}:3500"
     environment:
       NODE_ENV: production
       PORT: "3500"

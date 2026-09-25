@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server';
 import { getAgentHqBaseUrl } from '@/lib/agentHqBaseUrl';
+import { isSameOriginProxyRequest } from '@/lib/proxyOrigin';
 
 const API_BASE = getAgentHqBaseUrl();
 const HOP_BY_HOP_HEADERS = new Set([
@@ -16,6 +17,13 @@ const HOP_BY_HOP_HEADERS = new Set([
 ]);
 
 async function proxy(req: NextRequest, path: string[]) {
+  if (!isSameOriginProxyRequest(req.headers)) {
+    return Response.json(
+      { code: 'cross_origin_forbidden', error: 'Cross-origin browser requests to the Agent HQ API are not allowed.' },
+      { status: 403 },
+    );
+  }
+
   const url = new URL(req.url);
   const target = new URL(`/api/v1/${path.join('/')}${url.search}`, API_BASE);
   const headers = new Headers(req.headers);
@@ -23,6 +31,8 @@ async function proxy(req: NextRequest, path: string[]) {
   for (const header of HOP_BY_HOP_HEADERS) {
     headers.delete(header);
   }
+  // Checked above. The API sees the UI server as a same-machine caller, not the browser page.
+  headers.delete('origin');
 
   const init: RequestInit = {
     method: req.method,

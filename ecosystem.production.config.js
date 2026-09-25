@@ -46,6 +46,7 @@ module.exports = {
       env: {
         NODE_ENV: env.NODE_ENV || 'production',
         PORT: apiPort,
+        HOST: env.HOST || '127.0.0.1',
         DATABASE_URL: env.DATABASE_URL,
         OPENCLAW_GATEWAY_URL: env.OPENCLAW_GATEWAY_URL,
         OPENCLAW_GATEWAY_TOKEN: env.OPENCLAW_GATEWAY_TOKEN,
@@ -71,6 +72,7 @@ module.exports = {
       env: {
         NODE_ENV: env.NODE_ENV || 'production',
         PORT: uiPort,
+        AGENT_HQ_UI_HOST: env.AGENT_HQ_UI_HOST || '127.0.0.1',
         AGENT_HQ_INTERNAL_BASE_URL: env.AGENT_HQ_INTERNAL_BASE_URL || `http://127.0.0.1:${apiPort}`,
         NEXT_PUBLIC_API_URL: env.NEXT_PUBLIC_API_URL || `http://127.0.0.1:${apiPort}`,
       },

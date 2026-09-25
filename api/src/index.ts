@@ -8,6 +8,7 @@ if (process.env.NODE_TLS_REJECT_UNAUTHORIZED === '0') {
 }
 import express, { type Request } from 'express';
 import cors from 'cors';
+import { corsOptionsDelegate, isWebSocketOriginAllowed, parseAllowedOrigins, rejectCrossOriginRequests } from './lib/originGuard';
 import { getDb } from './db/client';
 import { verifyStartupSchema } from './db/startupVerifier';
 import tasksRouter from './domains/tasks';
@@ -66,9 +67,13 @@ registerAgentHqMcpCatalog();
 
 const app = express();
 const PORT = process.env.PORT ?? 3501;
-const HOST = process.env.HOST ?? '0.0.0.0';
+// Loopback by default: the operator API has no login yet. Containers set HOST=0.0.0.0 and
+// publish the port on the host's loopback instead.
+const HOST = process.env.HOST ?? '127.0.0.1';
+const allowedBrowserOrigins = parseAllowedOrigins(process.env.AGENT_HQ_ALLOWED_ORIGINS);
 
-app.use(cors());
+app.use(cors(corsOptionsDelegate(allowedBrowserOrigins)));
+app.use('/api/v1', rejectCrossOriginRequests(allowedBrowserOrigins));
 app.use(express.json({ limit: '10mb' }));
 app.use(handleJsonRequestErrors);
 
@@ -604,7 +609,12 @@ async function startServer(): Promise<void> {
 
   // WebSocket proxy for chat (bridges browser → Gateway wss://)
   console.log('[boot] creating chat websocket server', { path: '/api/v1/chat/ws' });
-  const wss = new WebSocketServer({ server, path: '/api/v1/chat/ws' });
+  const wss = new WebSocketServer({
+    server,
+    path: '/api/v1/chat/ws',
+    verifyClient: ({ origin, req }: { origin: string; req: http.IncomingMessage }) =>
+      isWebSocketOriginAllowed(origin || undefined, req.headers, allowedBrowserOrigins),
+  });
   console.log('[boot] calling setupChatProxy');
   setupChatProxy(wss);
   console.log('[boot] setupChatProxy returned');

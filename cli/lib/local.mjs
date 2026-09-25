@@ -634,6 +634,8 @@ export function localStart(flags) {
         ...process.env,
         NODE_ENV: 'production',
         PORT: uiPort,
+        // Loopback only: the API behind this UI has no login yet.
+        HOSTNAME: process.env.AGENT_HQ_UI_HOST || '127.0.0.1',
         NEXT_PUBLIC_API_URL: `http://localhost:${apiPort}`,
         PATH: runtimePath,
       },
@@ -645,6 +647,8 @@ export function localStart(flags) {
       [
         join(sourceDir, 'ui', 'node_modules', '.bin', 'next'),
         'start',
+        '-H',
+        process.env.AGENT_HQ_UI_HOST || '127.0.0.1',
         '-p',
         uiPort,
       ],
