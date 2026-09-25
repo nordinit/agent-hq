@@ -210,6 +210,11 @@ gateway URLs/tokens as environment variables or configure them through supported
 flows. Never bake secrets into images. When the API runs in Docker and OpenClaw runs on
 the host, use a host-reachable address such as `host.docker.internal` where supported.
 
+Certificate verification is skipped only for a gateway on loopback (the local gateway's
+self-signed certificate); every other gateway, and every other outbound HTTPS request, is
+verified. Trust a self-signed remote gateway with `NODE_EXTRA_CA_CERTS`, or, as a last resort,
+set `OPENCLAW_GATEWAY_TLS_INSECURE=1`, which exempts gateway sockets only.
+
 The CLI manages one narrowly scoped external setting: on first start or when the bundled
 capability-tools plugin path/version changes, it adds or updates that plugin entry in
 `~/.openclaw/openclaw.json`, including the API URL and the path of the file holding the

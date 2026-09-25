@@ -9,7 +9,6 @@ export {
   GATEWAY_WS_URL,
   __resetGatewayConnectionPoolForTests,
   buildOpenClawGatewayConnectParams,
-  gatewayFetch,
   gatewayGetHistory,
   gatewayRpcCall,
   gatewayWsGetEffectiveTools,

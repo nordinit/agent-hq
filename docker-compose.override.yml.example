@@ -10,6 +10,9 @@ services:
     environment:
       # Add OpenClaw/provider integration settings here when needed.
       # OPENCLAW_GATEWAY_URL: "https://host.docker.internal:18789"
+      # Certificates are verified for every gateway that is not on loopback. For a gateway
+      # with a self-signed certificate, prefer NODE_EXTRA_CA_CERTS; as a last resort:
+      # OPENCLAW_GATEWAY_TLS_INSECURE: "1"
       NODE_ENV: production
 
   agent-hq-ui:

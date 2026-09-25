@@ -280,12 +280,6 @@ export function getHooksToken(): string {
   return process.env.OPENCLAW_HOOKS_TOKEN ?? readHooksTokenFromConfig() ?? '';
 }
 
-export function gatewayFetch(hookPath: string, init: RequestInit): Promise<Response> {
-  const url = `${GATEWAY_URL}${hookPath}`;
-  process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
-  return fetch(url, init);
-}
-
 export function loadDeviceIdentity(): DeviceIdentity | null {
   try {
     const identityPath = path.join(os.homedir(), '.openclaw', 'identity', 'device.json');

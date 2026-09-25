@@ -14,10 +14,6 @@ import { prepareRepoWorkspaceDependencies, type RepoWorkspaceDependencySetupResu
 import { normalizeEnvironmentSetup } from '../lib/environmentSetup';
 import { acquireWorkspaceLease } from './workspaceLease';
 import {
-  OPENCLAW_CONFIG_PATH as OPENCLAW_CONFIG_PATH_DISPATCHER,
-  OPENCLAW_GATEWAY_URL,
-} from '../config';
-import {
   resolveGitHubIdentity,
   injectGitHubCredentials,
   cleanupGitHubCredentials,
@@ -159,50 +155,6 @@ function requiredOpenClawMcpToolsByServerName(serverNames: string[]): Record<str
 // before restarting the API.
 export const DISPATCH_FAILURE_BACKOFF_SECONDS: number =
   parseInt(process.env.DISPATCH_FAILURE_BACKOFF_SECONDS ?? '120', 10) || 120;
-
-// ── Container routing config (task #288) ─────────────────────────────────────
-// Used by hooksFetch() when an agent has hooks_url set (container routing).
-const GATEWAY_URL = OPENCLAW_GATEWAY_URL;
-
-function readDispatcherGatewayToken(): string | null {
-  try {
-    const raw = fs.readFileSync(OPENCLAW_CONFIG_PATH_DISPATCHER, 'utf-8');
-    const cfg = JSON.parse(raw) as { gateway?: { auth?: { token?: string } } };
-    const token = cfg.gateway?.auth?.token;
-    return typeof token === 'string' && token.trim() ? token.trim() : null;
-  } catch {
-    return null;
-  }
-}
-
-const HOOKS_TOKEN = process.env.OPENCLAW_HOOKS_TOKEN ?? readDispatcherGatewayToken() ?? '';
-
-function gatewayFetch(hookPath: string, init: RequestInit): Promise<Response> {
-  const url = `${GATEWAY_URL}${hookPath}`;
-  process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
-  return fetch(url, init);
-}
-// ── End container routing config ─────────────────────────────────────────────
-
-/**
- * hooksFetch — send a /hooks/agent request to the correct OpenClaw instance.
- *
- * If the agent has a hooks_url (e.g. "http://localhost:3701" for a containerised
- * instance), POST there; otherwise fall back to the host gateway via gatewayFetch.
- *
- * Container instances run plain HTTP on a custom port, so no TLS override needed.
- * The host gateway uses HTTPS with a self-signed cert, so we keep the TLS bypass
- * for that path.
- */
-function hooksFetch(agentHooksUrl: string | null | undefined, hookPath: string, init: RequestInit): Promise<Response> {
-  if (agentHooksUrl) {
-    // Container instance — plain HTTP, no TLS concerns
-    const url = `${agentHooksUrl}${hookPath}`;
-    return fetch(url, init);
-  }
-  // Default: host gateway (may be HTTPS with self-signed cert)
-  return gatewayFetch(hookPath, init);
-}
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
