@@ -27,7 +27,7 @@ The route reuses Agent HQ MCP API key auth already mounted on `/api/v1`.
 Use either:
 
 - `x-api-key: <agent-hq-mcp-api-key>`
-- or `Authorization: Bearer <agent-hq-mcp-api-key>` together with `x-agent-hq-mcp-client: 1`
+- or `Authorization: Bearer <agent-hq-mcp-api-key>` (`x-agent-hq-mcp-client` is optional now)
 
 For the lease-manager integration, the authenticated MCP identity must be either:
 

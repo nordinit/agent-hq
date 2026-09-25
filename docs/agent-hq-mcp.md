@@ -704,11 +704,13 @@ Properties worth knowing before pointing a connector at it:
 
 - **Discovery and execution use the same identity permissions.** Every tool call still travels through `/api/v1` carrying the caller's own MCP key, so `authorizeMcpApiRequestIfPresent` and the agent's capability policy apply exactly as they do for a local stdio client. A key that cannot move a task over stdio cannot move it from a phone.
 - **Servers are built per request** (stateless transport, no session id). Remote connectors reconnect freely, and per-request construction keeps one client's identity from outliving its request.
-- **Keys are read from `Authorization: Bearer` or `x-api-key` directly.** Unlike `/api/v1`, this route does not require the `x-agent-hq-mcp-client` marker header — remote connectors send a plain bearer token and nothing else.
+- **Keys are read from `Authorization: Bearer` or `x-api-key`.** Remote connectors send a plain bearer token and nothing else. This route accepts MCP keys only: the operator token that `/api/v1` also accepts is not an identity the tool surface can be scoped to.
 - **Rate limiting is per key**, defaulting to 120 requests/minute.
 - **Authenticated requests emit `[agent-hq-mcp-http] trace` logs** with UTC time, agent/key ID, policy fingerprint, method, tool name, HTTP status, protocol/API result, and duration. Tool-list responses include the actual count and a catalog fingerprint. Arguments, credentials, resource URIs, and result text are excluded. A tool failure can have HTTP 200; inspect `result` as well as `http_status`.
 
 Publishing the endpoint (TLS, a public hostname, tunnel or reverse proxy) is deployment work outside this document. Both major clients connect from the vendor's cloud rather than from your device, so `localhost` and VPN-only hosts are unreachable to them.
+
+Publish only what a connector needs: `/mcp`, `/.well-known/oauth-authorization-server`, `/.well-known/oauth-protected-resource/mcp`, `/authorize`, `/oauth/consent`, `/token`, `/register` and `/revoke`. Do not route the whole API port. `/api/v1` requires the operator token or an MCP key on every request (see [Authentication to the REST API](#authentication-to-the-rest-api)), but a connector never calls it — `/mcp` reaches it over loopback through `AGENT_HQ_INTERNAL_BASE_URL` — so exposing it only adds attack surface to an API that can run commands on the host.
 
 ### Identity permissions and tool discovery
 
@@ -777,6 +779,10 @@ Several capabilities were added for this shape of client. `projects.read_project
 The two `workflows.*_active_workflow` writes back `agent_hq_set_workflow_status`. Both resolve scope the same way — the workflow attached to the caller's active dispatched task, or any workflow inside its assigned project — and both are off by default for scoped runtime keys, so a dispatched agent gets workflow lifecycle control only when an operator grants it. They are separate because the transitions are not equivalent: pausing is a reversible hold, while completing stamps the end date and stands the workflow's agents down, so an agent that may say "hold on" does not thereby get to say "this cycle is finished."
 
 Neither is in `SCOPED_MCP_POLICY_MUTABLE_CAPABILITIES`, so a scoped policy editor cannot grant workflow lifecycle control to itself or another agent; that stays an administrative act.
+
+### Authentication to the REST API
+
+Every `/api/v1` request must present exactly one credential: an MCP key (`x-api-key: <key>` or `Authorization: Bearer <key>`), which runs as that key's identity under its capability policy, or the operator token (`Authorization: Bearer $AGENT_HQ_OPERATOR_TOKEN`), which carries full operator authority and is what the UI proxy and CLI send. A request with neither is refused with `401 api_auth_required` — dropping a scoped key no longer yields full access. The `x-agent-hq-mcp-client` header no longer decides whether a bearer token counts; it is only a label. The stdio server and `/mcp` send the key as a bearer token on every call, so MCP clients need no change. See `docs/SELF_HOSTING.md` → Authentication for the operator side and `AGENT_HQ_AUTH_MODE=report`.
 
 ### Where MCP authority comes from
 
@@ -920,9 +926,10 @@ outside it is refused rather than defaulted, because an agent like Atlas resolve
 defaults and would bypass the capability policy entirely.
 
 **The operator password is not user auth.** One password, scrypt-hashed in `app_settings`, with an
-in-process lockout after five failures. It exists because Agent HQ has no login and an
-authorization endpoint that authorizes anyone who reaches it is not an authorization endpoint. If
-real user auth arrives, this is the piece it replaces.
+in-process lockout after five failures. Agent HQ has no user accounts: the UI and `/api/v1`
+authenticate the operator with `AGENT_HQ_OPERATOR_TOKEN`, but the consent screen sits at the public
+URL, outside the UI's sign-in, and an authorization endpoint that authorizes anyone who reaches it
+is not an authorization endpoint. If real user accounts arrive, this is the piece they replace.
 
 | Variable | Default | Description |
 |---|---|---|
@@ -1064,7 +1071,7 @@ Expected log shape:
 Useful checks:
 - confirm `api/dist/mcp/server.js` exists
 - confirm the API is reachable at `AGENT_HQ_API_URL`
-- confirm `AGENT_HQ_MCP_API_KEY` is present in the MCP server env
+- confirm `AGENT_HQ_MCP_API_KEY` is present in the MCP server env (without it the API answers `401 api_auth_required`)
 - confirm the client config points at the built server path
 - confirm the client was restarted after config changes
 
