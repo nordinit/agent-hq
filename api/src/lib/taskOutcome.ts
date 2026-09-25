@@ -2,7 +2,7 @@ import { cleanupTaskExecutionLinkageForStatus } from './taskLifecycle';
 import { canonicalOutcomeRoute, requireReleaseGate, resolveWorkflowModelOutcome } from './taskRelease';
 import { notifyTaskStatusChange } from './taskNotifications';
 import { isTerminalOutcome, closeInstance } from '../domains/runs/instanceClose';
-import { emitIntegrityEvent, writeTaskLifecycleOutcomeHistory, writeTaskStatusChange } from '../domains/tasks/history';
+import { writeTaskLifecycleOutcomeHistory, writeTaskStatusChange } from '../domains/tasks/history';
 import { getCanonicalTaskRecord } from '../domains/tasks/evidence';
 import { resolveWorkflowTaskRoutingAssignment } from '../domains/routing/policy/statuses';
 import { resolveWorkflowOutcomeMap } from '../domains/workflow-definitions/outcomes';
@@ -408,18 +408,6 @@ export async function applyTaskOutcome(db: Db, input: ApplyTaskOutcomeInput): Pr
       await addAuditNote(db, input.taskId, changedBy, authorityDecision.auditNote);
     }
 
-    // Emit stale_outcome_write integrity event for instance_not_authoritative cases
-    if (authorityDecision.reason === 'instance_not_authoritative') {
-      await emitIntegrityEvent(db, {
-                taskId: input.taskId,
-                anomalyType: 'stale_outcome_write',
-                detail: `${authorityDecision.auditNote}${input.instanceId != null ? ` (instance #${input.instanceId})` : ''}`,
-                instanceId: input.instanceId ?? null,
-                projectId: existing.project_id,
-                agentId: existing.agent_id,
-              });
-    }
-
     return {
       ok: true,
       applied: false,
@@ -727,41 +715,7 @@ export async function applyTaskOutcome(db: Db, input: ApplyTaskOutcomeInput): Pr
       }
     }
 
-    // ── Integrity anomaly detection (#586) ───────────────────────────────────
     const finalTaskState = await reloadTaskOutcomeTaskRow(db, input.taskId);
-    const iProjectId = finalTaskState.project_id;
-    const iInstanceId = input.instanceId ?? finalTaskState.active_instance_id;
-    const iAgentId = finalTaskState.agent_id;
-
-    // Reaching review with no branch or commit is no longer recorded as an anomaly. It assumed
-    // every task was development work; a design, PM, or configuration task arrives at review with
-    // nothing to cite, and counting that as a defect made the integrity feed a measure of task
-    // type rather than of anything wrong. A workflow that wants the evidence requires it in
-    // workflow_task_transition_requirements, where requireReleaseGate blocks the transition outright.
-    if (effectiveOutcome === 'qa_pass' && !finalTaskState.qa_verified_commit) {
-      await emitIntegrityEvent(db, {
-              taskId: input.taskId, anomalyType: 'missing_qa_evidence',
-              detail: `Task posted qa_pass (next status: ${nextStatus}) with no qa_verified_commit`,
-              instanceId: iInstanceId, projectId: iProjectId, agentId: iAgentId,
-            });
-    }
-
-    if (effectiveOutcome === 'qa_pass' && finalTaskState.review_commit && finalTaskState.qa_verified_commit
-      && finalTaskState.review_commit !== finalTaskState.qa_verified_commit) {
-      await emitIntegrityEvent(db, {
-              taskId: input.taskId, anomalyType: 'commit_mismatch',
-              detail: `review_commit=${finalTaskState.review_commit} ≠ qa_verified_commit=${finalTaskState.qa_verified_commit}`,
-              instanceId: iInstanceId, projectId: iProjectId, agentId: iAgentId,
-            });
-    }
-
-    if (nextStatus === 'done' && finalTaskState.deployed_at && !finalTaskState.live_verified_at) {
-      await emitIntegrityEvent(db, {
-              taskId: input.taskId, anomalyType: 'deployed_not_verified',
-              detail: `Task reached done without live_verified_at being set`,
-              instanceId: iInstanceId, projectId: iProjectId, agentId: iAgentId,
-            });
-    }
 
     const failureInfo = isUnsuccessfulOutcome ? `${autoRecovered ? ', auto-recovered' : ''}` : '';
     const message = `Outcome transition: task #${input.taskId} (${priorStatus} → ${nextStatus}), outcome="${effectiveOutcome}"${input.outcome !== effectiveOutcome ? `, requested_outcome="${input.outcome}"` : ''}${failureInfo}, actor="${changedBy}"${finalTaskState.agent_id ? `, agent_id=${finalTaskState.agent_id}` : ''}${input.instanceId != null ? `, instance_id=${input.instanceId}` : ''}${input.summary ? `, summary: ${input.summary}` : ''}`;

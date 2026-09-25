@@ -276,7 +276,6 @@ const TENANT_OWNED_TABLES = [
   'task_history',
   'task_notes',
   'task_events',
-  'integrity_events',
   'task_creation_events',
   'task_outcome_metrics',
   'sessions',

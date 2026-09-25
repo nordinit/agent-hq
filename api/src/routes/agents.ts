@@ -115,7 +115,6 @@ const AGENT_REFERENCE_CHECKS: AgentReferenceCheck[] = [
   { table: 'chat_messages', column: 'agent_id', label: 'chat messages', historical: true },
   { table: 'chat_attachments', column: 'agent_id', label: 'chat attachments', historical: true },
   { table: 'canonical_chat_sessions', column: 'agent_id', label: 'canonical chat sessions', historical: true },
-  { table: 'integrity_events', column: 'agent_id', label: 'integrity events', historical: true },
   { table: 'security_events', column: 'agent_id', label: 'security events', historical: true },
   { table: 'workflow_task_routing_rules', column: 'agent_id', label: 'routing rules', historical: false },
   { table: 'agent_tool_assignments', column: 'agent_id', label: 'tool assignments', historical: false },

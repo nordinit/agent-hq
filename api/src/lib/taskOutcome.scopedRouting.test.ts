@@ -506,15 +506,6 @@ describe('applyTaskOutcome scoped routing_config resolution', () => {
       LIMIT 1
     `) as { content: string };
     expect(note.content).toContain('task is no longer linked to that run');
-
-    const integrity = await db.get(`
-      SELECT anomaly_type, instance_id
-      FROM integrity_events
-      WHERE task_id = 417
-      ORDER BY id DESC
-      LIMIT 1
-    `) as { anomaly_type: string; instance_id: number | null };
-    expect(integrity).toEqual({ anomaly_type: 'stale_outcome_write', instance_id: 91 });
   });
 
   it('still accepts linked-instance outcomes when the callback instance remains linked to the task', async () => {

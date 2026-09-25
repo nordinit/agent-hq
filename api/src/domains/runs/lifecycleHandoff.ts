@@ -7,7 +7,7 @@ import {
   resolveWorkflowEventMapping,
   type WorkflowEventMapping,
 } from '../routing/externalEventMappings';
-import { emitIntegrityEvent, writeTaskHistory, writeTaskRuntimeEndHistory, writeTaskStatusChange } from '../tasks/history';
+import { writeTaskHistory, writeTaskRuntimeEndHistory, writeTaskStatusChange } from '../tasks/history';
 import { toCanonicalTimestampOrNow } from '../../lib/timestamps';
 import { tenantInsertColumns } from '../../lib/runtimeTenantScope';
 import { type Db } from "../../db/adapter/types";
@@ -207,11 +207,5 @@ export async function markTaskNeedsAttentionForMissingSemanticHandoff(
     noteLines.join('\n'),
   );
 
-  await emitIntegrityEvent(db, {
-        taskId: params.taskId,
-        anomalyType: 'missing_lifecycle_handoff',
-        detail: `Runtime ended on instance #${params.instanceId} without required lifecycle outcome; workflow event ${eventName} action=${mapping?.action_kind ?? 'none'}${mapping?.action_target ? `:${mapping.action_target}` : ''}`,
-        instanceId: params.instanceId,
-      });
   return actionApplied && currentStatus === 'needs_attention' ? 'moved_to_needs_attention' : 'recorded_only';
 }

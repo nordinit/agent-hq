@@ -67,48 +67,6 @@ export async function emitTaskEvent(db: Db, input: TaskEventInput): Promise<void
   }
 }
 
-// ── integrity_events emission ─────────────────────────────────────────────────
-
-interface IntegrityEventInput {
-  taskId: number;
-  anomalyType:
-    | 'missing_review_evidence'
-    | 'missing_qa_evidence'
-    | 'commit_mismatch'
-    | 'deployed_not_verified'
-    | 'stale_outcome_write'
-    | 'branch_missing_on_origin'
-    | 'evidence_placeholder'
-    | 'missing_lifecycle_handoff';
-  detail?: string | null;
-  instanceId?: number | null;
-  projectId?: number | null;
-  agentId?: number | null;
-}
-
-/**
- * Write an integrity_events row for a handoff/evidence anomaly.
- * Non-fatal: silently swallows errors.
- */
-export async function emitIntegrityEvent(db: Db, input: IntegrityEventInput): Promise<void> {
-  try {
-    const tenantId = await resolveRuntimeTenantId(db, {
-          taskId: input.taskId,
-          instanceId: input.instanceId,
-          agentId: input.agentId,
-          projectId: input.projectId,
-        });
-    const tenant = await tenantInsertColumns(db, 'integrity_events', tenantId);
-    await db.run(`
-      INSERT INTO integrity_events
-        (${tenant.columnSql}task_id, project_id, agent_id, instance_id, anomaly_type, detail)
-      VALUES (${tenant.valueSql}?, ?, ?, ?, ?, ?)
-    `, ...tenant.values, input.taskId, input.projectId ?? null, input.agentId ?? null, input.instanceId ?? null, input.anomalyType, input.detail ?? null);
-  } catch {
-    // integrity_events may not exist yet (migration pending or test DB) — non-fatal
-  }
-}
-
 // ── task_history helpers ──────────────────────────────────────────────────────
 
 /**

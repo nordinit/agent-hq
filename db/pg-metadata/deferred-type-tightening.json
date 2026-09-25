@@ -55,8 +55,6 @@
     "instance_artifacts.stale_at",
     "instance_artifacts.last_note_at",
     "instance_artifacts.updated_at",
-    "integrity_events.resolved_at",
-    "integrity_events.created_at",
     "job_instances.created_at",
     "job_instances.dispatched_at",
     "job_instances.completed_at",

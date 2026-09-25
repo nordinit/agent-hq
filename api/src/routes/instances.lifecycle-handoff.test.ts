@@ -143,17 +143,6 @@ describe('instance completion lifecycle handoff recovery', () => {
       expect(notes[0].content).toContain('Review/QA/deploy evidence recorded: no');
       expect(notes[0].content).toContain('Recommended next action: inspect the missing lifecycle outcome, then choose an explicit routed move or outcome');
       expect(notes[0].content).not.toContain('Moved to Needs Attention because the runtime ended without a semantic lifecycle outcome.');
-
-      const event = await db.get(`
-        SELECT anomaly_type, instance_id, detail
-        FROM integrity_events
-        WHERE task_id = 403
-      `) as { anomaly_type: string; instance_id: number; detail: string };
-      expect(event).toEqual({
-        anomaly_type: 'missing_lifecycle_handoff',
-        instance_id: 2045,
-        detail: 'Runtime ended on instance #2045 without required lifecycle outcome; workflow event no_semantic_handoff_posted action=none',
-      });
     } finally {
       await stopTestServer(server);
     }
