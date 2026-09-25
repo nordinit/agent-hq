@@ -5,11 +5,9 @@ import { ATLAS_SESSION_KEY, ATLAS_SYSTEM_ROLE, ensureCanonicalAtlasSessionKey } 
 /**
  * A PostgreSQL install must end up with the canonical Atlas identity.
  *
- * It did not. ATLAS_SESSION_KEY is written at creation only by seedInitialData() in db/schema.ts,
- * on the raw better-sqlite3 handle, reachable only from initSchema() — so an install created on
- * PostgreSQL got a tenant-shaped key instead. Lookups tolerate that (they match system_role
- * first), but db/seed-dev.ts guards its Atlas insert on the session key, so seeding a fresh
- * PostgreSQL install would have added a SECOND Atlas to the default tenant.
+ * It once did not: installs got a tenant-shaped session key instead. Lookups tolerate that
+ * (they match system_role first), but db/seed-dev.ts guards its Atlas insert on the session
+ * key, so seeding a fresh install would have added a SECOND Atlas to the default tenant.
  */
 
 beforeEach(async () => { await setupTestDb(); });

@@ -8,7 +8,6 @@ import { getDb } from '../db/client';
 import workflowsRouter from './workflows';
 
 let tempDir: string;
-let dbPath: string;
 const originalContractRoot = process.env.AGENT_CONTRACT_ROOT;
 
 async function resetDb(): Promise<void> {
@@ -16,7 +15,6 @@ async function resetDb(): Promise<void> {
   jest.resetModules();
   fs.rmSync(tempDir, { recursive: true, force: true });
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workflows-route-'));
-  dbPath = path.join(tempDir, 'agent-hq-test.db');
   process.env.AGENT_CONTRACT_ROOT = path.join(tempDir, 'agent-contracts');
   fs.mkdirSync(process.env.AGENT_CONTRACT_ROOT, { recursive: true });
   fs.writeFileSync(path.join(process.env.AGENT_CONTRACT_ROOT, 'generic.md'), 'Workflow type: {{workflowType}}\n');
@@ -93,7 +91,6 @@ async function stopTestServer(server: Server): Promise<void> {
 describe('workflows API create clone support', () => {
   beforeEach(async () => {
     tempDir = '';
-    dbPath = '';
     await resetDb();
   });
 

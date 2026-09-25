@@ -48,7 +48,6 @@ function createMockDb() {
   const runs: Array<{ sql: string; params: unknown[] }> = [];
   return {
     runs,
-    dialect: 'postgres' as const,
     inTransaction: false,
     get: jest.fn(async (sql: string) => {
       if (sql.includes('information_schema.columns') || sql.includes('information_schema.tables')) {

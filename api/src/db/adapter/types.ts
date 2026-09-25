@@ -52,10 +52,7 @@ export interface Db {
   /** A statement that changes data. */
   run(sql: string, ...params: SqlParam[]): Promise<RunResult>;
 
-  /**
-   * A single scalar — the first column of the first row. Replaces better-sqlite3's
-   * `.pluck().get()`.
-   */
+  /** A single scalar — the first column of the first row. */
   value<T = unknown>(sql: string, ...params: SqlParam[]): Promise<T | undefined>;
 
   /**

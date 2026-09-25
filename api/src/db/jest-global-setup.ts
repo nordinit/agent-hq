@@ -3,7 +3,7 @@ export default async function globalSetup(): Promise<void> {
   const url = process.env.AGENT_HQ_TEST_PG_URL;
   if (!url) {
     throw new Error(
-      'AGENT_HQ_TEST_PG_URL is required. Agent HQ tests run on PostgreSQL and have no SQLite fallback.',
+      'AGENT_HQ_TEST_PG_URL is required. Agent HQ tests run on PostgreSQL.',
     );
   }
   if (!process.env.PORT) process.env.PORT = '0';

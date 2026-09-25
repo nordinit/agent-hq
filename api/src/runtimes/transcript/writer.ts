@@ -173,7 +173,7 @@ export class RuntimeTranscriptWriter {
         event.content,
         event.timestamp ? toCanonicalTimestampOrNow(event.timestamp) : nowTimestamp(),
         event.kind,
-        // `event_meta` is `text NOT NULL DEFAULT '{}'` in BOTH engines, so a
+        // `event_meta` is `text NOT NULL DEFAULT '{}'`, so a
         // null here fails the constraint at insert time rather than defaulting.
         // An explicit '{}' is the only correct "no metadata" value.
         event.meta ? JSON.stringify(event.meta) : '{}',

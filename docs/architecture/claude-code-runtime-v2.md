@@ -63,9 +63,8 @@ clean. That is a historical result, not current release evidence.
 ### End-to-end verification
 
 The original workflow-65 implementation was run against the real `claude` CLI (2.1.220)
-and a throwaway SQLite test database, with no runtime mocks and a stand-in Agent HQ MCP
-server. These results remain useful protocol evidence; the SQLite references are an
-archived test-harness detail, not a current deployment requirement. Two scenarios:
+and a throwaway test database, with no runtime mocks and a stand-in Agent HQ MCP
+server. Two scenarios:
 
 | Scenario | Result |
 |---|---|
@@ -87,7 +86,7 @@ missing outcome.
 
 The scenarios above used a stand-in MCP server, so they proved the runtime but
 not the lifecycle write. Repeated with the **real** `api/dist/mcp/server.js`
-pointed at an isolated Agent HQ API on `:3599` backed by the throwaway SQLite
+pointed at an isolated Agent HQ API on `:3599` backed by the throwaway test
 database (production has 7 projects, the test API had 0 — different databases,
 verified before the run):
 

@@ -167,9 +167,8 @@ export async function closeActiveInstanceAfterSemanticHandoff(
 export async function closeInstance(opts: CloseInstanceOptions): Promise<CloseInstanceResult> {
   const { db, instanceId, status = 'done', summary, outcome, skipIfAlreadyDone = false, recordCompletionNote = true } = opts;
 
-  // Use a simple SELECT on job_instances only first — avoids SQLITE_ERROR if
-  // schema is minimal (e.g. in tests). Richer fields are fetched below only
-  // if we actually proceed with closing.
+  // Use a simple SELECT on job_instances only first. Richer fields are fetched
+  // below only if we actually proceed with closing.
   const basicInstance = await db.get(`SELECT id, status FROM job_instances WHERE id = ?`, instanceId) as { id: number; status: string } | undefined;
   if (!basicInstance) {
     return { closed: false, reason: 'not_found' };

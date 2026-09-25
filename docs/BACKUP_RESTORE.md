@@ -1,9 +1,9 @@
 # PostgreSQL backup and restore
 
 Agent HQ's system of record is PostgreSQL 17. Database backups must be logical PostgreSQL
-archives; copying the PostgreSQL container volume or old SQLite files is not a supported
-database backup. Docker-managed workspace files and editable contract templates are separate
-operator data and need a file backup as well.
+archives; copying the PostgreSQL container volume is not a supported database backup.
+Docker-managed workspace files and editable contract templates are separate operator data and
+need a file backup as well.
 
 ## Create and verify a backup
 
@@ -72,8 +72,3 @@ volumes.
 `docker compose down` retains all named volumes. `docker compose down -v` permanently removes
 the database, workspaces, contract edits, and uploads and must only be used when intentionally
 discarding all of them.
-
-## Legacy files
-
-Pre-cutover `.db` files may be retained as historical rollback evidence, but the
-PostgreSQL-only application cannot open them. Do not present them as current backups.

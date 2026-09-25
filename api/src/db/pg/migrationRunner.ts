@@ -54,8 +54,8 @@ const LEGACY_BASELINE = [
 ] as const;
 const RETAINED_LEGACY_LEDGER = new Map<string, string>([
   ...LEGACY_BASELINE.map(({ id, checksum: legacyChecksum }) => [id, legacyChecksum] as const),
-  // PostgreSQL snapshots created by the old transfer path retained this SQLite-era provenance
-  // row. It never represented PostgreSQL DDL, but its exact value is immutable and known.
+  // Databases created by the original data-transfer path retain this provenance row. It never
+  // represented PostgreSQL DDL, but its exact value is immutable and known.
   ['init_schema', 'initSchema'],
 ]);
 

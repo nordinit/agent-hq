@@ -2,8 +2,10 @@ import fs from 'fs';
 import path from 'path';
 
 const TEST_ROOT = path.join(__dirname, '..');
-const SQLITE_EXCEPTION = path.join(TEST_ROOT, 'lib', 'openclawOAuthProfiles.test.ts');
-const SQLITE_LINT_FIXTURE = path.join(TEST_ROOT, 'tooling', 'sqlPortabilityLint.test.ts');
+// OpenClaw keeps its per-agent auth store in its own SQLite file, so that module's test builds
+// one on disk. The SQL lint's test only embeds raw-driver code as fixture strings.
+const OPENCLAW_AUTH_STORE_TEST = path.join(TEST_ROOT, 'lib', 'openclawOAuthProfiles.test.ts');
+const SQL_LINT_FIXTURE = path.join(TEST_ROOT, 'tooling', 'sqlPortabilityLint.test.ts');
 const POSTGRES_DDL_FIXTURES = new Set([
   path.join(TEST_ROOT, 'db', 'adapter', 'adapter.postgres.test.ts'),
   path.join(TEST_ROOT, 'db', 'pg', 'migrationVerification.test.ts'),
@@ -40,13 +42,10 @@ describe('PostgreSQL-only test suite', () => {
     .filter((file) => path.basename(file) !== 'testDb.test.ts')
     .map((file) => ({ file, body: code(fs.readFileSync(file, 'utf8')) }));
 
-  it('has no Agent HQ SQLite bootstrap or adapter usage', () => {
+  it('opens no raw database driver outside the OpenClaw auth-store test', () => {
     const offenders = tests
-      .filter(({ file, body }) => ![SQLITE_EXCEPTION, SQLITE_LINT_FIXTURE].includes(file) && (
-        /\binitSchema\s*\(/.test(body)
-        || /AGENT_HQ_DB_PATH\s*=/.test(body)
-        || /\bSqliteAdapter\b/.test(body)
-        || /from\s+['"]better-sqlite3['"]/.test(body)
+      .filter(({ file, body }) => ![OPENCLAW_AUTH_STORE_TEST, SQL_LINT_FIXTURE].includes(file) && (
+        /from\s+['"]better-sqlite3['"]/.test(body)
         || /\bnew\s+Database\s*\(/.test(body)
       ))
       .map(({ file }) => path.relative(TEST_ROOT, file));
@@ -54,8 +53,8 @@ describe('PostgreSQL-only test suite', () => {
     expect(offenders).toEqual([]);
   });
 
-  it('keeps the external OpenClaw SQLite reader covered as the sole exception', () => {
-    const externalReader = tests.find(({ file }) => file === SQLITE_EXCEPTION);
+  it('keeps the OpenClaw auth-store reader covered as the sole exception', () => {
+    const externalReader = tests.find(({ file }) => file === OPENCLAW_AUTH_STORE_TEST);
     expect(externalReader?.body).toMatch(/from\s+['"]better-sqlite3['"]/);
     expect(externalReader?.body).toMatch(/\bnew\s+Database\s*\(/);
   });
@@ -64,7 +63,7 @@ describe('PostgreSQL-only test suite', () => {
     const offenders = tests
       .filter(({ file, body }) => (
         !POSTGRES_DDL_FIXTURES.has(file)
-        && ![SQLITE_EXCEPTION, SQLITE_LINT_FIXTURE].includes(file)
+        && ![OPENCLAW_AUTH_STORE_TEST, SQL_LINT_FIXTURE].includes(file)
         && /\b(?:CREATE|ALTER|DROP)\s+(?:TABLE|INDEX)\b/i.test(withoutCaptureFaultInjection(body))
       ))
       .map(({ file }) => path.relative(TEST_ROOT, file));

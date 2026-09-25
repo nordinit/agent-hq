@@ -55,8 +55,7 @@ baseline and never performs adoption.
 6. Start/restart the API and verify `/health` plus a reversible read/write smoke test.
 
 The API refuses to listen when migrations are absent, pending, or drifted. Relevant
-error codes are `MIGRATION_PENDING` and `MIGRATION_DRIFT`; there is no SQLite
-`SCHEMA_MIGRATION_REQUIRED` path.
+error codes are `MIGRATION_PENDING` and `MIGRATION_DRIFT`.
 
 ## Docker
 

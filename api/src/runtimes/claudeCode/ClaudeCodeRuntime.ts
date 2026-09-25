@@ -820,8 +820,7 @@ export class ClaudeCodeRuntime implements AgentRuntime {
         instanceId,
       );
 
-      // json_set's path must be a literal — the Postgres dialect layer rejects a
-      // bound-parameter path when translating to jsonb_set.
+      // The jsonb_set path is a literal text[]; only the new value is bound.
       await db.run(
         `
         UPDATE job_instances

@@ -322,13 +322,12 @@ async function persistHistoryMessages(
 
     // ONE transaction around the delete-then-reinsert.
     //
-    // Before the async conversion the DELETE and the whole insert loop ran in a single
-    // uninterrupted better-sqlite3 tick, so no reader could observe the gap. Now every await
-    // yields the event loop, and this is a full refresh: it deletes every oc-hist-* and
-    // oc-live-* row for the instance and rebuilds them one statement at a time. A concurrent
-    // reader — routes/chat/persistence.ts and routes/sessions.ts both SELECT from
-    // chat_messages on ordinary HTTP requests, and a refresh fires on every
-    // final/aborted/error chat event — would render an empty or truncated transcript.
+    // Every await yields the event loop, and this is a full refresh: it deletes every
+    // oc-hist-* and oc-live-* row for the instance and rebuilds them one statement at a
+    // time. Without the transaction a concurrent reader — routes/chat/persistence.ts and
+    // routes/sessions.ts both SELECT from chat_messages on ordinary HTTP requests, and a
+    // refresh fires on every final/aborted/error chat event — would render an empty or
+    // truncated transcript.
     return await db.withTransaction(async (tx) => {
       await tx.run('DELETE FROM chat_messages WHERE id LIKE ? OR id LIKE ?', `oc-hist-${ctx.instanceId}-%`, `oc-live-${ctx.instanceId}-%`);
 

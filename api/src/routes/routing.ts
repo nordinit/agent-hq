@@ -102,8 +102,7 @@ class DryRunRollback<T> extends Error {
  * The previous implementation issued SAVEPOINT / ROLLBACK TO / RELEASE as three separate
  * exec() calls on the pooled handle. That is wrong twice over on PostgreSQL: SAVEPOINT
  * outside a transaction block is an error, and each statement on a pooled handle may land
- * on a different connection, so even a bare BEGIN would not have helped. It happened to
- * work on SQLite, and the suite runs on SQLite, so it passed CI while 500ing in production.
+ * on a different connection, so even a bare BEGIN would not have helped.
  *
  * `run` therefore takes the transaction handle explicitly. Every routing domain mutation
  * already accepts a `Db` as its first argument and none of them reach for getDb(), so the

@@ -20,7 +20,6 @@ function createMockDb(onRun?: (sql: string) => void) {
   const runs: Recorded[] = [];
   const db = {
     runs,
-    dialect: 'sqlite' as const,
     inTransaction: false,
     get: jest.fn(async () => undefined),
     all: jest.fn(async () => []),

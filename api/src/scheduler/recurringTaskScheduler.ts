@@ -202,13 +202,12 @@ async function validateSeriesForCreation(db: Db, series: RecurringTaskSeriesReco
 
 async function createStartedRun(db: Db, series: RecurringTaskSeriesRecord, scheduledFor: string): Promise<RecurringTaskRunRecord | null> {
   try {
-    // The insert runs in a NESTED transaction — a savepoint on both engines — because this
-    // catch is a duplicate detector, not an abort. On PostgreSQL a statement that raises
-    // poisons the whole surrounding transaction: every later command fails with "current
-    // transaction is aborted, commands ignored until end of transaction block", so the
-    // recovery SELECT below could never run and a duplicate occurrence surfaced as a
-    // scheduler error instead of a duplicate. SQLite lets a failed statement pass and the
-    // transaction continue, which is why this only broke after the engine swap.
+    // The insert runs in a NESTED transaction — a savepoint — because this catch is a
+    // duplicate detector, not an abort. On PostgreSQL a statement that raises poisons the
+    // whole surrounding transaction: every later command fails with "current transaction is
+    // aborted, commands ignored until end of transaction block", so without the savepoint the
+    // recovery SELECT below could never run and a duplicate occurrence would surface as a
+    // scheduler error instead of a duplicate.
     return await db.withTransaction(async (tx) => await recordRecurringTaskRun(tx, {
           series_id: series.id,
           scheduled_for: scheduledFor,

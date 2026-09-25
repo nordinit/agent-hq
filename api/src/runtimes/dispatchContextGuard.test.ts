@@ -61,7 +61,6 @@ function mockDb(row: { agent_id?: number; tenant_id?: number | null } | null | u
   tenant_id: 2,
 }): Db & { get: jest.Mock } {
   return {
-    dialect: 'sqlite',
     inTransaction: false,
     get: jest.fn(async () => row),
     all: jest.fn(async () => []),

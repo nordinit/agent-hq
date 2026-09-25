@@ -1493,12 +1493,11 @@ async function getScopedTaskContexts(db: Db, identity: McpApiIdentity): Promise<
  * `AS instanceId` returns a column named `instanceid`, `row.instanceId` below reads undefined, and
  * Number(undefined) is NaN. Every id in the returned set became NaN, so scopedInstanceIds.has(id)
  * was false for every instance and EVERY agent was denied lifecycle callbacks on its own run —
- * which is exactly what happened in production once it moved to PostgreSQL. SQLite preserves the
- * alias case, so the same code was correct there and nothing failed until the engine changed.
+ * which is exactly what happened in production.
  *
  * Nothing threw and nothing logged: the query succeeded, the rows came back, and only the property
- * names differed. They are spelled out explicitly because PostgreSQL has no execution-time
- * dialect translator and this query decides an authorization outcome.
+ * names differed. They are spelled out explicitly because this query decides an authorization
+ * outcome.
  *
  * NOTE: the status list is an allowlist of live statuses, but production job_instances only ever
  * hold done, failed, cancelled and dispatched — so two of the three values enumerated here never

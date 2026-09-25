@@ -113,12 +113,11 @@ async function seedRunFixtures(): Promise<void> {
 /**
  * Drains the event loop until the capture's in-flight persistence has settled.
  *
- * This used to be four chained setImmediate frames, which was enough only because every write
- * was a synchronous better-sqlite3 call that resolved on the microtask queue. On PostgreSQL a
- * single history persist is a dozen socket round trips — two introspection queries, a
- * checkout, BEGIN, a DELETE, one INSERT per row, COMMIT — so a fixed frame count no longer
- * bounds the work it is waiting for. Yielding repeatedly for a wall-clock budget does, and
- * setImmediate resolves after the poll phase, so socket replies are processed each turn.
+ * A single history persist is a dozen socket round trips — two introspection queries, a
+ * checkout, BEGIN, a DELETE, one INSERT per row, COMMIT — so a fixed count of setImmediate
+ * frames does not bound the work it is waiting for. Yielding repeatedly for a wall-clock budget
+ * does, and setImmediate resolves after the poll phase, so socket replies are processed each
+ * turn.
  */
 const SETTLE_MS = 150;
 

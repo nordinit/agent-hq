@@ -8,14 +8,12 @@ import { getDb } from '../db/client';
 import agentsRouter from './agents';
 
 let tempDir: string;
-let dbPath: string;
 const ORIGINAL_OPENCLAW_CONFIG_PATH = process.env.OPENCLAW_CONFIG_PATH;
 
 async function resetDb(): Promise<void> {
   await setupTestDb();
   fs.rmSync(tempDir, { recursive: true, force: true });
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-delete-'));
-  dbPath = path.join(tempDir, 'agent-hq-test.db');
   process.env.OPENCLAW_CONFIG_PATH = path.join(tempDir, 'openclaw.json');
 
   const db = getDb();
@@ -48,7 +46,6 @@ async function stopTestServer(server: Server): Promise<void> {
 describe('agents delete', () => {
   beforeEach(async () => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-delete-'));
-    dbPath = path.join(tempDir, 'agent-hq-test.db');
     await resetDb();
   });
 

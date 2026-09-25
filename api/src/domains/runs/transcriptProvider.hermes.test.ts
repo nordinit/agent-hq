@@ -2,8 +2,7 @@ import { jest } from '@jest/globals';
 
 const mockGet = jest.fn();
 
-// Adapter shape — db.get(sql, ...) — not better-sqlite3's prepare(sql).get(). mockGet stays
-// the source of truth for the row; only the calling convention changed.
+// Adapter shape — db.get(sql, ...). mockGet is the source of truth for the row.
 jest.mock('../../db/client', () => ({
   getDb: () => ({
     get: async () => mockGet(),

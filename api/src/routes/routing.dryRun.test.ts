@@ -11,11 +11,9 @@ import router from './routing';
  * and which could not have worked anyway, since each statement on a pooled handle may
  * land on a different connection.
  *
- * That bug shipped and stayed green: routing.test.ts hand-builds an in-memory SQLite
- * database and asserts `dry_run === true`, and SQLite auto-begins a transaction so the
- * savepoint is legal there. The whole class of defect is invisible to a SQLite-only
- * suite, which is why this file goes through setupTestDb() — run it with
- * AGENT_HQ_TEST_PG_URL set and it exercises the engine production actually uses.
+ * Asserting `dry_run === true` in the response is not enough to catch that: this file goes
+ * through setupTestDb() and a real HTTP round trip so it exercises pooled connections the
+ * way production does, and checks that nothing was persisted.
  */
 
 async function startServer(): Promise<{ server: Server; baseUrl: string }> {

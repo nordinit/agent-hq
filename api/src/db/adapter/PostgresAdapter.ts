@@ -21,7 +21,7 @@ import { toPostgresParams } from './postgresParams';
  *
  * node-postgres decodes int8 as a string by default, because PostgreSQL's range exceeds
  * IEEE-754. That default is wrong for this application and silently corrosive: the baseline
- * maps every SQLite INTEGER to bigint, so EVERY id, count and foreign key comes back as
+ * schema declares its integer columns as bigint, so EVERY id, count and foreign key comes back as
  * "99" instead of 99. Nothing throws — JSON responses just change shape, `id === 99` starts
  * failing, arithmetic silently concatenates, and the UI compares strings to numbers.
  *
@@ -33,9 +33,9 @@ import { toPostgresParams } from './postgresParams';
  * schema declares no numeric column anywhere — 554 text, 323 bigint, 2 double precision — so
  * every numeric value the driver ever sees is the result of an aggregate. PostgreSQL widens
  * SUM(bigint) to numeric to avoid overflow and AVG() likewise, so leaving it as a string turned
- * workflows.total_story_points into "13" and telemetry's first_pass_rate_pct into "0.0" while the
- * SQLite build returned numbers. Since no column carries the type, there is no column precision
- * to protect by keeping the string form.
+ * workflows.total_story_points into "13" and telemetry's first_pass_rate_pct into "0.0" instead
+ * of numbers. Since no column carries the type, there is no column precision to protect by
+ * keeping the string form.
  */
 const PG_INT8_OID = 20;
 const PG_NUMERIC_OID = 1700;

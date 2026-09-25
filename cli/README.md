@@ -37,7 +37,6 @@ DATABASE_URL=postgresql://user:password@127.0.0.1:5432/agent_hq \
 
 If Docker is unavailable, plain `start` exits with setup guidance. Native mode is
 selected only by `--no-docker`, even when a PostgreSQL URL is already present.
-There is no SQLite fallback.
 
 Native mode caches source under `~/.agent-hq/source/`, installs dependencies,
 builds API/UI, runs the explicit database install command, and manages the two

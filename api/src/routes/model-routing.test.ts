@@ -9,13 +9,11 @@ import { getDb } from '../db/client';
 import { ensureTenantSchema } from '../lib/tenantContext';
 
 let tempDir: string;
-let dbPath: string;
 
 async function resetDb(): Promise<void> {
   await setupTestDb();
   fs.rmSync(tempDir, { recursive: true, force: true });
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-routing-'));
-  dbPath = path.join(tempDir, 'agent-hq-test.db');
 
   const db = getDb();
   await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Default Tenant', 'default', 1)`);
@@ -68,7 +66,6 @@ async function stopTestServer(server: Server): Promise<void> {
 describe('model-routing aliases', () => {
   beforeEach(async () => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-routing-'));
-    dbPath = path.join(tempDir, 'agent-hq-test.db');
     await resetDb();
   });
 

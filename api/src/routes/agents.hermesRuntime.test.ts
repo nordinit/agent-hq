@@ -8,7 +8,6 @@ import { getDb } from '../db/client';
 import agentsRouter from './agents';
 
 let tempDir: string;
-let dbPath: string;
 const ORIGINAL_OPENCLAW_CONFIG_PATH = process.env.OPENCLAW_CONFIG_PATH;
 const ORIGINAL_DISABLE_OPENCLAW_PLUGIN_REGISTRY_REFRESH = process.env.AGENT_HQ_DISABLE_OPENCLAW_PLUGIN_REGISTRY_REFRESH;
 
@@ -16,7 +15,6 @@ async function resetDb(): Promise<void> {
   await setupTestDb();
   fs.rmSync(tempDir, { recursive: true, force: true });
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-hermes-runtime-'));
-  dbPath = path.join(tempDir, 'agent-hq-test.db');
   process.env.OPENCLAW_CONFIG_PATH = path.join(tempDir, 'openclaw.json');
   process.env.AGENT_HQ_DISABLE_OPENCLAW_PLUGIN_REGISTRY_REFRESH = '1';
 
@@ -49,7 +47,6 @@ async function stopTestServer(server: Server): Promise<void> {
 describe('agents Hermes runtime CRUD support', () => {
   beforeEach(async () => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-hermes-runtime-'));
-    dbPath = path.join(tempDir, 'agent-hq-test.db');
     await resetDb();
   });
 

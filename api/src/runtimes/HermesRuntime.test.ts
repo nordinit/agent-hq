@@ -132,7 +132,6 @@ function createMockDb(options: {
 
   const db: Record<string, unknown> = {
     __statements: statements,
-    dialect: 'postgres',
     inTransaction: false,
     get: jest.fn(async (sql: string, ...params: unknown[]) => statementFor(sql).get(...params)),
     all: jest.fn(async (sql: string, ...params: unknown[]) => statementFor(sql).all(...params)),

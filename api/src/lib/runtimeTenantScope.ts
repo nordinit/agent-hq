@@ -136,9 +136,8 @@ export async function runtimeTenantInsertColumns(
  *
  * Inside ON CONFLICT ... DO UPDATE SET, a bare `tenant_id` on the right-hand side is ambiguous
  * in PostgreSQL — it could mean the existing row or the proposed `excluded` one — and it is
- * rejected outright with `column reference "tenant_id" is ambiguous`. SQLite silently resolves
- * it to the target table, so the unqualified form worked on one engine and failed on the other.
- * Naming the table is accepted by both and says which row is meant.
+ * rejected outright with `column reference "tenant_id" is ambiguous`. Naming the table says
+ * which row is meant.
  */
 export async function tenantUpsertUpdateSql(db: Db, table: string): Promise<string> {
   return await hasTenantId(db, table)

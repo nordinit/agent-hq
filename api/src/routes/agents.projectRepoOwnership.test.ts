@@ -9,13 +9,11 @@ import agentsRouter from './agents';
 import projectsRouter from './projects';
 
 let tempDir: string;
-let dbPath: string;
 
 async function resetDb(): Promise<void> {
   await setupTestDb();
   fs.rmSync(tempDir, { recursive: true, force: true });
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-project-repo-'));
-  dbPath = path.join(tempDir, 'agent-hq-test.db');
 
   const db = getDb();
 
@@ -47,7 +45,6 @@ async function stopTestServer(server: Server): Promise<void> {
 describe('agent repo ownership enforcement', () => {
   beforeEach(async () => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-project-repo-'));
-    dbPath = path.join(tempDir, 'agent-hq-test.db');
     await resetDb();
   });
 

@@ -37,13 +37,11 @@ import { DEV_ENV_DEPLOY_FAILURE_EVENTS, seedDefaultExternalEventMappings } from 
 import { cleanupTaskExecutionLinkageForStatus } from '../lib/taskLifecycle';
 
 let tempDir: string;
-let dbPath: string;
 
 async function resetDb(): Promise<void> {
   await setupTestDb();
   fs.rmSync(tempDir, { recursive: true, force: true });
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'external-task-events-'));
-  dbPath = path.join(tempDir, 'agent-hq-test.db');
 
   const db = getDb();
 
@@ -125,7 +123,6 @@ async function issueCinderApiKey(capabilities: string[]): Promise<string> {
 describe('external task events route', () => {
   beforeEach(async () => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'external-task-events-'));
-    dbPath = path.join(tempDir, 'agent-hq-test.db');
     await resetDb();
   });
 

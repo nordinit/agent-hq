@@ -56,8 +56,7 @@ export function runDbContractTests(harness: ContractHarness): void {
       // comes back as `instanceid`, `row.instanceId` reads
       // undefined, and Number(undefined) was NaN. That silently turned every id in an MCP
       // authorization scope set into NaN and denied every agent lifecycle callbacks on its own
-      // run. SQLite preserves the case, so the same code was correct there — which is exactly why
-      // the source query must quote application-facing camel-case aliases.
+      // run — which is why the source query must quote application-facing camel-case aliases.
       await db.run(`INSERT INTO parents (name) VALUES (?)`, 'alpha');
 
       const row = await db.get<{ parentName?: string }>(`SELECT name AS "parentName" FROM parents WHERE id = ?`, 1);
@@ -115,9 +114,7 @@ export function runDbContractTests(harness: ContractHarness): void {
       expect(await db.get(`SELECT name FROM parents WHERE name = ?`, 'discarded')).toBeUndefined();
     });
 
-    it('supports an async callback, which better-sqlite3 transactions cannot', async () => {
-      // db.transaction(async () => {}) throws "Transaction function cannot return a
-      // promise" at runtime. This is the whole reason withTransaction exists.
+    it('supports an async callback', async () => {
       await db.withTransaction(async (tx) => {
         await tx.run(`INSERT INTO parents (name) VALUES (?)`, 'a');
         await new Promise((resolve) => setImmediate(resolve));

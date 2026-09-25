@@ -11,7 +11,7 @@ function analyze(relativeFile: string, source: string) {
 }
 
 describe('SQL portability lint', () => {
-  it('detects SQLite translator debt and runtime schema DDL in SQL literals', () => {
+  it('detects SQL PostgreSQL does not accept and runtime schema DDL in SQL literals', () => {
     const findings = analyze('src/routes/example.ts', `
       const query = \`
         CREATE TABLE cache (id INTEGER PRIMARY KEY AUTOINCREMENT);
@@ -80,7 +80,7 @@ describe('SQL portability lint', () => {
     ]));
   });
 
-  it('detects SQLite SQL and runtime DDL in an ordinary production database module', () => {
+  it('detects non-PostgreSQL SQL and runtime DDL in an ordinary production database module', () => {
     const findings = analyze('src/db/runtimeCache.ts', `
       const initialize = "CREATE TABLE runtime_cache (id INTEGER PRIMARY KEY AUTOINCREMENT); INSERT OR IGNORE INTO runtime_cache VALUES (1); SELECT datetime('now') FROM runtime_cache;";
     `);
@@ -93,7 +93,7 @@ describe('SQL portability lint', () => {
     ]));
   });
 
-  it('allows migration-ledger DDL but still rejects SQLite syntax in the migration runner', () => {
+  it('allows migration-ledger DDL but still rejects non-PostgreSQL syntax in the migration runner', () => {
     const findings = analyze('src/db/pg/migrationRunner.ts', `
       const ledger = 'CREATE TABLE IF NOT EXISTS schema_migrations (id text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())';
       const invalid = 'INSERT OR IGNORE INTO schema_migrations VALUES (?)';

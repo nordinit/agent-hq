@@ -30,7 +30,6 @@ function writeDir(files: Record<string, string>): string {
  */
 function ledgerStub(applied: Array<{ id: string; checksum: string }>, exists = true) {
   return {
-    dialect: 'postgres' as const,
     inTransaction: false,
     exec: async () => {},
     all: async () => applied,
@@ -68,7 +67,6 @@ function runnerStub(applied: Array<{ id: string; checksum: string }> = [], exist
   };
 
   const tx = {
-    dialect: 'postgres' as const,
     inTransaction: true,
     exec,
     run,

@@ -5,12 +5,9 @@ import { describe, expect, it } from '@jest/globals';
 import { parseIdParam, requireNumericId } from './routeParams';
 
 /**
- * The bug this guards against is engine-specific and was invisible on SQLite.
- *
  * `GET /api/v1/workflows/types` matches a `/:id` route and hands the handler the string 'types'.
- * SQLite compared that to an INTEGER column, matched nothing, and the route returned a clean 404.
- * PostgreSQL rejects the cast — `invalid input syntax for type bigint: "types"` — so the same
- * request became a 500 carrying database text.
+ * PostgreSQL rejects the cast — `invalid input syntax for type bigint: "types"` — so without the
+ * guard the request becomes a 500 carrying database text instead of a 404.
  */
 async function closeServer(server: Server): Promise<void> {
   if (!server.listening) return;

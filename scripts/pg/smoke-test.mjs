@@ -3,8 +3,8 @@
  * Runs representative Agent HQ query shapes against a provisioned PostgreSQL database,
  * through the real PostgresAdapter.
  *
- * The adapter's own contract suite proves it behaves like the SQLite one on a toy schema of
- * two tables. That is necessary but not sufficient: it says nothing about whether the
+ * The adapter's own contract suite proves its semantics on a toy schema of two tables.
+ * That is necessary but not sufficient: it says nothing about whether the
  * REAL queries — against the current PostgreSQL schema and loaded production-shaped data —
  * actually run. The failures this catches are the ones the contract tests structurally
  * cannot: a stale identifier, a PostgreSQL-incompatible query shape, a broken sequence, or
@@ -122,15 +122,15 @@ async function main() {
     return `top workflow has ${rows[0]?.task_count ?? 0} tasks`;
   });
 
-  await check('string_agg replaces GROUP_CONCAT', async () => {
+  await check('string_agg aggregation', async () => {
     const rows = await q(`
       SELECT string_agg(DISTINCT status, ',') AS statuses FROM tasks`);
     return rows[0].statuses?.slice(0, 60) ?? '(none)';
   });
 
   await check('NULL-safe comparison (IS NOT DISTINCT FROM)', async () => {
-    // PostgreSQL rejects the former SQLite `col IS ?` spelling. Application SQL uses
-    // the native null-safe operator directly now that no dialect translator exists.
+    // PostgreSQL rejects a bound parameter after a bare IS; application SQL uses the
+    // native null-safe operator.
     const rows = await q(
       `SELECT COUNT(*)::int AS c FROM tasks WHERE agent_id IS NOT DISTINCT FROM ?`, [null]);
     return `${rows[0].c} unassigned`;

@@ -23,7 +23,7 @@ describe('pg testFixture probe', () => {
     expect(t?.id).toBe(1);   // RESTART IDENTITY makes this deterministic
     await expect(db.run(
       `INSERT INTO tasks (tenant_id, title, project_id) VALUES (?, ?, ?)`, 1, 'x', 999999,
-    )).rejects.toThrow();     // real FK, unlike the retired hand-written SQLite fixtures
+    )).rejects.toThrow();     // real FK from the migrated schema
   });
 
   it('is isolated from the previous test', async () => {

@@ -11,8 +11,8 @@ describe('isPostgresUniqueViolation', () => {
     expect(isPostgresUniqueViolation(error, ['uq_tasks_slug'])).toBe(false);
   });
 
-  it('does not recognize SQLite error shapes or unrelated SQLSTATEs', () => {
-    expect(isPostgresUniqueViolation({ code: 'SQLITE_CONSTRAINT_UNIQUE' })).toBe(false);
+  it('does not recognize non-SQLSTATE error shapes or unrelated SQLSTATEs', () => {
+    expect(isPostgresUniqueViolation({ code: 'CONSTRAINT_UNIQUE' })).toBe(false);
     expect(isPostgresUniqueViolation({ code: '23503' })).toBe(false);
     expect(isPostgresUniqueViolation(new Error('UNIQUE constraint failed'))).toBe(false);
   });

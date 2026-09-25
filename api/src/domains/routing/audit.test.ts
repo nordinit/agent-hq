@@ -148,11 +148,8 @@ describe('routing config audit log', () => {
   });
 
   it('throws rather than swallowing a failed write', async () => {
-    // Injected failure rather than a real one. Two earlier versions of this test provoked
-    // the error through the database — a bad foreign key, then a dropped table — and both
-    // were order-dependent: SQLite only enforces foreign keys when the pragma is on and
-    // initSchema turns it off while rebuilding, and a :memory: handle reopened mid-test is
-    // a different database entirely. Each passed alone and failed under a full run.
+    // Injected failure rather than a real one: provoking the error through the database
+    // (a bad foreign key, a dropped table) couples the test to schema state and ordering.
     //
     // The behaviour under test has nothing to do with the schema: writeRoutingAudit must
     // propagate whatever the write throws, because this row is the only record of the

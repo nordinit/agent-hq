@@ -77,7 +77,7 @@ containers, and back it up independently.
 
 ## Native Node deployment
 
-Native mode requires an existing PostgreSQL server; there is no file-database fallback.
+Native mode requires an existing PostgreSQL server.
 
 ```bash
 git clone https://github.com/nordinit/agent-hq.git

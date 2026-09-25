@@ -16,7 +16,7 @@ import { type Db } from "../db/adapter/types";
  * A hand-built test fixture hid it: its `tasks` table had no `tenant_id` column at all, so the
  * value was `undefined`, `Number(undefined)` is NaN, and the fallback ran. The real schema has the
  * column and allows it to be NULL, which is why converting the test onto the real baseline
- * surfaced it on both engines at once.
+ * surfaced it.
  */
 function rowId(value: unknown): number | null {
   if (value == null || value === '') return null;

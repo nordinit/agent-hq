@@ -34,7 +34,7 @@ export const RUNTIME_TRANSCRIPT_EVENT_KINDS = [
 
 export type RuntimeTranscriptEventKind = (typeof RUNTIME_TRANSCRIPT_EVENT_KINDS)[number];
 
-/** Roles permitted by the CHECK constraint on chat_messages.role in both engines. */
+/** Roles permitted by the CHECK constraint on chat_messages.role. */
 export const PERSISTED_CHAT_ROLES = ['user', 'assistant', 'system', 'tool'] as const;
 export type PersistedChatRole = (typeof PERSISTED_CHAT_ROLES)[number];
 

@@ -120,15 +120,11 @@ function localDatabaseUrl() {
 }
 
 function apiProcessEnv(databaseUrl, extra = {}) {
-  const env = {
+  return {
     ...process.env,
     ...extra,
     DATABASE_URL: databaseUrl,
   };
-  // Never let a stale SQLite setting become an implicit fallback in a child.
-  delete env.AGENT_HQ_DB_PATH;
-  delete env.DATABASE_PATH;
-  return env;
 }
 
 function shouldUseShell(executable) {
@@ -718,7 +714,7 @@ export function localStatus() {
   console.log(
     `  UI  (PID ${state.uiPid}): ${uiAlive ? '\x1b[32mrunning\x1b[0m' : '\x1b[31mstopped\x1b[0m'}  → http://localhost:${state.uiPort}`,
   );
-  console.log(`  DB:  ${state.database || state.dbPath || 'PostgreSQL'}`);
+  console.log(`  DB:  ${state.database || 'PostgreSQL'}`);
 
   if (!apiAlive && !uiAlive) {
     warn('Both processes have stopped. Run `agent-hq start` to restart.');

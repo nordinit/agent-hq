@@ -2,8 +2,8 @@ const TZ = 'America/New_York';
 
 /**
  * Parse a date string from the DB (may be missing the 'Z' suffix for UTC).
- * SQLite stores datetimes as "YYYY-MM-DD HH:MM:SS" without timezone info —
- * we treat them as UTC and append 'Z' so JS parses them correctly.
+ * The API stores canonical datetimes as "YYYY-MM-DD HH:MM:SS" without timezone
+ * info — we treat them as UTC and append 'Z' so JS parses them correctly.
  */
 export function parseDbDate(dateStr: string): Date {
   if (!dateStr) return new Date(NaN);

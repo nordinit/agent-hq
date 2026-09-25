@@ -2,13 +2,8 @@
 # =============================================================================
 # Agent HQ PostgreSQL Backup
 # =============================================================================
-# Backs up the production PostgreSQL database (the system of record since the
-# 2026-07-29 cutover) to a local directory with retention.
-#
-# Replaces scripts/backup-db.sh, which backed up the SQLite file at
-# AGENT_HQ_DB_PATH. That file has been frozen since the cutover, so the nightly
-# job was producing identical copies of a database production no longer writes
-# to while PostgreSQL went unbacked. See docs/postgres-only-migration-spec.md.
+# Backs up the production PostgreSQL database (the system of record) to a local
+# directory with retention.
 #
 # Usage:
 #   ./scripts/backup-pg.sh              # backup + archive integrity check
@@ -19,9 +14,9 @@
 # Logs:     $AGENT_HQ_LOG_DIR/backup.log  (default <repo>/logs/backup.log)
 # Schedule: daily 02:00 via launchd job com.atlas-hq.backup
 #
-# Unlike backup-db.sh this script is version controlled. It holds no secrets and
-# every path is an overridable default — and a backup script that exists only on
-# the machine being backed up is not a recovery plan.
+# This script is version controlled on purpose. It holds no secrets and every
+# path is an overridable default — and a backup script that exists only on the
+# machine being backed up is not a recovery plan.
 # =============================================================================
 
 set -euo pipefail

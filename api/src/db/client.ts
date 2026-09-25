@@ -10,8 +10,7 @@ function databaseUrl(): string {
   const value = process.env.AGENT_HQ_DATABASE_URL ?? process.env.DATABASE_URL;
   if (!value || !value.trim()) {
     throw new Error(
-      'PostgreSQL is required. Set DATABASE_URL or AGENT_HQ_DATABASE_URL before starting Agent HQ. '
-      + 'There is no SQLite or local-file fallback.',
+      'PostgreSQL is required. Set DATABASE_URL or AGENT_HQ_DATABASE_URL before starting Agent HQ.',
     );
   }
   return value.trim();

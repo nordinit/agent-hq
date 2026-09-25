@@ -8,6 +8,15 @@ import {
   type Node as MorphNode,
 } from 'ts-morph';
 
+/**
+ * Static checks over the SQL literals in application source (run by `npm run lint:sql`).
+ *
+ * Every pattern below is SQL that PostgreSQL rejects or silently changes: functions and syntax it
+ * does not have, unquoted mixed-case aliases it folds, two-argument round() without a numeric
+ * argument, untyped `? IS NULL` parameters, and schema DDL outside db/pg-migrations. It also keeps
+ * two workflow-policy invariants and confines better-sqlite3 to the one module that reads
+ * OpenClaw's own on-disk auth store, which is not Agent HQ's database.
+ */
 const OPENCLAW_SQLITE_INTEGRATION = 'src/lib/openclawOAuthProfiles.ts';
 const LINTER_SOURCE = 'src/tooling/sqlPortabilityLint.ts';
 const POLICY_SEED_ALLOWED_SOURCES = new Set([
@@ -281,7 +290,7 @@ export function analyzeSqlPortabilitySourceFile(sourceFile: SourceFile, apiRoot:
   }
 
   // Production src/db modules are application code too. Keep exemptions construct-specific so a
-  // legitimate ledger CREATE TABLE cannot mask SQLite syntax elsewhere in the same source file.
+  // legitimate ledger CREATE TABLE cannot mask invalid syntax elsewhere in the same source file.
   const exemptConstructs = SQL_DEBT_EXEMPTIONS.get(relativeFile) ?? new Set<string>();
   const literalNodes = sourceFile.getDescendants().filter((node) => (
     Node.isStringLiteral(node)

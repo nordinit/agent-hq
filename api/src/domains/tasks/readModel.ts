@@ -408,8 +408,8 @@ export async function searchProjectTasks(
     params.push(taskType);
   }
   for (const [key, value] of Object.entries(customFieldMatches)) {
-    // `IS ?` is SQLite-only NULL-safe equality; Postgres rejects a parameter after IS.
-    // The SQL here is built per request, so branch on nullness instead.
+    // PostgreSQL rejects a parameter after IS, and the SQL here is built per request,
+    // so branch on nullness instead of binding a null-safe comparison.
     const sqlValue = normalizeCustomFieldSqlValue(value);
     if (sqlValue === null || sqlValue === undefined) {
       conditions.push('jsonb_extract_path_text(t.custom_fields_json::jsonb, ?) IS NULL');
@@ -488,11 +488,9 @@ export async function listRecentlyCompletedTasks(
   const tenantId = Number(tenantIdRaw) || null;
   const projectFilter = projectId ? 'AND t.project_id = ?' : '';
   const tenantFilter = tenantId ? 'AND t.tenant_id = ?' : '';
-  // The cutoff is computed HERE and bound as one parameter, rather than assembled in SQL as
-  // datetime('now', '-' || ? || ' hours'). That concatenation is not portable: PostgreSQL
-  // reports `function datetime(unknown, text) does not exist`, and an interval literal cannot
-  // be built by string concatenation at all. updated_at is canonical-format text, so a direct
-  // comparison against a canonical timestamp is exactly what SQLite was already doing.
+  // The cutoff is computed HERE and bound as one parameter rather than assembled in SQL: an
+  // interval literal cannot be built by string concatenation. updated_at is canonical-format
+  // text, so a direct comparison against a canonical timestamp is correct.
   const cutoff = timestampFromEpochMs(Date.now() - hours * 60 * 60 * 1000) ?? nowTimestamp();
   const params: unknown[] = [cutoff];
   if (projectId) params.push(projectId);

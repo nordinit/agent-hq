@@ -1,18 +1,15 @@
 /**
  * Validation for numeric route parameters.
  *
- * SQLite's weak typing hid a whole class of bug here. Given `/api/v1/workflows/types`, Express
- * matches `/:id` and hands the handler the string `'types'`. SQLite compares that to an
- * INTEGER column, finds no match, and the route returns a clean 404. PostgreSQL rejects the
- * cast outright:
+ * Given `/api/v1/workflows/types`, Express matches `/:id` and hands the handler the string
+ * `'types'`. PostgreSQL rejects the cast outright:
  *
  *     invalid input syntax for type bigint: "types"
  *
- * so the same request becomes a 500 carrying a database error message — the wrong status, and
- * a small information leak.
+ * so without validation the request becomes a 500 carrying a database error message — the
+ * wrong status, and a small information leak.
  *
- * Validating at the boundary is more correct than either engine's accident: a non-numeric id
- * is a client error, and should never reach the database at all.
+ * A non-numeric id is a client error, and should never reach the database at all.
  */
 
 import type { NextFunction, Request, Response } from 'express';
@@ -37,11 +34,8 @@ export function parseIdParam(raw: string | undefined): number | null {
  * router carrying its own `router.param('id', ...)` returned 404. Since every route here lives on
  * a sub-router mounted under /api/v1, a single app-level registration would silently do nothing.
  *
- * 404 rather than 400 is deliberate: it reproduces exactly what SQLite did. A non-numeric id
- * compared against an INTEGER column matched no row, so the route already returned "not found",
- * and every client and test was written against that. PostgreSQL instead rejects the cast with
- * `invalid input syntax for type bigint`, which surfaced as a 500 carrying database text. Keeping
- * 404 makes the fix a restoration rather than a new contract.
+ * 404 rather than 400 is deliberate: a non-numeric id names no row, so "not found" is the
+ * established contract every client and test was written against.
  *
  * Safe to apply to every `:id` in this codebase: the only TEXT primary keys are
  * chat_messages.id, app_settings.key, task_statuses.name, schema_migrations.id and the

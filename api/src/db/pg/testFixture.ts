@@ -7,7 +7,7 @@ import { loadMigrations, runMigrations, verifyMigrationsCurrent } from './migrat
 import {makeWorkerDatabaseName,workerDatabaseOwnerComment} from './testDatabaseCleanup';
 
 /**
- * PostgreSQL fixtures for the test suite, replacing initSchema()-built SQLite databases.
+ * PostgreSQL fixtures for the test suite.
  *
  * THE COST THIS EXISTS TO AVOID
  * Building the schema per test file means 71 tables, 192 indexes and 130 foreign keys —
@@ -21,18 +21,15 @@ import {makeWorkerDatabaseName,workerDatabaseOwnerComment} from './testDatabaseC
  * on a shared database; test files within a worker run sequentially, so truncation between
  * them is sufficient and is far cheaper than another clone.
  *
- * Requires AGENT_HQ_TEST_PG_URL. There is no SQLite fallback: a fallback would mean the
- * suite silently exercising a different engine than production, which is precisely the
- * class of gap this migration exists to close.
+ * Requires AGENT_HQ_TEST_PG_URL. There is deliberately no fallback: the suite must exercise
+ * the same engine and migrated schema as production.
  */
 
 function adminUrl(): string {
   const url = process.env.AGENT_HQ_TEST_PG_URL;
   if (!url) {
     throw new Error(
-      'AGENT_HQ_TEST_PG_URL is not set. The test suite requires a PostgreSQL server; ' +
-      'there is deliberately no SQLite fallback, because a fallback would exercise a ' +
-      'different engine than production.'
+      'AGENT_HQ_TEST_PG_URL is not set. The test suite requires a PostgreSQL server.'
     );
   }
   return url;

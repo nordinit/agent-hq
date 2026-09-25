@@ -7,7 +7,7 @@
  *
  * Deliberately isolated from production in four separate ways, because any one of them
  * failing alone would be enough to touch live data:
- *   - a different DATABASE (PostgreSQL, not ~/.agent-hq/agent-hq.db)
+ *   - a different DATABASE (agent_hq_pgtest, never production's DATABASE_URL)
  *   - different PORTS
  *   - different PM2 PROCESS NAMES, so `pm2 restart agent-hq-api` can never hit these
  *   - AGENT_HQ_INTERNAL_BASE_URL, so agents dispatched here report back HERE and not to prod

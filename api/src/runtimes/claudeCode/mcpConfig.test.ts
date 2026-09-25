@@ -39,7 +39,6 @@ type ServerMap = Record<string, Record<string, unknown>>;
 
 function createMockDb(): Db {
   const db: Record<string, unknown> = {
-    dialect: 'sqlite',
     inTransaction: false,
     get: jest.fn(async () => undefined),
     all: jest.fn(async () => []),

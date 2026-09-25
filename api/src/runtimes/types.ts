@@ -27,7 +27,7 @@ export interface DispatchParams extends RuntimeEventCallbacks {
    * hooks and must not be the only path that moves a run out of running.
    */
   instanceId?: number;
-  /** Durable Agent HQ run ID, stable across SQLite restore/autoincrement reuse. */
+  /** Durable Agent HQ run ID, stable across database restores and identity reuse. */
   durableRunId?: string | null;
   /**
    * Continue this runtime session rather than opening a new one.

@@ -5,12 +5,10 @@
  */
 if (!process.env.AGENT_HQ_TEST_PG_URL) {
   throw new Error(
-    'AGENT_HQ_TEST_PG_URL is required. Agent HQ tests run on PostgreSQL and have no SQLite fallback.',
+    'AGENT_HQ_TEST_PG_URL is required. Agent HQ tests run on PostgreSQL.',
   );
 }
 
-delete process.env.AGENT_HQ_DB_PATH;
-delete process.env.DATABASE_PATH;
 delete process.env.DATABASE_URL;
 delete process.env.AGENT_HQ_DATABASE_URL;
 

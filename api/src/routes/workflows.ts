@@ -14,9 +14,8 @@ export { checkWorkflowCompletion };
 import { requireNumericId } from '../lib/routeParams';
 
 const router = Router();
-// Rejects a non-numeric :id before it reaches the database, restoring the 404 SQLite
-// returned for a no-match. Must be per-router: app.param() does not fire for a param
-// declared on a mounted sub-router.
+// Rejects a non-numeric :id with a 404 before it reaches the database. Must be per-router:
+// app.param() does not fire for a param declared on a mounted sub-router.
 router.param('id', requireNumericId);
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -90,9 +89,8 @@ router.get('/', async (req: Request, res: Response) => {
 
 router.get('/:id', async (req: Request, res: Response) => {
   try {
-    // Reject a non-numeric id before it reaches the database. SQLite silently returned no
-    // match for `/workflows/types`, so this route 404'd by accident; PostgreSQL rejects the
-    // cast and would 500 with a database error instead.
+    // Reject a non-numeric id (e.g. `/workflows/types`) before it reaches the database;
+    // PostgreSQL rejects the cast and would 500 with a database error instead of a 404.
     if (parseIdParam(req.params.id) === null) return res.status(404).json({ error: 'Workflow not found' });
     const db = getDb();
     const tenantId = await resolveTenantIdFromRequest(db, req);

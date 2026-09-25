@@ -327,8 +327,8 @@ async function providerConfigCandidate(provider: OAuthProviderSlug): Promise<OAu
 async function profileFromAuthStore(filePath: string, provider: OAuthProviderSlug): Promise<OpenClawOAuthCredential | null> {
   if (provider !== 'openai-codex' || !fs.existsSync(filePath)) return null;
 
-  // NOT the Agent HQ database: this is OpenClaw's own on-disk SQLite auth store,
-  // read through the raw better-sqlite3 driver. It never moves to PostgreSQL.
+  // NOT the Agent HQ database: this is OpenClaw's own per-agent SQLite auth store
+  // (openclaw-agent.sqlite), which OpenClaw owns. Agent HQ opens it read-only here.
   let db: Database.Database | null = null;
   try {
     db = new Database(filePath, { readonly: true, fileMustExist: true });
@@ -603,16 +603,13 @@ export async function upsertOAuthProfileStore(
 ): Promise<boolean> {
   if (provider !== 'openai-codex' || !fs.existsSync(filePath)) return false;
 
-  // NOT the Agent HQ database: this is OpenClaw's own on-disk SQLite auth store.
-  // It keeps the raw better-sqlite3 driver — including PRAGMA and the synchronous
-  // db.transaction() form — because it is not part of the PostgreSQL migration.
+  // NOT the Agent HQ database: this is OpenClaw's own per-agent SQLite auth store, so it
+  // uses OpenClaw's storage format and better-sqlite3 directly — PRAGMA, sqlite_master and
+  // the synchronous db.transaction() form included.
   let db: Database.Database | null = null;
   try {
     db = new Database(filePath, { fileMustExist: true });
     db.pragma('busy_timeout = 5000');
-    // Raw better-sqlite3 on purpose: this opens OPENCLAW'S OWN auth-profile file. This explicit
-    // sync operation may update that external store; it is not Agent HQ's database and does not
-    // migrate to PostgreSQL with Agent HQ, so sqlite_master here is correct and permanent.
     const table = db.prepare(`
       SELECT 1 AS present
       FROM sqlite_master

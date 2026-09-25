@@ -16,7 +16,6 @@ import providersRouter from './providers';
 import githubIdentitiesRouter from './github-identities';
 
 let tempDir: string;
-let dbPath: string;
 let server: Server | null = null;
 let baseUrl = '';
 let tenantOneAdminKey = '';
@@ -26,7 +25,6 @@ async function resetDb(): Promise<void> {
   await setupTestDb();
   fs.rmSync(tempDir, { recursive: true, force: true });
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'integration-tenant-scope-'));
-  dbPath = path.join(tempDir, 'agent-hq-test.db');
 
   const db = getDb();
 

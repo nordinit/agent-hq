@@ -18,7 +18,7 @@
  *
  * Before the PostgreSQL-only migration the codebase produced timestamps two ways:
  *
- *   1. SQL: SQLite `datetime('now')`. Emitted
+ *   1. SQL: the original schema's column defaults. Emitted
  *      '2026-06-03 20:05:53' (UTC, offset-less).
  *   2. JS:  `new Date().toISOString()` — ~134 call sites. Emits
  *      '2026-06-03T20:05:53.000Z' (UTC, offset-bearing).

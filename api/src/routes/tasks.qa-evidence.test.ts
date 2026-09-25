@@ -10,13 +10,11 @@ import { requireReleaseGate } from '../lib/taskRelease';
 import { validateInlineEvidenceForOutcome } from '../lib/evidenceValidation';
 
 let tempDir: string;
-let dbPath: string;
 
 async function resetDb(): Promise<void> {
   await setupTestDb();
   fs.rmSync(tempDir, { recursive: true, force: true });
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tasks-qa-evidence-'));
-  dbPath = path.join(tempDir, 'agent-hq-test.db');
 
   const db = getDb();
 
@@ -57,7 +55,6 @@ async function stopTestServer(server: Server): Promise<void> {
 describe('tasks qa-evidence aliases', () => {
   beforeEach(async () => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tasks-qa-evidence-'));
-    dbPath = path.join(tempDir, 'agent-hq-test.db');
     await resetDb();
   });
 

@@ -216,7 +216,6 @@ describe('OpenClawRuntime terminal failure handling', () => {
     };
 
     db = {
-      dialect: 'postgres',
       inTransaction: false,
       get: jest.fn(async (sql: string, ...params: unknown[]) => lookup(sql).get?.(...params)),
       all: jest.fn(async (sql: string, ...params: unknown[]) => lookup(sql).all?.(...params) ?? []),
