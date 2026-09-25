@@ -1112,7 +1112,6 @@ export interface ChatMessage {
 
 export interface ChatConfig {
   gatewayUrl: string;
-  token: string;
 }
 
 export interface ChatSession {

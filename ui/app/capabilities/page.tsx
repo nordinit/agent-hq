@@ -1088,7 +1088,7 @@ function McpEditor({ serverId, onClose, onSaved, onDeleted }: McpEditorProps) {
       </Card>
 
       <Card>
-        <label className="block text-xs text-slate-400 mb-2">Env <span className="text-slate-600">(JSON object)</span></label>
+        <label className="block text-xs text-slate-400 mb-2">Env <span className="text-slate-600">(JSON object; saved values are masked — leave a masked value as is to keep it)</span></label>
         <textarea
           className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-xs font-mono focus:outline-none focus:border-amber-500 resize-y"
           rows={6}

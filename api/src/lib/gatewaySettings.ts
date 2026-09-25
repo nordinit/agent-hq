@@ -1,6 +1,7 @@
 import { getDb } from '../db/client';
 import { OPENCLAW_CONFIG_PATH, OPENCLAW_GATEWAY_URL, OPENCLAW_GATEWAY_WS_URL, resolveDefaultGatewayUrl } from '../config';
 import fs from 'fs';
+import { isMaskOf } from './secretMasking';
 
 export type GatewayRuntimeHint = 'powershell' | 'wsl' | 'macos' | 'linux' | 'external';
 
@@ -105,10 +106,15 @@ export async function saveGatewaySettings(input: {
   authToken: string;
 }> {
   const wsUrl = normalizeGatewayUrl(input.wsUrl, 'ws');
+  // Settings screens load the token masked and send it back unchanged; that means "keep it".
+  // Read before the runtime hint changes, since the hint decides whether a local token counts.
+  const keepToken = isMaskOf(input.authToken, await getConfiguredGatewayAuthToken());
   await setSetting(GATEWAY_WS_URL_KEY, wsUrl);
   await setSetting(GATEWAY_RUNTIME_HINT_KEY, input.runtimeHint);
-  const normalizedToken = typeof input.authToken === 'string' ? input.authToken.trim() : '';
-  await setSetting(GATEWAY_AUTH_TOKEN_KEY, normalizedToken || null);
+  if (!keepToken) {
+    const normalizedToken = typeof input.authToken === 'string' ? input.authToken.trim() : '';
+    await setSetting(GATEWAY_AUTH_TOKEN_KEY, normalizedToken || null);
+  }
   return {
     wsUrl,
     httpUrl: normalizeGatewayUrl(wsUrl, 'http'),

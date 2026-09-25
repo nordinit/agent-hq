@@ -3,6 +3,7 @@ import { getDb } from '../db/client';
 import { syncAssignedMcpForAgent, syncAssignedMcpForServer } from '../runtimes/mcpMaterialization';
 import { resolveTenantIdFromRequest } from '../lib/tenantContext';
 import { isPostgresUniqueViolation } from '../lib/postgresErrors';
+import { redactMcpServerRow, restoreMaskedEnvValues } from '../lib/secretMasking';
 
 import { requireNumericId } from '../lib/routeParams';
 
@@ -98,7 +99,8 @@ router.get('/', async (req: Request, res: Response) => {
       WHERE tenant_id = ?
       ORDER BY name ASC
     `, tenantId);
-    return res.json(rows);
+    // `env` holds launch credentials (API keys, tokens). Keys stay visible; values are masked.
+    return res.json(rows.map((row) => redactMcpServerRow(row as Record<string, unknown>)));
   } catch (err) {
     return res.status(500).json({ error: String(err) });
   }
@@ -110,7 +112,7 @@ router.get('/:id', async (req: Request, res: Response) => {
     const tenantId = await resolveTenantIdFromRequest(db, req);
     const row = await db.get('SELECT * FROM mcp_servers WHERE id = ? AND tenant_id = ?', req.params.id, tenantId);
     if (!row) return res.status(404).json({ error: 'MCP server not found' });
-    return res.json(row);
+    return res.json(redactMcpServerRow(row as Record<string, unknown>));
   } catch (err) {
     return res.status(500).json({ error: String(err) });
   }
@@ -142,7 +144,7 @@ router.post('/', async (req: Request, res: Response) => {
     `, tenantId, name.trim(), slug.trim(), typeof description === 'string' ? description.trim() : '', transport === 'stdio' ? 'stdio' : 'stdio', command.trim(), normalizeJsonText(args, '[]'), normalizeJsonText(env, '{}'), typeof cwd === 'string' && cwd.trim() ? cwd.trim() : null, enabled !== undefined ? (enabled ? 1 : 0) : 1);
 
     const created = await db.get('SELECT * FROM mcp_servers WHERE id = ?', result.lastInsertId);
-    return res.status(201).json(created);
+    return res.status(201).json(redactMcpServerRow(created as Record<string, unknown>));
   } catch (err: any) {
     if (isPostgresUniqueViolation(err)) {
       return res.status(409).json({ error: 'An MCP server with this slug already exists' });
@@ -169,6 +171,8 @@ router.put('/:id', async (req: Request, res: Response) => {
       cwd,
       enabled,
     } = req.body as Record<string, unknown>;
+    // A value submitted as the mask this API returned for it means "unchanged".
+    const nextEnv = env !== undefined ? restoreMaskedEnvValues(env, existing.env) : undefined;
 
     await db.run(`
       UPDATE mcp_servers
@@ -183,11 +187,11 @@ router.put('/:id', async (req: Request, res: Response) => {
           enabled = ?,
           updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
       WHERE id = ? AND tenant_id = ?
-    `, typeof name === 'string' ? name.trim() : existing.name, typeof slug === 'string' ? slug.trim() : existing.slug, typeof description === 'string' ? description.trim() : existing.description, transport === 'stdio' ? 'stdio' : existing.transport, typeof command === 'string' ? command.trim() : existing.command, args !== undefined ? normalizeJsonText(args, '[]') : existing.args, env !== undefined ? normalizeJsonText(env, '{}') : existing.env, cwd !== undefined ? (typeof cwd === 'string' && cwd.trim() ? cwd.trim() : null) : existing.cwd, enabled !== undefined ? (enabled ? 1 : 0) : existing.enabled, req.params.id, tenantId);
+    `, typeof name === 'string' ? name.trim() : existing.name, typeof slug === 'string' ? slug.trim() : existing.slug, typeof description === 'string' ? description.trim() : existing.description, transport === 'stdio' ? 'stdio' : existing.transport, typeof command === 'string' ? command.trim() : existing.command, args !== undefined ? normalizeJsonText(args, '[]') : existing.args, nextEnv !== undefined ? normalizeJsonText(nextEnv, '{}') : existing.env, cwd !== undefined ? (typeof cwd === 'string' && cwd.trim() ? cwd.trim() : null) : existing.cwd, enabled !== undefined ? (enabled ? 1 : 0) : existing.enabled, req.params.id, tenantId);
 
     const updated = await db.get('SELECT * FROM mcp_servers WHERE id = ? AND tenant_id = ?', req.params.id, tenantId);
     scheduleServerMcpSync(Number(req.params.id));
-    return res.json(updated);
+    return res.json(redactMcpServerRow(updated as Record<string, unknown>));
   } catch (err: any) {
     if (isPostgresUniqueViolation(err)) {
       return res.status(409).json({ error: 'An MCP server with this slug already exists' });
@@ -232,7 +236,7 @@ agentMcpServersRouter.get('/', async (req: Request, res: Response) => {
       WHERE ama.agent_id = ? AND s.tenant_id = ?
       ORDER BY s.name ASC
     `, agentId, tenantId);
-    return res.json(rows);
+    return res.json(rows.map((row) => redactMcpServerRow(row as Record<string, unknown>)));
   } catch (err) {
     return res.status(500).json({ error: String(err) });
   }
@@ -269,7 +273,7 @@ agentMcpServersRouter.post('/', async (req: Request, res: Response) => {
       WHERE ama.id = ?
     `, result.lastInsertId);
     scheduleAgentMcpSync(Number(agentId));
-    return res.status(201).json(created);
+    return res.status(201).json(redactMcpServerRow(created as Record<string, unknown>));
   } catch (err: any) {
     if (isPostgresUniqueViolation(err)) {
       return res.status(409).json({ error: 'This MCP server is already assigned to the agent' });

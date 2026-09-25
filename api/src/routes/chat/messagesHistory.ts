@@ -9,17 +9,7 @@ import {
   listRuntimeChatMessages,
   resolveAgentRowById,
 } from '../../domains/chat/sessions';
-import { getConfiguredGatewayAuthToken } from '../../lib/gatewaySettings';
 import { resolveTenantIdFromRequest } from '../../lib/tenantContext';
-
-async function getChatGatewayToken(): Promise<string> {
-  return (
-    process.env.GATEWAY_TOKEN
-    ?? process.env.OPENCLAW_GATEWAY_TOKEN
-    ?? (await getConfiguredGatewayAuthToken())
-    ?? ''
-  );
-}
 
 export function registerMessagesHistoryRoutes(router: Router): void {
   router.get('/canonical-session/:agentId', async (req: Request, res: Response) => {
@@ -100,13 +90,13 @@ export function registerMessagesHistoryRoutes(router: Router): void {
     }
   });
 
-  router.get('/config', async (req: Request, res: Response) => {
+  // The browser talks to the chat WebSocket proxy, which authenticates to the gateway itself
+  // (routes/chat/proxy.ts ignores the client's connect frame). The gateway token therefore
+  // never needs to reach the browser, and this endpoint no longer returns it.
+  router.get('/config', (req: Request, res: Response) => {
     const host = req.headers.host || 'localhost:3501';
     const protocol = req.secure ? 'wss' : 'ws';
-    res.json({
-      gatewayUrl: `${protocol}://${host}/api/v1/chat/ws`,
-      token: await getChatGatewayToken(),
-    });
+    res.json({ gatewayUrl: `${protocol}://${host}/api/v1/chat/ws` });
   });
 
   router.get('/sessions', async (req: Request, res: Response) => {

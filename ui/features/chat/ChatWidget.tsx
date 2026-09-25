@@ -482,11 +482,11 @@ export default function ChatWidget() {
 
   // ── Load chat config + find Atlas main session ──
   useEffect(() => {
-    // Get chat token
+    // Get the chat socket URL
     fetch('/api/chat-config', { cache: 'no-store' })
       .then(r => r.json())
-      .then((data: { token: string; gatewayUrl: string }) => {
-        setChatConfig({ gatewayUrl: data.gatewayUrl, token: data.token });
+      .then((data: { gatewayUrl: string }) => {
+        setChatConfig({ gatewayUrl: data.gatewayUrl });
       })
       .catch(err => console.error('[chat-widget] config error:', err));
 
@@ -661,7 +661,7 @@ export default function ChatWidget() {
     ws.onopen = () => {
       setConnected(true);
       setSendError(null);
-      ws.send(JSON.stringify({ id: generateId(), type: 'connect', params: { auth: { token: chatConfig.token } } }));
+      ws.send(JSON.stringify({ id: generateId(), type: 'connect' }));
       ws.send(JSON.stringify({ id: generateId(), type: 'chat.history', sessionKey, limit: HISTORY_LIMIT }));
     };
 

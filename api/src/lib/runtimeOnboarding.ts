@@ -1,7 +1,14 @@
 import { getAgentHqBaseUrl } from './agentHqBaseUrl';
 import { getGatewayAuthToken } from './gatewayAuth';
 import { probeGateway, type GatewayProbeCredentials, type GatewayProbeResult } from './gatewayHealth';
-import { getConfiguredGatewayWsUrl, normalizeGatewayUrl, readGatewaySettings, saveGatewaySettings } from './gatewaySettings';
+import {
+  getConfiguredGatewayAuthToken,
+  getConfiguredGatewayWsUrl,
+  normalizeGatewayUrl,
+  readGatewaySettings,
+  saveGatewaySettings,
+} from './gatewaySettings';
+import { isMaskOf } from './secretMasking';
 import { type Db } from "../db/adapter/types";
 
 export type RuntimeKind = 'openclaw' | 'hermes' | 'custom';
@@ -117,11 +124,26 @@ export async function readRuntimeConnectionConfig(db: Db): Promise<RuntimeConnec
   return parseSavedConfig(await getSetting(db, RUNTIME_CONNECTION_SETTING_KEY));
 }
 
+/**
+ * The onboarding UI reads the gateway token masked and may hand the mask straight back. The mask
+ * of the token this host already holds stands for that token; anything else is taken literally.
+ */
+async function resolveSubmittedGatewayToken(submitted: string | null | undefined): Promise<string | null> {
+  const token = typeof submitted === 'string' ? submitted.trim() : '';
+  if (!token) return null;
+  for (const held of [await getGatewayAuthToken(), await getConfiguredGatewayAuthToken()]) {
+    if (isMaskOf(token, held)) return held;
+  }
+  return token;
+}
+
 export async function saveRuntimeConnectionConfig(db: Db, input: RuntimeConnectionConfig): Promise<RuntimeConnectionConfig> {
   const normalized: RuntimeConnectionConfig = {
     kind: input.kind,
     endpoint: normalizeEndpoint(input.kind, input.endpoint),
-    authToken: typeof input.authToken === 'string' && input.authToken.trim() ? input.authToken.trim() : null,
+    authToken: input.kind === 'openclaw'
+      ? await resolveSubmittedGatewayToken(input.authToken)
+      : typeof input.authToken === 'string' && input.authToken.trim() ? input.authToken.trim() : null,
     label: typeof input.label === 'string' && input.label.trim() ? input.label.trim() : null,
   };
   await setSetting(db, RUNTIME_CONNECTION_SETTING_KEY, JSON.stringify(normalized));
@@ -270,7 +292,9 @@ export async function checkRuntimeConnection(config: RuntimeConnectionConfig): P
     // back a coarse verdict, so the check can neither leak operator credentials nor map the
     // network behind this host.
     const configured = normalized.endpoint === await getConfiguredGatewayWsUrl();
-    const suppliedToken = typeof normalized.authToken === 'string' ? normalized.authToken.trim() : '';
+    const suppliedToken = configured
+      ? await resolveSubmittedGatewayToken(normalized.authToken) ?? ''
+      : typeof normalized.authToken === 'string' ? normalized.authToken.trim() : '';
     let credentials: GatewayProbeCredentials | undefined;
     if (!configured) {
       credentials = { token: suppliedToken, signWithDeviceIdentity: false };

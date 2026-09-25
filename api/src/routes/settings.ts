@@ -4,6 +4,7 @@ import { probeGateway } from '../lib/gatewayHealth';
 import { pairGateway } from '../lib/gatewayPair';
 import { readGatewaySettings, saveGatewaySettings, type GatewayRuntimeHint } from '../lib/gatewaySettings';
 import { ensureOpenClawGatewayAvailable } from '../lib/openclawCli';
+import { maskSecret } from '../lib/secretMasking';
 import {
   listNotificationRecordsPage,
   notificationTenantIdFromRequest,
@@ -215,7 +216,9 @@ router.get('/gateway/config', async (_req: Request, res: Response) => {
       ws_url: settings.wsUrl,
       http_url: settings.httpUrl,
       runtime_hint: settings.runtimeHint,
-      auth_token: settings.authToken,
+      // Masked: the token authenticates as operator.admin on the gateway. Sending the mask back
+      // unchanged keeps the stored token (see saveGatewaySettings).
+      auth_token: maskSecret(settings.authToken),
       auth_token_configured: settings.authTokenConfigured,
       auth_token_source: settings.authTokenSource,
       source: settings.source,
@@ -256,7 +259,7 @@ router.put('/gateway/config', async (req: Request, res: Response) => {
       ws_url: saved.wsUrl,
       http_url: saved.httpUrl,
       runtime_hint: saved.runtimeHint,
-      auth_token: settings.authToken,
+      auth_token: maskSecret(settings.authToken),
       auth_token_configured: settings.authTokenConfigured,
       auth_token_source: settings.authTokenSource,
     });

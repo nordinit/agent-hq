@@ -414,11 +414,11 @@ function ChatPageInner() {
       .catch(console.error)
       .finally(() => setAgentsLoading(false));
 
-    // Use a server-side proxy endpoint so both token and WS base are runtime-configurable.
+    // Use a server-side proxy endpoint so the WS base is runtime-configurable.
     fetch('/api/chat-config', { cache: 'no-store' })
       .then(r => r.json())
-      .then((data: { token: string; gatewayUrl: string }) => {
-        setChatConfig({ gatewayUrl: data.gatewayUrl, token: data.token });
+      .then((data: { gatewayUrl: string }) => {
+        setChatConfig({ gatewayUrl: data.gatewayUrl });
       })
       .catch(err => console.error('[chat] Failed to load config:', err));
   }, []);
@@ -847,10 +847,10 @@ function ChatPageInner() {
     ws.onopen = () => {
       // Clear any stale send error from a previous failed connection
       setSendError(null);
+      // The API's chat proxy authenticates to the gateway itself.
       ws.send(JSON.stringify({
         id: generateId(),
         type: 'connect',
-        params: { auth: { token: config.token } },
       }));
       // Request with a limit to avoid loading thousands of messages
       ws.send(JSON.stringify({

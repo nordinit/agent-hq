@@ -1,7 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAgentHqBaseUrl } from '@/lib/agentHqBaseUrl';
-import { operatorAuthorizationHeaders } from '@/lib/apiProxyHeaders';
-import { getOperatorToken } from '@/lib/operatorSession';
 
 function buildGatewayUrl(req: NextRequest, apiBase: string): string {
   const internalApiUrl = new URL(apiBase);
@@ -27,19 +25,16 @@ function buildGatewayUrl(req: NextRequest, apiBase: string): string {
   return gatewayUrl.toString();
 }
 
+// Only the socket URL. The API's chat proxy authenticates to the gateway on the browser's
+// behalf, so no gateway credential is handed to the page, and there is nothing left to fetch
+// from the API: the route is computed here, behind the UI's operator sign-in (middleware.ts).
 export async function GET(req: NextRequest) {
-  const apiBase = getAgentHqBaseUrl();
   try {
-    const res = await fetch(`${apiBase}/api/v1/chat/config`, {
-      cache: 'no-store',
-      headers: operatorAuthorizationHeaders(getOperatorToken()),
-    });
-    const data = await res.json();
-    const gatewayUrl = buildGatewayUrl(req, apiBase);
-    return NextResponse.json({ token: data.token, gatewayUrl }, {
+    const gatewayUrl = buildGatewayUrl(req, getAgentHqBaseUrl());
+    return NextResponse.json({ gatewayUrl }, {
       headers: { 'Cache-Control': 'no-store' },
     });
   } catch {
-    return NextResponse.json({ token: '', gatewayUrl: '' });
+    return NextResponse.json({ gatewayUrl: '' });
   }
 }

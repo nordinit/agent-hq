@@ -18,6 +18,7 @@ import { fetchEffectiveAgentMcpRows, fetchEffectiveAgentToolRows, resolveEffecti
 import { applyTeamRouting, planTeamRoutingApplication } from '../domains/teams/routingTemplates';
 import { requestAuditActor } from '../domains/routing/audit';
 import { syncAssignedMcpForAgent } from '../runtimes/mcpMaterialization';
+import { redactMcpServerRow } from '../lib/secretMasking';
 
 const router = Router();
 router.param('id', requireNumericId);
@@ -426,14 +427,15 @@ router.get('/:id/mcp-servers', async (req: Request, res: Response) => {
     const db = getDb();
     const tenantId = await resolveTenantIdFromRequest(db, req);
     await requireTeam(req.params.id, tenantId);
-    return res.json(await db.all(`
+    const rows = await db.all(`
       SELECT tma.id AS assignment_id, tma.team_id, tma.mcp_server_id, tma.overrides,
              tma.enabled AS assignment_enabled, s.*
       FROM team_mcp_assignments tma
       JOIN mcp_servers s ON s.id = tma.mcp_server_id AND s.tenant_id = ?
       WHERE tma.team_id = ?
       ORDER BY s.name ASC
-    `, tenantId, req.params.id));
+    `, tenantId, req.params.id);
+    return res.json(rows.map((row) => redactMcpServerRow(row as Record<string, unknown>)));
   } catch (err) {
     return fail(res, err);
   }
