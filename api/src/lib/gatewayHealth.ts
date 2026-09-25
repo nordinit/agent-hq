@@ -28,7 +28,20 @@ function gatewayErrorMessage(error: unknown, fallback: string): string {
   return fallback;
 }
 
-export async function probeGateway(wsUrl: string): Promise<GatewayProbeResult> {
+/**
+ * What a probe presents to the gateway. The host's stored token and the signature of its paired
+ * device identity are operator.admin credentials for the configured gateway; they must never be
+ * offered to an endpoint the caller merely named, which would hand them to whoever listens there.
+ */
+export interface GatewayProbeCredentials {
+  token: string;
+  signWithDeviceIdentity: boolean;
+}
+
+/** Probes a gateway. Without explicit credentials it presents the host's own, so callers must
+ *  only omit them for the configured gateway URL. */
+export async function probeGateway(wsUrl: string, credentials?: GatewayProbeCredentials): Promise<GatewayProbeResult> {
+  const presented = credentials ?? { token: await getGatewayAuthToken(), signWithDeviceIdentity: true };
   return new Promise((resolve) => {
     let settled = false;
     let connectId: string | null = null;
@@ -81,8 +94,8 @@ export async function probeGateway(wsUrl: string): Promise<GatewayProbeResult> {
         const nonce = (payload?.nonce as string) ?? '';
         const role = 'operator';
         const scopes = ['operator.read', 'operator.write', 'operator.admin'];
-        const token = await getGatewayAuthToken();
-        const deviceIdentity = loadGatewayDeviceIdentity();
+        const token = presented.token;
+        const deviceIdentity = presented.signWithDeviceIdentity ? loadGatewayDeviceIdentity() : null;
         const signedAtMs = Date.now();
         const device = deviceIdentity
           ? buildDeviceForGatewayConnect(deviceIdentity, token, nonce, signedAtMs, role, scopes)

@@ -13,6 +13,7 @@ import {
   detectRuntimeConnectionConfig,
   readRuntimeConnectionConfig,
   saveRuntimeConnectionConfig,
+  validateRuntimeEndpoint,
   type RuntimeKind,
   type RuntimeConnectionConfig,
 } from '../lib/runtimeOnboarding';
@@ -180,6 +181,11 @@ router.post('/runtime/test', async (req: Request, res: Response) => {
       res.status(400).json({ ok: false, error: 'runtime endpoint is required' });
       return;
     }
+    const endpointError = validateRuntimeEndpoint(kind, endpoint);
+    if (endpointError) {
+      res.status(400).json({ ok: false, error: endpointError });
+      return;
+    }
     const status = await checkRuntimeConnection({
       kind,
       endpoint,
@@ -202,6 +208,11 @@ router.post('/runtime/config', async (req: Request, res: Response) => {
     }
     if (!endpoint) {
       res.status(400).json({ ok: false, error: 'runtime endpoint is required' });
+      return;
+    }
+    const endpointError = validateRuntimeEndpoint(kind, endpoint);
+    if (endpointError) {
+      res.status(400).json({ ok: false, error: endpointError });
       return;
     }
     const db = getDb();

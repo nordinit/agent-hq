@@ -136,6 +136,90 @@ describe('setup runtime onboarding', () => {
     }
   });
 
+  it('never offers the stored gateway token or device signature to an endpoint the caller named', async () => {
+    await getDb().run(`
+      INSERT INTO app_settings (key, value)
+      VALUES ('gateway_ws_url', 'ws://127.0.0.1:17601'), ('gateway_auth_token', 'stored-gateway-token')
+    `);
+    mockedProbeGateway.mockResolvedValue({
+      ok: false,
+      state: 'offline',
+      reachable: false,
+      pairing_required: false,
+      checked_at: '2026-06-28T18:00:00.000Z',
+      error: 'WebSocket error: connect ECONNREFUSED 10.20.30.40:22',
+    });
+    const { server, baseUrl } = await startServer();
+    try {
+      const probe = (body: Record<string, unknown>) => fetch(`${baseUrl}/api/v1/setup/runtime/test`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kind: 'openclaw', ...body }),
+      });
+
+      const unnamedToken = await probe({ endpoint: 'ws://10.20.30.40:22' });
+      expect(mockedProbeGateway).toHaveBeenLastCalledWith('ws://10.20.30.40:22', { token: '', signWithDeviceIdentity: false });
+      // The caller learns that the endpoint is unreachable, not why.
+      const unnamedBody = await unnamedToken.json() as Record<string, any>;
+      expect(unnamedBody.state).toBe('unreachable');
+      expect(unnamedBody.error).toBe('The gateway endpoint could not be reached.');
+      expect(JSON.stringify(unnamedBody)).not.toContain('ECONNREFUSED');
+
+      await probe({ endpoint: 'wss://gateway.example.com', auth_token: 'caller-token' });
+      expect(mockedProbeGateway).toHaveBeenLastCalledWith('wss://gateway.example.com', { token: 'caller-token', signWithDeviceIdentity: false });
+
+      // The configured gateway still gets the host's own credentials.
+      await probe({ endpoint: 'ws://127.0.0.1:17601' });
+      expect(mockedProbeGateway).toHaveBeenLastCalledWith('ws://127.0.0.1:17601');
+      expect(JSON.stringify(mockedProbeGateway.mock.calls)).not.toContain('stored-gateway-token');
+    } finally {
+      await stopServer(server);
+    }
+  });
+
+  it('only probes http(s) runtime endpoints and reports nothing the endpoint said', async () => {
+    const http = await import('http');
+    const hits: string[] = [];
+    const runtime = http.createServer((req, res) => {
+      hits.push(req.url ?? '');
+      if (req.url === '/redirect/health') {
+        res.writeHead(302, { Location: '/elsewhere' });
+        res.end();
+        return;
+      }
+      res.writeHead(500, { 'Content-Type': 'text/plain' });
+      res.end('internal secret: db password is hunter2');
+    });
+    await new Promise<void>((resolve) => runtime.listen(0, '127.0.0.1', () => resolve()));
+    const runtimeUrl = `http://127.0.0.1:${(runtime.address() as import('net').AddressInfo).port}`;
+    const { server, baseUrl } = await startServer();
+    try {
+      const test = (body: Record<string, unknown>) => fetch(`${baseUrl}/api/v1/setup/runtime/test`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+
+      for (const endpoint of ['file:///etc/passwd', 'data:text/plain,hi', 'ftp://127.0.0.1/', 'not a url']) {
+        const res = await test({ kind: 'custom', endpoint });
+        expect({ endpoint, status: res.status }).toEqual({ endpoint, status: 400 });
+      }
+      await expect(test({ kind: 'custom', endpoint: 'http://user:pass@127.0.0.1/' }).then((res) => res.status)).resolves.toBe(400);
+
+      const failing = await test({ kind: 'custom', endpoint: runtimeUrl });
+      const failingBody = await failing.json() as Record<string, any>;
+      expect(failingBody).toMatchObject({ state: 'partial', reachable: true, authorized: true });
+      expect(JSON.stringify(failingBody)).not.toMatch(/hunter2|500/);
+
+      await test({ kind: 'custom', endpoint: `${runtimeUrl}/redirect` });
+      expect(hits).toEqual(['/health', '/redirect/health']);
+    } finally {
+      await stopServer(server);
+      runtime.closeAllConnections();
+      await new Promise<void>((resolve) => runtime.close(() => resolve()));
+    }
+  });
+
   it('reports partial readiness when callbacks use localhost for a remote runtime', async () => {
     process.env.AGENT_HQ_API_URL = 'http://localhost:3501';
     mockedProbeGateway.mockResolvedValue({

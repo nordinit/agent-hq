@@ -1,6 +1,7 @@
 import { getAgentHqBaseUrl } from './agentHqBaseUrl';
-import { probeGateway, type GatewayProbeResult } from './gatewayHealth';
-import { normalizeGatewayUrl, readGatewaySettings, saveGatewaySettings } from './gatewaySettings';
+import { getGatewayAuthToken } from './gatewayAuth';
+import { probeGateway, type GatewayProbeCredentials, type GatewayProbeResult } from './gatewayHealth';
+import { getConfiguredGatewayWsUrl, normalizeGatewayUrl, readGatewaySettings, saveGatewaySettings } from './gatewaySettings';
 import { type Db } from "../db/adapter/types";
 
 export type RuntimeKind = 'openclaw' | 'hermes' | 'custom';
@@ -81,6 +82,25 @@ function parseSavedConfig(raw: string | null): RuntimeConnectionConfig | null {
   } catch {
     return null;
   }
+  return null;
+}
+
+/**
+ * Runtime endpoints are probed from this host, so only the schemes a runtime can actually speak
+ * are accepted: WebSocket or HTTP for the OpenClaw gateway, HTTP for everything else.
+ */
+export function validateRuntimeEndpoint(kind: RuntimeKind, endpoint: string): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(endpoint.trim());
+  } catch {
+    return 'runtime endpoint must be an absolute URL';
+  }
+  const allowed = kind === 'openclaw' ? ['ws:', 'wss:', 'http:', 'https:'] : ['http:', 'https:'];
+  if (!allowed.includes(parsed.protocol)) {
+    return `runtime endpoint for ${kind} must use ${allowed.map((scheme) => scheme.slice(0, -1)).join(', ')}`;
+  }
+  if (parsed.username || parsed.password) return 'runtime endpoint must not embed credentials';
   return null;
 }
 
@@ -177,6 +197,9 @@ function mapGatewayProbe(config: RuntimeConnectionConfig, probe: GatewayProbeRes
   };
 }
 
+// A runtime check can be pointed at any URL, which makes its answer a probe of whatever listens
+// there. It therefore reports only what onboarding needs — reachable, authorized, healthy —
+// never the endpoint's own error text, status code or network error detail.
 async function httpRuntimeStatus(config: RuntimeConnectionConfig, capabilities: string[]): Promise<RuntimeConnectionStatus> {
   const callback = callbackUrl();
   const guidance = callbackGuidance(callback);
@@ -184,7 +207,14 @@ async function httpRuntimeStatus(config: RuntimeConnectionConfig, capabilities: 
   if (config.authToken) headers.Authorization = `Bearer ${config.authToken}`;
 
   try {
-    const response = await fetch(`${config.endpoint.replace(/\/$/, '')}/health`, { headers, signal: AbortSignal.timeout(5000) });
+    if (validateRuntimeEndpoint(config.kind, config.endpoint)) throw new Error('unsupported runtime endpoint');
+    const response = await fetch(`${config.endpoint.replace(/\/$/, '')}/health`, {
+      headers,
+      redirect: 'manual',
+      signal: AbortSignal.timeout(5000),
+    });
+    // The body is never reported, so it is not read either.
+    await response.body?.cancel().catch(() => undefined);
     const reachable = response.status !== 0;
     const authorized = response.status !== 401 && response.status !== 403;
     if (!response.ok) {
@@ -203,9 +233,11 @@ async function httpRuntimeStatus(config: RuntimeConnectionConfig, capabilities: 
       callback_url: callback,
       repair_guidance: guidance,
       checked_at: nowIso(),
-      error: response.ok ? null : `HTTP ${response.status}`,
+      error: response.ok
+        ? null
+        : authorized ? 'The runtime health check did not succeed.' : 'The runtime rejected the supplied credentials.',
     };
-  } catch (err) {
+  } catch {
     return {
       kind: config.kind,
       endpoint: config.endpoint,
@@ -218,15 +250,38 @@ async function httpRuntimeStatus(config: RuntimeConnectionConfig, capabilities: 
       callback_url: callback,
       repair_guidance: ['Start the runtime, verify the endpoint URL, then retry the runtime check.', ...guidance],
       checked_at: nowIso(),
-      error: err instanceof Error ? err.message : String(err),
+      error: 'The runtime endpoint could not be reached.',
     };
   }
+}
+
+function coarseGatewayProbeError(probe: GatewayProbeResult): string | null {
+  if (probe.ok) return null;
+  if (probe.state === 'pairing_required') return 'The gateway requires device pairing.';
+  if (probe.state === 'auth_error') return 'The gateway rejected the supplied credentials.';
+  return 'The gateway endpoint could not be reached.';
 }
 
 export async function checkRuntimeConnection(config: RuntimeConnectionConfig): Promise<RuntimeConnectionStatus> {
   const normalized = { ...config, endpoint: normalizeEndpoint(config.kind, config.endpoint) };
   if (normalized.kind === 'openclaw') {
-    return mapGatewayProbe(normalized, await probeGateway(normalized.endpoint));
+    // Only the configured gateway is offered this host's own token and device signature. Any
+    // other endpoint sees nothing but the token the caller supplied for it, and the caller gets
+    // back a coarse verdict, so the check can neither leak operator credentials nor map the
+    // network behind this host.
+    const configured = normalized.endpoint === await getConfiguredGatewayWsUrl();
+    const suppliedToken = typeof normalized.authToken === 'string' ? normalized.authToken.trim() : '';
+    let credentials: GatewayProbeCredentials | undefined;
+    if (!configured) {
+      credentials = { token: suppliedToken, signWithDeviceIdentity: false };
+    } else if (suppliedToken && suppliedToken !== await getGatewayAuthToken()) {
+      credentials = { token: suppliedToken, signWithDeviceIdentity: true };
+    }
+    const probe = credentials
+      ? await probeGateway(normalized.endpoint, credentials)
+      : await probeGateway(normalized.endpoint);
+    const status = mapGatewayProbe(normalized, probe);
+    return configured ? status : { ...status, error: coarseGatewayProbeError(probe) };
   }
   if (normalized.kind === 'hermes') return await httpRuntimeStatus(normalized, HERMES_CAPABILITIES);
   return await httpRuntimeStatus(normalized, CUSTOM_CAPABILITIES);
