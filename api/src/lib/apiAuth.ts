@@ -143,7 +143,7 @@ declare global {
   namespace Express {
     interface Request {
       /** How /api/v1 authenticated this request. `unauthenticated` exists only in report mode. */
-      apiCredential?: 'operator' | 'mcp_key' | 'unauthenticated';
+      apiCredential?: 'operator' | 'mcp_key' | 'signed_link' | 'unauthenticated';
     }
   }
 }
@@ -154,6 +154,41 @@ const PUBLIC_API_PATHS = new Set([
   'GET /openapi.json',
   'HEAD /openapi.json',
 ]);
+
+/**
+ * Chat attachments reach the agent as links in the message text, and the agent fetches them with
+ * whatever HTTP tool it has — without an Agent HQ credential. Each link therefore carries its own
+ * short-lived signature, good for that one attachment only.
+ */
+export const CHAT_ATTACHMENT_LINK_TTL_SECONDS = 24 * 60 * 60;
+const CHAT_ATTACHMENT_DOWNLOAD_PATH = /^\/chat\/attachments\/(\d+)\/download$/;
+
+function chatAttachmentSignature(operatorToken: string, attachmentId: number, expiresAt: number): Buffer {
+  const key = crypto.createHmac('sha256', operatorToken).update('agent-hq:chat-attachment-link:v1').digest();
+  return crypto.createHmac('sha256', key).update(`${attachmentId}.${expiresAt}`).digest();
+}
+
+/** Query string that lets an agent download one attachment; empty when no token is configured. */
+export function signedChatAttachmentQuery(
+  attachmentId: number,
+  operatorToken = process.env.AGENT_HQ_OPERATOR_TOKEN?.trim() || null,
+  now = Date.now(),
+): string {
+  if (!operatorToken) return '';
+  const expiresAt = Math.floor(now / 1000) + CHAT_ATTACHMENT_LINK_TTL_SECONDS;
+  const signature = chatAttachmentSignature(operatorToken, attachmentId, expiresAt).toString('base64url');
+  return `?expires=${expiresAt}&signature=${signature}`;
+}
+
+function isSignedChatAttachmentDownload(req: Request, operatorToken: string | null, now = Date.now()): boolean {
+  if (!operatorToken || (req.method !== 'GET' && req.method !== 'HEAD')) return false;
+  const match = CHAT_ATTACHMENT_DOWNLOAD_PATH.exec(req.path);
+  const expiresAt = Number(req.query.expires);
+  const signature = typeof req.query.signature === 'string' ? Buffer.from(req.query.signature, 'base64url') : null;
+  if (!match || !signature || !Number.isInteger(expiresAt) || expiresAt * 1000 <= now) return false;
+  const expected = chatAttachmentSignature(operatorToken, Number(match[1]), expiresAt);
+  return signature.length === expected.length && crypto.timingSafeEqual(signature, expected);
+}
 
 const MAX_LOGGED_CALLERS = 2000;
 
@@ -235,6 +270,10 @@ export function authenticateApiRequest(config: ApiAuthConfig, options: ApiAuthMi
 
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     if (PUBLIC_API_PATHS.has(`${req.method.toUpperCase()} ${req.path}`)) return next();
+    if (isSignedChatAttachmentDownload(req, config.operatorToken)) {
+      req.apiCredential = 'signed_link';
+      return next();
+    }
 
     const credential = readApiCredential(req.headers, config.operatorToken);
     if (credential.kind === 'operator') {

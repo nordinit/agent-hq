@@ -7,6 +7,7 @@ import { getDb } from '../../db/client';
 import { resolveAgentRowForSessionKey, buildDerivedDirectSessionKey } from '../../domains/chat/sessions';
 import { backfillOpenClawJsonlTranscript } from '../../domains/runs/openclawJsonlBackfill';
 import { summarizeGatewayErrorForUi } from '../../lib/chatGatewayErrors';
+import { signedChatAttachmentQuery } from '../../lib/apiAuth';
 import { isPairingRequiredClose, isPairingRequiredText } from '../../lib/openclawAutoPair';
 import { openClawGatewayWsOptions } from '../../lib/openclawGatewayWs';
 import { toGatewaySessionKey } from '../../lib/sessionKeys';
@@ -475,7 +476,8 @@ export function setupChatProxy(wss: WebSocketServer): void {
             const attachments = await db.all(`SELECT * FROM chat_attachments WHERE id IN (${placeholders})`, ...attachmentIds) as Array<Record<string, unknown>>;
             for (const a of attachments) {
               const apiPort = process.env.AGENT_HQ_API_PORT ?? '3501';
-              const url = `http://localhost:${apiPort}/api/v1/chat/attachments/${a.id as number}/download`;
+              // The agent fetches this without an Agent HQ credential, so the link is signed.
+              const url = `http://localhost:${apiPort}/api/v1/chat/attachments/${a.id as number}/download${signedChatAttachmentQuery(a.id as number)}`;
               const mime = a.mime_type as string ?? '';
               const label = mime.startsWith('image/')
                 ? `[image: ${a.filename as string}](${url})`

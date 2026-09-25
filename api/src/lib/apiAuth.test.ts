@@ -3,12 +3,14 @@ import type { AddressInfo } from 'net';
 import * as http from 'http';
 import { WebSocket, WebSocketServer } from 'ws';
 import {
+  CHAT_ATTACHMENT_LINK_TTL_SECONDS,
   apiPathPattern,
   authenticateApiRequest,
   createChatWebSocketVerifier,
   isOperatorToken,
   readApiCredential,
   resolveApiAuthConfigFromEnv,
+  signedChatAttachmentQuery,
   type ApiAuthConfig,
 } from './apiAuth';
 import { McpApiAuthError, type McpApiIdentity } from './mcpApiAuth';
@@ -171,6 +173,22 @@ describe('authenticateApiRequest', () => {
     it('serves only the static API description without a credential', async () => {
       expect((await call('/api/v1/openapi.json')).status).toBe(200);
       expect((await call('/api/v1/openapi.json', {}, 'POST')).status).toBe(401);
+    });
+
+    it('serves a chat attachment to a signed link, for that attachment only and until it expires', async () => {
+      const query = signedChatAttachmentQuery(12, TOKEN);
+      const signed = await call(`/api/v1/chat/attachments/12/download${query}`);
+      expect(signed.status).toBe(200);
+      expect(await signed.json()).toEqual({ credential: 'signed_link', agent: null });
+
+      expect((await call(`/api/v1/chat/attachments/13/download${query}`)).status).toBe(401);
+      expect((await call(`/api/v1/chat/attachments/12${query}`)).status).toBe(401);
+      expect((await call(`/api/v1/chat/attachments/12/download${query}`, {}, 'DELETE')).status).toBe(401);
+      const tampered = query.replace(/signature=(.)/, (_match, first: string) => `signature=${first === 'A' ? 'B' : 'A'}`);
+      expect((await call(`/api/v1/chat/attachments/12/download${tampered}`)).status).toBe(401);
+      const expired = signedChatAttachmentQuery(12, TOKEN, Date.now() - (CHAT_ATTACHMENT_LINK_TTL_SECONDS + 1) * 1000);
+      expect((await call(`/api/v1/chat/attachments/12/download${expired}`)).status).toBe(401);
+      expect(signedChatAttachmentQuery(12, null)).toBe('');
     });
   });
 
