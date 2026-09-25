@@ -307,7 +307,7 @@ migrations that the search patterns did not match.
 Queried against the live production database read-only. No writes, no migration, no schema change:
 
 ```bash
-sqlite3 "file:/Users/nordini/.agent-hq/agent-hq.db?mode=ro" \
+sqlite3 "file:$HOME/.agent-hq/agent-hq.db?mode=ro" \
   "SELECT m.name FROM sqlite_master m
    WHERE m.type='table'
      AND EXISTS (SELECT 1 FROM pragma_table_info(m.name) p WHERE p.name='sprint_id')

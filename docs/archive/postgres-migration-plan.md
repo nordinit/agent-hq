@@ -11,7 +11,7 @@ records the three architecture decisions that shape the sequencing, the phases w
 criteria, and the risks that actually threaten the cutover.
 
 Every number below was measured, not estimated. Sources are the `feat/postgres-migration` worktree at
-`/Users/nordini/agent-hq-postgres` and read-only queries against the live production database at
+`~/agent-hq-postgres` and read-only queries against the live production database at
 `~/.agent-hq/agent-hq.db`. Where a fact was not available to the author it is marked **[open]** rather
 than filled in.
 

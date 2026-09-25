@@ -1,6 +1,6 @@
 **Configurable telemetry — implementation plan**
 
-Status: Accepted and implemented in the working tree. Validation results and remaining limitations are recorded; production rollout has not been performed. Prepared September 9, 2026 against Agent HQ checkout `6bfecc2e`. Implements the [product and technical specification](/Users/nordini/agent-hq/docs/configurable-telemetry-spec.md), informed by the [current functionality audit](/Users/nordini/agent-hq/docs/telemetry-audit-2026-09-09.md). See the [implementation and rollout record](configurable-telemetry-release.md) for delivered behavior, validation and deployment steps.
+Status: Accepted and implemented in the working tree. Validation results and remaining limitations are recorded; production rollout has not been performed. Prepared September 9, 2026 against Agent HQ checkout `6bfecc2e`. Implements the [product and technical specification](configurable-telemetry-spec.md), informed by the [current functionality audit](telemetry-audit-2026-09-09.md). See the [implementation and rollout record](configurable-telemetry-release.md) for delivered behavior, validation and deployment steps.
 
 The objective is a configurable measurement system that users and agents can use as it develops. Do not spend the opening phase repairing fixed first-pass, confidence, blockage, or cycle-time formulas. Build the new catalog, definition, evaluation, and explanation path; replace those formulas with configured definitions as that path becomes usable.
 
@@ -28,15 +28,15 @@ Create a proposed `api/src/domains/telemetry/` domain with small modules for cat
 
 | Area | Existing integration points | Planned responsibility |
 |---|---|---|
-| Canonical schemas | [sprint-definitions/config.ts](/Users/nordini/agent-hq/api/src/domains/sprint-definitions/config.ts), [TaskFieldsSection.tsx](/Users/nordini/agent-hq/ui/features/sprintDefinitions/sections/TaskFieldsSection.tsx) | Effective typed fields, descriptor registration, links back to the canonical editor |
-| Workflow interpretation | [routing/graph.ts](/Users/nordini/agent-hq/api/src/domains/routing/graph.ts), [routing/trace.ts](/Users/nordini/agent-hq/api/src/domains/routing/trace.ts), [terminality.ts](/Users/nordini/agent-hq/api/src/domains/tasks/terminality.ts) | Discover actual scoped statuses, outcomes, rules, and terminality; never infer business success from terminality |
-| Task observations | [writeModel.ts](/Users/nordini/agent-hq/api/src/domains/tasks/writeModel.ts), [mutations.ts](/Users/nordini/agent-hq/api/src/domains/tasks/mutations.ts), [ownership.ts](/Users/nordini/agent-hq/api/src/domains/tasks/ownership.ts), [relationships.ts](/Users/nordini/agent-hq/api/src/domains/tasks/relationships.ts) | Atomic observation insertion at canonical writes, including assignment and scope changes |
-| History and outcomes | [history.ts](/Users/nordini/agent-hq/api/src/domains/tasks/history.ts), [taskOutcome.ts](/Users/nordini/agent-hq/api/src/lib/taskOutcome.ts), [taskLifecycle.ts](/Users/nordini/agent-hq/api/src/lib/taskLifecycle.ts) | Source provenance, outcome-to-transition causation, legacy history adapters |
-| Execution observations | [runtimeEnd.ts](/Users/nordini/agent-hq/api/src/domains/runs/runtimeEnd.ts), [runtimeFailureEvent.ts](/Users/nordini/agent-hq/api/src/domains/runs/runtimeFailureEvent.ts), [instanceStop.ts](/Users/nordini/agent-hq/api/src/domains/runs/instanceStop.ts) | Runtime, run, cancellation, usage, and semantic-handoff facts with separate classifications |
-| Transactions/configuration | [adapter/types.ts](/Users/nordini/agent-hq/api/src/db/adapter/types.ts), [routing/audit.ts](/Users/nordini/agent-hq/api/src/domains/routing/audit.ts) | Reuse transaction handles and audited configuration patterns; preserve safe execution-time context |
-| API and jobs | [index.ts](/Users/nordini/agent-hq/api/src/index.ts), [scheduler/index.ts](/Users/nordini/agent-hq/api/src/scheduler/index.ts) | New versioned router, bounded queries, retryable capture/backfill workers |
-| Agent access | [mcpApiAuth.ts](/Users/nordini/agent-hq/api/src/lib/mcpApiAuth.ts), [mcp/registrar.ts](/Users/nordini/agent-hq/api/src/mcp/registrar.ts), [mcp/catalog.ts](/Users/nordini/agent-hq/api/src/mcp/catalog.ts), [toolPermissions.ts](/Users/nordini/agent-hq/api/src/mcp/toolPermissions.ts) | Scoped capabilities and tools using the same domain service as REST |
-| User interface | [TelemetryPage.tsx](/Users/nordini/agent-hq/ui/features/telemetry/TelemetryPage.tsx), [ui/lib/api/index.ts](/Users/nordini/agent-hq/ui/lib/api/index.ts) | Report workspace, typed API client, builder, explanations, and coverage states |
+| Canonical schemas | [sprint-definitions/config.ts](../../api/src/domains/sprint-definitions/config.ts), [TaskFieldsSection.tsx](../../ui/features/sprintDefinitions/sections/TaskFieldsSection.tsx) | Effective typed fields, descriptor registration, links back to the canonical editor |
+| Workflow interpretation | [routing/graph.ts](../../api/src/domains/routing/graph.ts), [routing/trace.ts](../../api/src/domains/routing/trace.ts), [terminality.ts](../../api/src/domains/tasks/terminality.ts) | Discover actual scoped statuses, outcomes, rules, and terminality; never infer business success from terminality |
+| Task observations | [writeModel.ts](../../api/src/domains/tasks/writeModel.ts), [mutations.ts](../../api/src/domains/tasks/mutations.ts), [ownership.ts](../../api/src/domains/tasks/ownership.ts), [relationships.ts](../../api/src/domains/tasks/relationships.ts) | Atomic observation insertion at canonical writes, including assignment and scope changes |
+| History and outcomes | [history.ts](../../api/src/domains/tasks/history.ts), [taskOutcome.ts](../../api/src/lib/taskOutcome.ts), [taskLifecycle.ts](../../api/src/lib/taskLifecycle.ts) | Source provenance, outcome-to-transition causation, legacy history adapters |
+| Execution observations | [runtimeEnd.ts](../../api/src/domains/runs/runtimeEnd.ts), [runtimeFailureEvent.ts](../../api/src/domains/runs/runtimeFailureEvent.ts), [instanceStop.ts](../../api/src/domains/runs/instanceStop.ts) | Runtime, run, cancellation, usage, and semantic-handoff facts with separate classifications |
+| Transactions/configuration | [adapter/types.ts](../../api/src/db/adapter/types.ts), [routing/audit.ts](../../api/src/domains/routing/audit.ts) | Reuse transaction handles and audited configuration patterns; preserve safe execution-time context |
+| API and jobs | [index.ts](../../api/src/index.ts), [scheduler/index.ts](../../api/src/scheduler/index.ts) | New versioned router, bounded queries, retryable capture/backfill workers |
+| Agent access | [mcpApiAuth.ts](../../api/src/lib/mcpApiAuth.ts), [mcp/registrar.ts](../../api/src/mcp/registrar.ts), [mcp/catalog.ts](../../api/src/mcp/catalog.ts), [toolPermissions.ts](../../api/src/mcp/toolPermissions.ts) | Scoped capabilities and tools using the same domain service as REST |
+| User interface | [TelemetryPage.tsx](../../ui/features/telemetry/TelemetryPage.tsx), [ui/lib/api/index.ts](../../ui/lib/api/index.ts) | Report workspace, typed API client, builder, explanations, and coverage states |
 
 Add incremental PostgreSQL migrations under `db/pg-migrations/`, choosing the next available number when implementing. Existing sprint/workflow naming compatibility remains intact. This project must not depend on finishing the physical table rename or introducing a separate warehouse.
 
@@ -143,7 +143,7 @@ Rollback: the new UI can be disabled without undoing canonical task changes. Kee
 
 **10. Validation and release evidence**
 
-Use the existing PostgreSQL-backed API test fixtures and UI test infrastructure. The [audit harness](/Users/nordini/agent-hq/api/scripts/audit-telemetry.ts) documents legacy failures; it is evidence for migration, not the new semantic oracle.
+Use the existing PostgreSQL-backed API test fixtures and UI test infrastructure. The [audit harness](../../api/scripts/audit-telemetry.ts) documents legacy failures; it is evidence for migration, not the new semantic oracle.
 
 | Test layer | Meaningful coverage |
 |---|---|

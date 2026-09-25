@@ -41,7 +41,7 @@ Agent HQ's launch data model still carries several transition-era surfaces. The 
 2. **Consolidate task relationship storage**: `task_relationships` is the current relationship model, but `task_dependencies`, `tasks.origin_task_id`, and `tasks.defect_type` still act as legacy mirrors/read paths.
 3. **Choose the canonical evidence storage**: launch currently stores review/QA/deploy/live evidence both as inline `tasks` columns and in `custom_fields_json`; this is useful for gates but should be made explicit before the schema hardens.
 4. **Finish jobs-to-agents cleanup**: `job_instances`, `agents.job_*`, `agents.sprint_id`, `agents.schedule`, `job_id` request/query aliases, and docs still preserve job-era naming.
-5. **Plan a workflow/sprint naming cutover**: the UI/docs increasingly say "workflow", but the persisted model and many APIs are still `sprint_*`. This is a large rename and should not be done opportunistically before launch unless Masiah wants a hard compatibility break.
+5. **Plan a workflow/sprint naming cutover**: the UI/docs increasingly say "workflow", but the persisted model and many APIs are still `sprint_*`. This is a large rename and should not be done opportunistically before launch unless the operator wants a hard compatibility break.
 
 No schema, migration, or code cleanup was performed in this task.
 

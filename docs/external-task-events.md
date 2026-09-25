@@ -86,12 +86,12 @@ Compatibility aliases still work:
   "source": "dev_environment_lease_manager",
   "event": "deployed_for_qa",
   "task_id": 449,
-  "environment_id": "agent-hq-dev",
+  "environment_id": "review-1",
   "queue_id": "queue-123",
   "lease_id": "lease-123",
   "branch": "cinder-backend/task-449-external-task-events",
   "commit_sha": "1234567890abcdef1234567890abcdef12345678",
-  "review_url": "http://127.0.0.1:3510",
+  "review_url": "https://review-1.example.com",
   "message": "Lease-backed deploy completed and is ready for QA."
 }
 ```

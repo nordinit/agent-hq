@@ -41,7 +41,7 @@ Assumptions:
 Once connected, you can ask things like:
 - "What’s on my workflow board?"
 - "Show me task #576"
-- "Create a task for fixing the login bug in Agency"
+- "Create a task for fixing the login bug in the Web App project"
 - "Move task #580 to in_progress"
 - "Add a note to task #576: spec is approved"
 - "Start run instance #2551 and post a progress check-in"

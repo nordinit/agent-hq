@@ -584,7 +584,7 @@ cheap hook that should be built in Phase 1–2 rather than retrofitted:
   remain opt-in, so shared-home rejection is still a deployment-policy requirement.
 - **Secrets in the worktree.** Do not write `.mcp.json` into the task worktree; it carries
   `AGENT_HQ_MCP_API_KEY`. Run-scoped state dir, mode `0600`.
-- **Existing claude-code agents.** `db/seed-dev.ts` has three (`Forge`, `Kai`, `Pixel`).
+- **Existing claude-code agents.** `db/seed-dev.ts` has three (`Sample Backend`, `Sample Tools`, `Sample Frontend`).
   `validateClaudeCodeRuntimeConfig` requires `workingDirectory`; the CLI path should treat
   it as a fallback behind `activeRepoRoot`, exactly as the SDK path already does
   (`ClaudeCodeRuntime.ts:104`) — no config migration needed.

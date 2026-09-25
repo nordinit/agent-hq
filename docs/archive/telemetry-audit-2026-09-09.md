@@ -30,7 +30,7 @@ These are snapshots of the active tenant, not installation-wide counts. The UI a
 | Agent access | Agents can work with canonical tasks and schemas through existing tools. Routing graph analysis and task-path tracing also exist. There is no telemetry metric/query/report tool family. Ordinary MCP keys cannot directly use telemetry routes without full administrative access. |
 | User-defined statistics | No metric definitions, formulas, configurable aggregation/grouping, reusable report queries, saved dashboards, custom-field time series, or telemetry export/scheduling implementation was found. |
 
-Canonical field resolution is in [fields.ts](/Users/nordini/agent-hq/api/src/domains/tasks/fields.ts:48), with field definitions in [config.ts](/Users/nordini/agent-hq/api/src/domains/sprint-definitions/config.ts:4) and form rendering in [TaskModal.tsx](/Users/nordini/agent-hq/ui/features/tasks/TaskModal.tsx:289). Adjacent agent analysis tools are in [routing.ts](/Users/nordini/agent-hq/api/src/mcp/domains/routing.ts:24). Workflow request aliases are normalized centrally, so continued use of `sprint_id` internally is not itself evidence that `workflow_id` requests are broken.
+Canonical field resolution is in [fields.ts](../../api/src/domains/tasks/fields.ts#L48), with field definitions in [config.ts](../../api/src/domains/sprint-definitions/config.ts#L4) and form rendering in [TaskModal.tsx](../../ui/features/tasks/TaskModal.tsx#L289). Adjacent agent analysis tools are in [routing.ts](../../api/src/mcp/domains/routing.ts#L24). Workflow request aliases are normalized centrally, so continued use of `sprint_id` internally is not itself evidence that `workflow_id` requests are broken.
 
 **Prioritized findings**
 
@@ -42,7 +42,7 @@ P1 means repair before relying on telemetry for operational decisions or expandi
 
    More seriously, tenant 2 could resolve tenant 1's integrity event and create a new integrity event against tenant 1's task. The same fixture correctly rejected foreign task drilldown and foreign outcome updates with 404. This is a route-level ownership defect, not merely a missing project selector. Ordinary MCP keys are generally denied these routes, but administrative MCP access and the local operator API still require downstream tenant filtering. No cross-tenant writes were tested on live data.
 
-   Evidence: [recommendations/sessions](/Users/nordini/agent-hq/api/src/routes/telemetry.ts:636), [pipeline reports](/Users/nordini/agent-hq/api/src/routes/telemetry.ts:759), [integrity writes](/Users/nordini/agent-hq/api/src/routes/telemetry.ts:995), [events](/Users/nordini/agent-hq/api/src/routes/telemetry.ts:1105), and [MCP authorization](/Users/nordini/agent-hq/api/src/lib/mcpApiAuth.ts:2152). Apply one shared authorized scope to every query and verify ownership before each mutation.
+   Evidence: [recommendations/sessions](../../api/src/routes/telemetry.ts#L636), [pipeline reports](../../api/src/routes/telemetry.ts#L759), [integrity writes](../../api/src/routes/telemetry.ts#L995), [events](../../api/src/routes/telemetry.ts#L1105), and [MCP authorization](../../api/src/lib/mcpApiAuth.ts#L2152). Apply one shared authorized scope to every query and verify ownership before each mutation.
 
 2. **P1 product gap — Custom-field analytics and schema controls are disconnected.**
 
@@ -50,7 +50,7 @@ P1 means repair before relying on telemetry for operational decisions or expandi
 
    The fixture saved an analytics-enabled, required `revenue` field successfully. Canonical field resolution still returned only the existing `amount` field, and normal task creation accepted `{ amount: 30 }` without revenue. Switching tenants exposed the same telemetry configuration. Types also differ: telemetry offers `boolean` and `date`, whereas canonical schemas support `checkbox` and `url` and do not currently list `date`.
 
-   Evidence: [schema routes](/Users/nordini/agent-hq/api/src/routes/telemetry.ts:312), [analytics toggle](/Users/nordini/agent-hq/ui/features/telemetry/TelemetryPage.tsx:470), [canonical types](/Users/nordini/agent-hq/api/src/domains/sprint-definitions/config.ts:21). Use canonical schemas as the field catalog and introduce real report definitions; expanding this separate schema editor will not enable statistics.
+   Evidence: [schema routes](../../api/src/routes/telemetry.ts#L312), [analytics toggle](../../ui/features/telemetry/TelemetryPage.tsx#L470), [canonical types](../../api/src/domains/sprint-definitions/config.ts#L21). Use canonical schemas as the field catalog and introduce real report definitions; expanding this separate schema editor will not enable statistics.
 
 3. **P1 — Dashboard metric names do not match their calculations.**
 
@@ -58,7 +58,7 @@ P1 means repair before relying on telemetry for operational decisions or expandi
 
    Executing the actual UI helper source returned `Pending` for both `failed` and `qa_pass` tasks and `Pass` for a done task with three retries. The live UI's 66.2% value exactly reflects 489/739. These numbers should be renamed to their actual meanings or replaced by measured metrics, with unknown data shown explicitly.
 
-   Evidence: [UI helpers](/Users/nordini/agent-hq/ui/features/telemetry/TelemetryPage.tsx:56), [KPI calculations](/Users/nordini/agent-hq/ui/features/telemetry/TelemetryPage.tsx:1074), [dependency flags](/Users/nordini/agent-hq/ui/features/telemetry/TelemetryPage.tsx:865).
+   Evidence: [UI helpers](../../ui/features/telemetry/TelemetryPage.tsx#L56), [KPI calculations](../../ui/features/telemetry/TelemetryPage.tsx#L1074), [dependency flags](../../ui/features/telemetry/TelemetryPage.tsx#L865).
 
 4. **P1 — Agent attribution still assumes the old task ownership model.**
 
@@ -66,7 +66,7 @@ P1 means repair before relying on telemetry for operational decisions or expandi
 
    A fixture task with `assigned_agent_id=202` and `agent_id=NULL` disappeared from `/review?job_id=202`, and its new creation event received a null `job_id`. The live dashboard displayed zero assigned agents. Changing the label or substituting one ID everywhere will not fully solve attribution: reports need an explicit choice of assigned owner, executing agent, or outcome-producing agent.
 
-   Evidence: [active ownership synchronization](/Users/nordini/agent-hq/api/src/domains/tasks/ownership.ts:8), [telemetry defaults](/Users/nordini/agent-hq/api/src/routes/telemetry.ts:25), [review filter](/Users/nordini/agent-hq/api/src/routes/telemetry.ts:177), [task read model](/Users/nordini/agent-hq/api/src/domains/tasks/readModel.ts:206).
+   Evidence: [active ownership synchronization](../../api/src/domains/tasks/ownership.ts#L8), [telemetry defaults](../../api/src/routes/telemetry.ts#L25), [review filter](../../api/src/routes/telemetry.ts#L177), [task read model](../../api/src/domains/tasks/readModel.ts#L206).
 
 5. **P1 — The legacy outcome/creation tables are not automatically maintained by ordinary workflows.**
 
@@ -74,7 +74,7 @@ P1 means repair before relying on telemetry for operational decisions or expandi
 
    A real `createTaskRecord` call in the isolated fixture persisted `{ amount: 30 }` and produced zero creation-event and outcome-metric records. Live coverage is correspondingly sparse. Runtime outcome callbacks and `task_outcome_metrics` are separate systems; recording a lifecycle outcome is not evidence that these summary metrics were populated.
 
-   Evidence: [task creation](/Users/nordini/agent-hq/api/src/domains/tasks/writeModel.ts:295), [defect-only metric writer](/Users/nordini/agent-hq/api/src/domains/tasks/writeModel.ts:334), [outcome defaults](/Users/nordini/agent-hq/db/pg-migrations/00-baseline.sql:994). Define metrics from authoritative events/runs or maintain projections transactionally. Backfill only facts that existing history can establish.
+   Evidence: [task creation](../../api/src/domains/tasks/writeModel.ts#L295), [defect-only metric writer](../../api/src/domains/tasks/writeModel.ts#L334), [outcome defaults](../../db/pg-migrations/00-baseline.sql#L994). Define metrics from authoritative events/runs or maintain projections transactionally. Backfill only facts that existing history can establish.
 
 6. **P1 — “Save field” and enable/disable use stale state.**
 
@@ -82,13 +82,13 @@ P1 means repair before relying on telemetry for operational decisions or expandi
 
    Reproduction from the code: edit a field's label, click Save field, inspect the PUT body or reload; the old field configuration is submitted. This was not exercised against live configuration. Pass the edited field or complete updated array directly into the save operation.
 
-   Evidence: [child save](/Users/nordini/agent-hq/ui/features/telemetry/TelemetryPage.tsx:314), [quick toggle](/Users/nordini/agent-hq/ui/features/telemetry/TelemetryPage.tsx:368), [parent save](/Users/nordini/agent-hq/ui/features/telemetry/TelemetryPage.tsx:682).
+   Evidence: [child save](../../ui/features/telemetry/TelemetryPage.tsx#L314), [quick toggle](../../ui/features/telemetry/TelemetryPage.tsx#L368), [parent save](../../ui/features/telemetry/TelemetryPage.tsx#L682).
 
 7. **P1 — PostgreSQL breaks date-filtered overview and time-in-status reporting.**
 
    `/overview?from=...` and `?to=...` apply `tom.created_at`, but `task_outcome_metrics` has `recorded_at`, not `created_at`. Both local APIs and the fixture return HTTP 500. Bottlenecks reference the SELECT alias `dur` in WHERE; PostgreSQL rejects this with `column "dur" does not exist`. A broad catch suppresses the error and returns HTTP 200 with `time_in_status: []`, even when valid transitions exist.
 
-   Evidence: [date helper and application](/Users/nordini/agent-hq/api/src/routes/telemetry.ts:14), [duration query/catch](/Users/nordini/agent-hq/api/src/routes/telemetry.ts:810). Use the correct time column and a CTE/subquery for duration filtering, and expose calculation failures rather than presenting missing data as a valid report.
+   Evidence: [date helper and application](../../api/src/routes/telemetry.ts#L14), [duration query/catch](../../api/src/routes/telemetry.ts#L810). Use the correct time column and a CTE/subquery for duration filtering, and expose calculation failures rather than presenting missing data as a valid report.
 
 8. **P1/P2 — Historical population and time semantics are unreliable.**
 
@@ -96,31 +96,31 @@ P1 means repair before relying on telemetry for operational decisions or expandi
 
    Date comparisons also operate on text. For a task created at `2026-09-08 12:00:00`, a lower bound of `2026-09-08T00:00:00Z` returned zero rows, while `2026-09-08 00:00:00` returned the expected rows. Pipeline completion dates use mutable `updated_at`, and routing/failure reports use current task state/last dispatch; later edits, retries, or ownership changes can alter past-period reports.
 
-   Evidence: [closed-workflow exclusion](/Users/nordini/agent-hq/api/src/domains/tasks/readModel.ts:663), [page query](/Users/nordini/agent-hq/ui/features/telemetry/TelemetryPage.tsx:1063), [fixed statuses](/Users/nordini/agent-hq/ui/features/telemetry/TelemetryPage.tsx:1188), [pipeline timing](/Users/nordini/agent-hq/api/src/routes/telemetry.ts:771). Distinguish current inventory, task completion cohorts, and run/event history, with normalized timestamp boundaries.
+   Evidence: [closed-workflow exclusion](../../api/src/domains/tasks/readModel.ts#L663), [page query](../../ui/features/telemetry/TelemetryPage.tsx#L1063), [fixed statuses](../../ui/features/telemetry/TelemetryPage.tsx#L1188), [pipeline timing](../../api/src/routes/telemetry.ts#L771). Distinguish current inventory, task completion cohorts, and run/event history, with normalized timestamp boundaries.
 
 9. **P2 — Subreports apply inconsistent filters and lose event dimensions.**
 
    Bottleneck duration and review-bounce queries ignore the outer project/workflow/type filters. Failure-stage totals ignore the agent/workflow/outcome filters and default date range used by the main report. In the fixture, an agent-202 failure report returned one task but failure stages from both agents. Some status emitters omit project/agent metadata, while `/events` filters the event's denormalized fields directly. Those events disappear from scoped views even though their owning task is in scope.
 
-   Evidence: [bottlenecks](/Users/nordini/agent-hq/api/src/routes/telemetry.ts:810), [failure stages](/Users/nordini/agent-hq/api/src/routes/telemetry.ts:926), [event insertion](/Users/nordini/agent-hq/api/src/domains/tasks/history.ts:50), [eligibility emitters](/Users/nordini/agent-hq/api/src/services/eligibility.ts:115). Resolve missing dimensions at capture and reuse a common authorized report population across subqueries.
+   Evidence: [bottlenecks](../../api/src/routes/telemetry.ts#L810), [failure stages](../../api/src/routes/telemetry.ts#L926), [event insertion](../../api/src/domains/tasks/history.ts#L50), [eligibility emitters](../../api/src/services/eligibility.ts#L115). Resolve missing dimensions at capture and reuse a common authorized report population across subqueries.
 
 10. **P2 — Ingestion is not robust against retries or malformed values.**
 
     Repeating creation POST succeeds and creates duplicates: one task appeared twice in review, and total-created became two. Repeating outcome POST instead returns a raw unique-constraint 500. The API accepts a string `"false"` as true, negative reopen counts/cycle times, malformed failure JSON, and schema arrays containing null; the latter can break schema rendering. An integrity POST for a nonexistent task returned 201/`ok:true` but stored nothing because the emitter swallowed its FK error. Negative pagination yields 500.
 
-    Evidence: [creation POST](/Users/nordini/agent-hq/api/src/routes/telemetry.ts:372), [outcome writes](/Users/nordini/agent-hq/api/src/routes/telemetry.ts:483), [schema validation](/Users/nordini/agent-hq/api/src/routes/telemetry.ts:334), [integrity emitter](/Users/nordini/agent-hq/api/src/domains/tasks/history.ts:92). Add typed validation, defined idempotency semantics, and truthful error responses. Keep unknown distinct from false/zero.
+    Evidence: [creation POST](../../api/src/routes/telemetry.ts#L372), [outcome writes](../../api/src/routes/telemetry.ts#L483), [schema validation](../../api/src/routes/telemetry.ts#L334), [integrity emitter](../../api/src/domains/tasks/history.ts#L92). Add typed validation, defined idempotency semantics, and truthful error responses. Keep unknown distinct from false/zero.
 
 11. **P2 — Template analytics cannot compare historical instruction versions.**
 
     `/templates` groups historical runs by the agent's current `instructions_version` and current instruction-update timestamp. All older runs move under the newest version after an edit. It also reports runtime `done` as success without explicitly distinguishing runtime completion from workflow outcome, and treats absent token usage as zero. This is insufficient for evaluating which instruction version or agent configuration worked better.
 
-    Evidence: [template query](/Users/nordini/agent-hq/api/src/routes/telemetry.ts:1082). Use immutable per-run instruction/config identity and measured usage coverage before presenting version comparisons or efficiency conclusions.
+    Evidence: [template query](../../api/src/routes/telemetry.ts#L1082). Use immutable per-run instruction/config identity and measured usage coverage before presenting version comparisons or efficiency conclusions.
 
 12. **P2 — Drilldown history uses the wrong response contract, and “Live” data is a snapshot.**
 
     The API returns `field`, `old_value`, and `new_value`; the drawer renders `from_status`, `to_status`, and `status`, and does not filter history to status changes. The fixture confirmed the API shape. The page loads on mount/project change, with no polling or event subscription. Load errors are only logged and requests lack stale-response protection, so a failed scope change may leave old data under the new scope label.
 
-    Evidence: [history reader](/Users/nordini/agent-hq/api/src/domains/tasks/readModel.ts:710), [drawer renderer](/Users/nordini/agent-hq/ui/features/telemetry/TelemetryPage.tsx:1032), [loading behavior](/Users/nordini/agent-hq/ui/features/telemetry/TelemetryPage.tsx:1063). Render the actual history contract, disclose freshness, and handle failed/out-of-order requests explicitly.
+    Evidence: [history reader](../../api/src/domains/tasks/readModel.ts#L710), [drawer renderer](../../ui/features/telemetry/TelemetryPage.tsx#L1032), [loading behavior](../../ui/features/telemetry/TelemetryPage.tsx#L1063). Render the actual history contract, disclose freshness, and handle failed/out-of-order requests explicitly.
 
 **Recommended implementation order**
 
@@ -137,8 +137,8 @@ Historical task fields are mutable, and existing custom-field changes are record
 
 - 49 existing API tests passed across runtime tenant scoping, workflow field-schema resolution, and lifecycle outcome evidence.
 - All 210 existing UI tests passed. They do not exercise the telemetry page's save/filter behavior.
-- [Audit harness](/Users/nordini/agent-hq/api/scripts/audit-telemetry.ts) completed with 40 recorded observations using a disposable PostgreSQL database built from current migrations. It exercises real routes and task/schema functions; it is an observation harness, not a passing regression suite. Mutation probes only touch synthetic data. It closes its server and drops its worker database.
-- [Synthetic results](/Users/nordini/agent-hq/docs/telemetry-audit-2026-09-09-results.json) contain the HTTP responses and observed failures. Security probes exercise the route layer with active-tenant selection, not every deployed authentication combination.
+- [Audit harness](../../api/scripts/audit-telemetry.ts) completed with 40 recorded observations using a disposable PostgreSQL database built from current migrations. It exercises real routes and task/schema functions; it is an observation harness, not a passing regression suite. Mutation probes only touch synthetic data. It closes its server and drops its worker database.
+- [Synthetic results](telemetry-audit-2026-09-09-results.json) contain the HTTP responses and observed failures. Security probes exercise the route layer with active-tenant selection, not every deployed authentication combination.
 - Live checks were read-only. The audit did not perform a full runtime-provider ingestion review, exhaustive deployment/security review, or scale benchmark.
 
 To rerun the isolated observations from `api/`:

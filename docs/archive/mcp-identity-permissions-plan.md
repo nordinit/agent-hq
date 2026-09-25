@@ -52,7 +52,7 @@ The target model is: an authenticated identity has permissions, those permission
 
 6. **Preserve current policies and remove configuration dependencies.**
 
-   Before rollout, capture effective capability snapshots and compare the old and proposed tool lists for existing identities. Explicitly include ChatGPT Mobile, Claude Mobile, Casper, and James. Preserve all saved capability policies and key roles. Both mobile identities keep project-scoped workflow-definition management, and `admin.full_access` stays disabled.
+   Before rollout, capture effective capability snapshots and compare the old and proposed tool lists for existing identities. Explicitly include the remote client identities (ChatGPT Mobile, Claude Mobile) and every agent with a saved capability policy. Preserve all saved capability policies and key roles. Both mobile identities keep project-scoped workflow-definition management, and `admin.full_access` stays disabled.
 
    The expected visibility change is intentional: tools that were hidden by a profile but already authorized by a capability become visible, and tools that an identity could see but never use disappear. Review those differences instead of claiming the old and new tool lists will be identical. Do not enable permissions merely to preserve a formerly visible tool.
 
@@ -80,7 +80,7 @@ The target model is: an authenticated identity has permissions, those permission
 
    Deploy a matched API and local MCP build. Existing stdio processes need a one-time restart to load the new implementation; subsequent permission edits must not require server restarts. Refresh remote connector tool metadata and verify task/schema operations with actual scoped test identities in an isolated environment. In production, verify permission readback and authenticated tool discovery without modifying business tasks or definitions for a smoke test.
 
-   Acceptance: an operator edits an identity's permissions in one UI screen, the identity's tool list follows those permissions, and every call remains bounded by its scope. Casper, James, ChatGPT Mobile, and Claude Mobile retain separate identities and audit histories, with no profile selection anywhere in the Agent HQ MCP configuration.
+   Acceptance: an operator edits an identity's permissions in one UI screen, the identity's tool list follows those permissions, and every call remains bounded by its scope. Agents with saved capability policies, ChatGPT Mobile, and Claude Mobile retain separate identities and audit histories, with no profile selection anywhere in the Agent HQ MCP configuration.
 
    Keep the prior build and policy snapshots for rollback. Avoid capability rewrites during this rollout so reverting the application does not require reconstructing identities or permissions.
 

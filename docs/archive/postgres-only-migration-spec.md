@@ -142,14 +142,14 @@ artifacts and reports are retained under:
 - `backups/cutover/20260805T054835Z-dev2/` for development 2.
 
 The production pre-release dump is
-`backups/cutover/20260805T051421Z/agent_hq_prod-before-release.dump`, with SHA-256
+`backups/cutover/20260805T051421Z/<production-database>-before-release.dump`, with SHA-256
 `ecaa780a0a718339d3eb9b1e70539b7887533089bddaf76e241877c53bab305c`.
 
 The clean release worktrees are:
 
-- `/Users/nordini/agent-hq-prod-main`;
-- `/Users/nordini/agent-hq-dev-main`;
-- `/Users/nordini/agent-hq-dev-2-main`.
+- `~/agent-hq-prod-main`;
+- `~/agent-hq-dev-main`;
+- `~/agent-hq-dev-2-main`.
 
 ## Completion checklist
 

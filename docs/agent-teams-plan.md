@@ -1,7 +1,7 @@
 # Agent teams
 
 Status: **implemented, not deployed.** Migration `21-agent-teams.sql` is written and verified but
-has been applied to scratch databases only — never to `agent_hq_prod`. See "As built" at the end
+has been applied to scratch databases only — never to the production database. See "As built" at the end
 for what shipped, where it deviates from this plan, and what deploying it requires.
 
 ## The problem this solves
@@ -13,7 +13,7 @@ own private copy of the tool, skill, and MCP assignments that the shape implies.
 
 There is also nothing in an agent's prompt that tells it who else is working the same
 workflow. `buildTaskMessage()` gives it the workflow goal, project context, its own
-`job_instructions`, and the task. It does not know that Casper reviews what it writes, so it
+`job_instructions`, and the task. It does not know that Vega reviews what it writes, so it
 cannot hand off deliberately — it can only move a status and hope routing does the right thing.
 
 A **team** is the missing noun: a named group of agents with a shared goal, mutual awareness,
@@ -52,8 +52,8 @@ Four capabilities, in the order they should be built:
 
 One new migration. **Take the number from the deploy repo, not this worktree** — production has
 `20-runtime-executions-and-checkpoints.sql` applied, which does not exist in
-`db/pg-migrations/` here. This checkout is the public `nordinit` mirror; `mband0` main is the
-deploy source. Writing `21-*.sql` against this tree's `19-*` high-water mark would collide.
+`db/pg-migrations/` here. This checkout is the public mirror; the private deploy repository's
+main is the deploy source. Writing `21-*.sql` against this tree's `19-*` high-water mark would collide.
 
 ### Vocabulary
 
@@ -175,8 +175,8 @@ Goal: Ship the billing migration with no customer-visible downtime.
 You are Nova — Implementer. You write and land the code changes.
 
 Your teammates:
-- Piper — Planner (lead). Breaks work into tasks and sets acceptance criteria.
-- Casper — Reviewer. Reviews diffs and gates on tests, risk, and budget.
+- Kepler — Planner (lead). Breaks work into tasks and sets acceptance criteria.
+- Vega — Reviewer. Reviews diffs and gates on tests, risk, and budget.
 
 Working agreements:
 <charter>
@@ -368,8 +368,8 @@ built.
 
 ## 8. Risks
 
-- **Migration numbering** — production is at 20; this worktree shows 19. Number from `mband0`
-  main.
+- **Migration numbering** — production is at 20; this worktree shows 19. Number from the
+  deploy repository's main.
 - **Staged rename collision** — `staged/10` and `staged/11` are unapplied. New tables must carry
   no `sprint_*` identifiers, or the regenerated rename mapping will rewrite them.
 - **`agent-tool-mcp.ts` divergence** — the standalone tool server must resolve the same
@@ -456,7 +456,7 @@ set without duplicating the query.
 
 1. **The migration number is only correct in the deploy repo.** Production is at
    `20-runtime-executions-and-checkpoints.sql`, which does not exist in this worktree — this
-   checkout is the public `nordinit` mirror and `mband0` main is the deploy source. Confirm 21 is
+   checkout is the public mirror and the private deploy repository's main is the deploy source. Confirm 21 is
    still free there before applying.
 2. This worktree cannot boot against production regardless: `verifyMigrationsCurrent` treats
    migration 20 as `unexpected` — recorded but absent from this release — and refuses to serve.

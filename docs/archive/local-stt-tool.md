@@ -64,7 +64,7 @@ Failure shape:
 ```
 
 ## Host dependencies
-The first implementation targets the Mac mini host environment and expects:
+The first implementation targets a macOS host and expects:
 - `python3`
 - `ffmpeg`
 - Python package `openai-whisper` (imported as `whisper`)

@@ -67,19 +67,19 @@ Operational verification:
 
 Clean release worktrees:
 
-- Production: `/Users/nordini/agent-hq-prod-main`
-- Development 1: `/Users/nordini/agent-hq-dev-main`
-- Development 2: `/Users/nordini/agent-hq-dev-2-main`
+- Production: `~/agent-hq-prod-main`
+- Development 1: `~/agent-hq-dev-main`
+- Development 2: `~/agent-hq-dev-2-main`
 
 Preserved divergent development checkouts:
 
-- `/Users/nordini/agent-hq-dev`
-- `/Users/nordini/agent-hq-dev-2`
+- `~/agent-hq-dev`
+- `~/agent-hq-dev-2`
 
 Backup and report directories:
 
-- `/Users/nordini/agent-hq/backups/cutover/20260805T051421Z`
-- `/Users/nordini/agent-hq/backups/cutover/20260805T054835Z-dev2`
+- `backups/cutover/20260805T051421Z`
+- `backups/cutover/20260805T054835Z-dev2`
 
 The first directory contains the verified production pre-release dump, development 1 SQLite and
 PostgreSQL artifacts, `CUTOVER-REPORT.md`, and `SHA256SUMS`. The second contains development 2

@@ -2,7 +2,7 @@
 
 Status: Accepted; implementation and validation are recorded in the [release record](configurable-telemetry-release.md). Prepared September 9, 2026 against Agent HQ checkout `6bfecc2e`.
 
-This specification replaces the repair-first sequencing in the [telemetry audit](/Users/nordini/agent-hq/docs/telemetry-audit-2026-09-09.md). The primary work is to build configurable reporting. Correctness, scope enforcement, and explainability are properties of that implementation. The existing fixed dashboards and disconnected schema editor are not the foundation to expand.
+This specification replaces the repair-first sequencing in the [telemetry audit](telemetry-audit-2026-09-09.md). The primary work is to build configurable reporting. Correctness, scope enforcement, and explainability are properties of that implementation. The existing fixed dashboards and disconnected schema editor are not the foundation to expand.
 
 **1. Product contract**
 
@@ -357,4 +357,4 @@ The audit's calculation/UI issues are handled through replacement and new contra
 | Time boundaries | Same-instant timestamp formats, midnight boundaries, timezone changes, and daylight-saving transitions behave consistently |
 | Failure behavior | Database/query/collector failure is shown as failed, stale, or incomplete—not an ordinary zero or false “Saved” |
 
-The [implementation plan](/Users/nordini/agent-hq/docs/configurable-telemetry-implementation-plan.md) defines the build order, code boundaries, and milestone completion checks.
+The [implementation plan](configurable-telemetry-implementation-plan.md) defines the build order, code boundaries, and milestone completion checks.
