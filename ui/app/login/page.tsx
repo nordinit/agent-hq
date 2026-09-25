@@ -74,11 +74,18 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
             <Button type="submit" variant="primary" className="w-full">
               Sign in
             </Button>
-            <p className="text-xs leading-relaxed text-slate-400">
-              Run <code className="text-slate-300">agent-hq token</code> to print it, or{' '}
-              <code className="text-slate-300">agent-hq open</code> to open Agent HQ signed in. Self-hosted installs
-              set it as <code className="text-slate-300">AGENT_HQ_OPERATOR_TOKEN</code>.
-            </p>
+            <div className="space-y-1.5 text-xs leading-relaxed text-slate-400">
+              <p className="font-medium text-slate-300">Where to find it</p>
+              <p>
+                Run <code className="text-slate-300">agent-hq token</code> on the machine running Agent HQ, or{' '}
+                <code className="text-slate-300">agent-hq open</code> to open Agent HQ already signed in. The CLI keeps
+                it in <code className="text-slate-300">~/.agent-hq/.env</code>.
+              </p>
+              <p>
+                Docker Compose and manual installs set it as{' '}
+                <code className="text-slate-300">AGENT_HQ_OPERATOR_TOKEN</code> in their <code className="text-slate-300">.env</code>.
+              </p>
+            </div>
           </>
         )}
       </form>
