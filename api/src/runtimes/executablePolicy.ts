@@ -2,11 +2,11 @@ import { createHash } from 'crypto';
 import fs from 'fs';
 import path from 'path';
 
-export type PolicyControlledRuntime = 'claude-code' | 'codex';
+export type PolicyControlledRuntime = 'claude-code' | 'codex' | 'hermes' | 'openclaw';
 
 interface RuntimeExecutablePolicy {
   defaultCommand: string;
-  configField: 'claudeBin' | 'codexBin';
+  configField: 'claudeBin' | 'codexBin' | 'hermesBin' | 'openclawBin';
   allowlistEnvironmentVariable: string;
 }
 
@@ -25,6 +25,19 @@ const RUNTIME_EXECUTABLE_POLICIES: Record<PolicyControlledRuntime, RuntimeExecut
     defaultCommand: 'codex',
     configField: 'codexBin',
     allowlistEnvironmentVariable: 'AGENT_HQ_ALLOWED_CODEX_BINARIES',
+  },
+  // Hermes used to spawn whatever runtime_config.hermesBin named.
+  hermes: {
+    defaultCommand: 'hermes',
+    configField: 'hermesBin',
+    allowlistEnvironmentVariable: 'AGENT_HQ_ALLOWED_HERMES_BINARIES',
+  },
+  // The OpenClaw runtime itself runs the host's OPENCLAW_BIN and never reads openclawBin; only
+  // driver diagnostics did, which made it a way to run any executable with --version.
+  openclaw: {
+    defaultCommand: 'openclaw',
+    configField: 'openclawBin',
+    allowlistEnvironmentVariable: 'AGENT_HQ_ALLOWED_OPENCLAW_BINARIES',
   },
 };
 

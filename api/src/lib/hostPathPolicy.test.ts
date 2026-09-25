@@ -1,7 +1,13 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { checkWorkspacePath, isAllowedWorkspacePath, isDeletableOpenClawWorkspace } from './hostPathPolicy';
+import {
+  checkRuntimeConfigHostPaths,
+  checkWorkspacePath,
+  isAllowedRuntimeHome,
+  isAllowedWorkspacePath,
+  isDeletableOpenClawWorkspace,
+} from './hostPathPolicy';
 
 const ENV_KEYS = ['AGENT_HQ_WORKSPACE_PARENT', 'WORKSPACE_PARENT', 'AGENT_HQ_ALLOWED_WORKSPACE_ROOTS'] as const;
 
@@ -93,5 +99,62 @@ describe('workspace path policy', () => {
     expect(isDeletableOpenClawWorkspace(path.join(openclaw, 'workspace-cinder', 'nested'))).toBe(false);
     expect(isDeletableOpenClawWorkspace(path.join(openclaw, 'workspace'))).toBe(false);
     expect(isDeletableOpenClawWorkspace('relative/workspace-cinder')).toBe(false);
+  });
+});
+
+describe('runtime config home policy', () => {
+  const keys = ['AGENT_HQ_DATA_DIR', 'AGENT_HQ_ALLOWED_RUNTIME_HOME_ROOTS', 'CODEX_HOME'] as const;
+  const originalEnv = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  const home = os.homedir();
+
+  beforeEach(() => {
+    for (const key of keys) delete process.env[key];
+  });
+
+  afterEach(() => {
+    for (const key of keys) {
+      if (originalEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = originalEnv[key];
+    }
+  });
+
+  it("accepts the runtime's own config directories and Agent HQ's data directory", () => {
+    expect(isAllowedRuntimeHome('claude', path.join(home, '.claude'))).toBe(true);
+    expect(isAllowedRuntimeHome('claude', path.join(home, '.claude-work'))).toBe(true);
+    expect(isAllowedRuntimeHome('codex', path.join(home, '.codex'))).toBe(true);
+    expect(isAllowedRuntimeHome('hermes', path.join(home, '.hermes', 'profiles', 'cinder'))).toBe(true);
+    expect(isAllowedRuntimeHome('codex', path.join(home, '.agent-hq', 'runtime-state'))).toBe(true);
+  });
+
+  it('refuses arbitrary directories and another runtime\'s home', () => {
+    for (const [kind, value] of [
+      ['claude', '/'],
+      ['claude', home],
+      ['claude', path.join(home, '.ssh')],
+      ['claude', path.join(home, '.codex')],
+      ['codex', path.join(home, '.claude', '..', '.ssh')],
+      ['hermes', 'relative/.hermes'],
+    ] as const) {
+      expect({ kind, value, ok: isAllowedRuntimeHome(kind, value) }).toEqual({ kind, value, ok: false });
+    }
+  });
+
+  it('honours the runtime environment value and the operator allowlist', () => {
+    expect(isAllowedRuntimeHome('codex', '/srv/codex-home')).toBe(false);
+    process.env.CODEX_HOME = '/srv/codex-home';
+    expect(isAllowedRuntimeHome('codex', '/srv/codex-home')).toBe(true);
+    process.env.AGENT_HQ_ALLOWED_RUNTIME_HOME_ROOTS = '/srv/runtime-homes';
+    expect(isAllowedRuntimeHome('claude', '/srv/runtime-homes/claude-a')).toBe(true);
+  });
+
+  it('checks only changed fields of a runtime config', () => {
+    expect(checkRuntimeConfigHostPaths('claude-code', { claudeConfigDir: '/etc' })).toMatch(/claudeConfigDir/);
+    expect(checkRuntimeConfigHostPaths('codex', { codexHomeRoot: '/etc' })).toMatch(/codexHomeRoot/);
+    expect(checkRuntimeConfigHostPaths('hermes', { profile: 'x', hermesHome: '/etc' })).toMatch(/hermesHome/);
+    // Fields of another runtime are not this runtime's homes.
+    expect(checkRuntimeConfigHostPaths('webhook', { claudeConfigDir: '/etc' })).toBeNull();
+    // A stored legacy value round-tripped unchanged stays editable.
+    expect(checkRuntimeConfigHostPaths('claude-code', { claudeConfigDir: '/etc', model: 'x' }, '{"claudeConfigDir":"/etc"}')).toBeNull();
+    expect(checkRuntimeConfigHostPaths('claude-code', { claudeConfigDir: path.join(home, '.claude') })).toBeNull();
   });
 });

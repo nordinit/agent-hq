@@ -1,7 +1,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { diagnoseRuntimeDriver, resolveExecutable } from './driverDiagnostics';
+import { diagnoseRuntimeDriver } from './driverDiagnostics';
 
 const temporaryDirectories: string[] = [];
 const originalClaudeAllowlist = process.env.AGENT_HQ_ALLOWED_CLAUDE_BINARIES;
@@ -44,10 +44,6 @@ afterEach(() => {
 });
 
 describe('runtime driver diagnostics', () => {
-  it('resolves an absolute executable without using a shell', async () => {
-    await expect(resolveExecutable(process.execPath, '')).resolves.toBe(path.resolve(process.execPath));
-  });
-
   it('checks Codex command, version, workspace, and config home without starting a turn', async () => {
     const codexHome = temporaryDirectory();
     const codexBin = fakeRuntimeCli('codex-cli 0.146.0', true);
@@ -179,6 +175,45 @@ describe('runtime driver diagnostics', () => {
       expect.objectContaining({ key: 'auth', status: 'skipped' }),
     ]));
     expect(fs.existsSync(marker)).toBe(false);
+  });
+
+  it.each([
+    ['hermes', 'hermesBin', { profile: 'agent-hq-diagnostics' }],
+    ['openclaw', 'openclawBin', {}],
+  ] as const)('never executes an unlisted %s binary named by the request', async (runtimeType, field, base) => {
+    const root = temporaryDirectory();
+    const marker = path.join(root, 'executed');
+    const attacker = path.join(root, runtimeType);
+    fs.writeFileSync(attacker, ['#!/bin/sh', `touch ${JSON.stringify(marker)}`, "printf '%s\\n' 'uid=0(root)'", ''].join('\n'), { mode: 0o755 });
+
+    const result = await diagnoseRuntimeDriver({ runtimeType, runtimeConfig: { ...base, [field]: attacker } });
+
+    expect(result.ok).toBe(false);
+    expect(result.version).toBeNull();
+    expect(result.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({ key: 'config', status: 'fail' }),
+      expect.objectContaining({ key: 'command', status: 'skipped' }),
+      expect.objectContaining({ key: 'version', status: 'skipped' }),
+    ]));
+    expect(fs.existsSync(marker)).toBe(false);
+  });
+
+  it('probes an allowlisted Hermes binary through the host executable policy', async () => {
+    const hermesBin = path.join(temporaryDirectory(), 'hermes');
+    fs.writeFileSync(hermesBin, ['#!/bin/sh', "printf '%s\\n' 'Hermes Agent v0.9.0'", ''].join('\n'), { mode: 0o755 });
+    const originalHermesAllowlist = process.env.AGENT_HQ_ALLOWED_HERMES_BINARIES;
+    process.env.AGENT_HQ_ALLOWED_HERMES_BINARIES = hermesBin;
+    try {
+      const result = await diagnoseRuntimeDriver({
+        runtimeType: 'hermes',
+        runtimeConfig: { profile: 'agent-hq-diagnostics', hermesBin },
+      });
+      expect(result.executable_path).toBe(fs.realpathSync(hermesBin));
+      expect(result.version).toBe('Hermes Agent v0.9.0');
+    } finally {
+      if (originalHermesAllowlist == null) delete process.env.AGENT_HQ_ALLOWED_HERMES_BINARIES;
+      else process.env.AGENT_HQ_ALLOWED_HERMES_BINARIES = originalHermesAllowlist;
+    }
   });
 
   it('skips local command checks for remote runtimes', async () => {

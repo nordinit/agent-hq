@@ -5,6 +5,33 @@ import {
 } from "./config";
 
 describe("Hermes runtime config", () => {
+  const originalAllowlist = process.env.AGENT_HQ_ALLOWED_HERMES_BINARIES;
+
+  afterEach(() => {
+    if (originalAllowlist === undefined) delete process.env.AGENT_HQ_ALLOWED_HERMES_BINARIES;
+    else process.env.AGENT_HQ_ALLOWED_HERMES_BINARIES = originalAllowlist;
+  });
+
+  it("only accepts the bare hermes command or an allowlisted absolute path", () => {
+    delete process.env.AGENT_HQ_ALLOWED_HERMES_BINARIES;
+    expect(validateHermesRuntimeConfig({ profile: "agent-hq-cinder" })).toBeNull();
+    expect(validateHermesRuntimeConfig({ profile: "agent-hq-cinder", hermesBin: "hermes" })).toBeNull();
+    for (const hermesBin of ["/bin/sh", "/usr/local/bin/hermes", "./hermes", "sh", 42]) {
+      expect(validateHermesRuntimeConfig({ profile: "agent-hq-cinder", hermesBin } as HermesRuntimeConfig)).toMatch(/hermesBin/);
+    }
+    expect(() => normalizeHermesRuntimeConfig({ profile: "agent-hq-cinder", hermesBin: "/bin/sh" })).toThrow(/AGENT_HQ_ALLOWED_HERMES_BINARIES/);
+
+    process.env.AGENT_HQ_ALLOWED_HERMES_BINARIES = "/usr/local/bin/hermes";
+    expect(validateHermesRuntimeConfig({ profile: "agent-hq-cinder", hermesBin: "/usr/local/bin/hermes" })).toBeNull();
+    expect(validateHermesRuntimeConfig({ profile: "agent-hq-cinder", hermesBin: "/bin/sh" })).toMatch(/not authorized/);
+  });
+
+  it("requires the profile to be a single path segment", () => {
+    for (const profile of ["../../.ssh", "a/b", ".hidden", "with space"]) {
+      expect(validateHermesRuntimeConfig({ profile })).toMatch(/runtime_config.profile must/);
+    }
+  });
+
   it("rejects missing or unsupported V1 config values", () => {
     expect(validateHermesRuntimeConfig({})).toBe(
       "runtime_config.profile is required for hermes runtime",
@@ -117,6 +144,7 @@ describe("Hermes runtime config", () => {
   });
 
   it("normalizes defaults and trimmed optional values without mutating inputs", () => {
+    process.env.AGENT_HQ_ALLOWED_HERMES_BINARIES = "/usr/local/bin/hermes";
     const config: HermesRuntimeConfig = {
       hermesBin: " /usr/local/bin/hermes ",
       profile: " agent-hq-cinder ",

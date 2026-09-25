@@ -11,6 +11,8 @@ let tempDir: string;
 const ORIGINAL_OPENCLAW_CONFIG_PATH = process.env.OPENCLAW_CONFIG_PATH;
 const ORIGINAL_DISABLE_OPENCLAW_PLUGIN_REGISTRY_REFRESH = process.env.AGENT_HQ_DISABLE_OPENCLAW_PLUGIN_REGISTRY_REFRESH;
 const ORIGINAL_ALLOWED_WORKSPACE_ROOTS = process.env.AGENT_HQ_ALLOWED_WORKSPACE_ROOTS;
+const ORIGINAL_ALLOWED_RUNTIME_HOME_ROOTS = process.env.AGENT_HQ_ALLOWED_RUNTIME_HOME_ROOTS;
+const ORIGINAL_ALLOWED_HERMES_BINARIES = process.env.AGENT_HQ_ALLOWED_HERMES_BINARIES;
 
 async function resetDb(): Promise<void> {
   await setupTestDb();
@@ -20,6 +22,9 @@ async function resetDb(): Promise<void> {
   process.env.AGENT_HQ_DISABLE_OPENCLAW_PLUGIN_REGISTRY_REFRESH = '1';
   // Workspaces in this suite live in the temp dir, outside the default workspace roots.
   process.env.AGENT_HQ_ALLOWED_WORKSPACE_ROOTS = tempDir;
+  // So do the Hermes homes and the custom binary; the host allowlists opt them in.
+  process.env.AGENT_HQ_ALLOWED_RUNTIME_HOME_ROOTS = [tempDir, '/tmp'].join(path.delimiter);
+  process.env.AGENT_HQ_ALLOWED_HERMES_BINARIES = '/usr/local/bin/hermes';
 
   const db = getDb();
 
@@ -59,8 +64,14 @@ describe('agents Hermes runtime CRUD support', () => {
     else process.env.OPENCLAW_CONFIG_PATH = ORIGINAL_OPENCLAW_CONFIG_PATH;
     if (ORIGINAL_DISABLE_OPENCLAW_PLUGIN_REGISTRY_REFRESH === undefined) delete process.env.AGENT_HQ_DISABLE_OPENCLAW_PLUGIN_REGISTRY_REFRESH;
     else process.env.AGENT_HQ_DISABLE_OPENCLAW_PLUGIN_REGISTRY_REFRESH = ORIGINAL_DISABLE_OPENCLAW_PLUGIN_REGISTRY_REFRESH;
-    if (ORIGINAL_ALLOWED_WORKSPACE_ROOTS === undefined) delete process.env.AGENT_HQ_ALLOWED_WORKSPACE_ROOTS;
-    else process.env.AGENT_HQ_ALLOWED_WORKSPACE_ROOTS = ORIGINAL_ALLOWED_WORKSPACE_ROOTS;
+    for (const [key, original] of [
+      ['AGENT_HQ_ALLOWED_WORKSPACE_ROOTS', ORIGINAL_ALLOWED_WORKSPACE_ROOTS],
+      ['AGENT_HQ_ALLOWED_RUNTIME_HOME_ROOTS', ORIGINAL_ALLOWED_RUNTIME_HOME_ROOTS],
+      ['AGENT_HQ_ALLOWED_HERMES_BINARIES', ORIGINAL_ALLOWED_HERMES_BINARIES],
+    ] as const) {
+      if (original === undefined) delete process.env[key];
+      else process.env[key] = original;
+    }
     if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
   });
 

@@ -84,6 +84,89 @@ export function checkWorkspacePath(value: unknown, field = 'workspace_path'): Wo
   return { ok: true, path: path.resolve(trimmed) };
 }
 
+// ── Runtime config homes ──────────────────────────────────────────────────────
+//
+// claudeConfigDir, codexHome/codexHomeRoot and hermesHome become CLAUDE_CONFIG_DIR, CODEX_HOME
+// and HERMES_HOME for the agent process, are read for provider credentials, and are where
+// Agent HQ writes profile, skill and MCP configuration. They may name the runtime's own config
+// directories in the home directory (~/.claude, ~/.claude-work, ...), the runtime's current
+// environment value, Agent HQ's data directory, or a root the operator lists in
+// AGENT_HQ_ALLOWED_RUNTIME_HOME_ROOTS — not arbitrary directories such as ~/.ssh.
+
+export const ALLOWED_RUNTIME_HOME_ROOTS_ENV = 'AGENT_HQ_ALLOWED_RUNTIME_HOME_ROOTS';
+
+type RuntimeHomeKind = 'claude' | 'codex' | 'hermes';
+
+const RUNTIME_HOME_FIELDS: ReadonlyArray<{ runtime: string; field: string; kind: RuntimeHomeKind }> = [
+  { runtime: 'claude-code', field: 'claudeConfigDir', kind: 'claude' },
+  { runtime: 'codex', field: 'codexHome', kind: 'codex' },
+  { runtime: 'codex', field: 'codexHomeRoot', kind: 'codex' },
+  { runtime: 'hermes', field: 'hermesHome', kind: 'hermes' },
+];
+
+const RUNTIME_HOME_ENV: Record<RuntimeHomeKind, string> = {
+  claude: 'CLAUDE_CONFIG_DIR',
+  codex: 'CODEX_HOME',
+  hermes: 'HERMES_HOME',
+};
+
+function agentHqDataRoots(): string[] {
+  const dataRoot = process.env.AGENT_HQ_DATA_DIR?.trim();
+  const runState = process.env.AGENT_HQ_RUN_STATE_DIR?.trim();
+  return [
+    dataRoot && path.isAbsolute(dataRoot) ? dataRoot : path.join(os.homedir(), '.agent-hq'),
+    ...(runState && path.isAbsolute(runState) ? [runState] : []),
+  ].map(canonical);
+}
+
+export function isAllowedRuntimeHome(kind: RuntimeHomeKind, value: string): boolean {
+  if (!path.isAbsolute(value) || value.includes('\0')) return false;
+  const target = canonical(value);
+  const home = canonical(os.homedir());
+  if (isPathWithin(target, home, false)) {
+    const [first] = path.relative(home, target).split(path.sep);
+    if (first === `.${kind}` || first.startsWith(`.${kind}-`)) return true;
+  }
+  const envHome = process.env[RUNTIME_HOME_ENV[kind]]?.trim();
+  const roots = [
+    ...agentHqDataRoots(),
+    ...(envHome && path.isAbsolute(envHome) ? [canonical(envHome)] : []),
+    ...operatorAllowedRoots(ALLOWED_RUNTIME_HOME_ROOTS_ENV),
+  ];
+  return roots.some((root) => isPathWithin(target, root));
+}
+
+function parseConfigRecord(value: unknown): Record<string, unknown> {
+  if (typeof value === 'string') {
+    try {
+      return parseConfigRecord(JSON.parse(value));
+    } catch {
+      return {};
+    }
+  }
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+/**
+ * Checks the config-home fields of a runtime_config. A field equal to the value already stored
+ * for the agent (`previous`) is accepted as-is, so existing agents stay editable; any new or
+ * changed value must satisfy the policy.
+ */
+export function checkRuntimeConfigHostPaths(runtimeType: string, config: unknown, previous?: unknown): string | null {
+  const next = parseConfigRecord(config);
+  const prior = parseConfigRecord(previous);
+  for (const { runtime, field, kind } of RUNTIME_HOME_FIELDS) {
+    if (runtime !== runtimeType) continue;
+    const value = next[field];
+    if (value == null || (typeof value === 'string' && !value.trim())) continue;
+    if (value === prior[field]) continue;
+    if (typeof value !== 'string' || !isAllowedRuntimeHome(kind, value.trim())) {
+      return `runtime_config.${field} must be an absolute path inside ~/.${kind} (or ~/.${kind}-*), $${RUNTIME_HOME_ENV[kind]}, or the Agent HQ data directory. To allow another location, add it to ${ALLOWED_RUNTIME_HOME_ROOTS_ENV}.`;
+    }
+  }
+  return null;
+}
+
 /**
  * True only for a real directory directly under ~/.openclaw named `workspace-*`: the one shape
  * of workspace that agent deletion removes from disk. This used to be a string prefix test, so

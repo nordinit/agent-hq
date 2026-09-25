@@ -88,16 +88,31 @@ describe('POST /api/v1/runtime-drivers/diagnose', () => {
   });
 
   it('accepts a standalone draft diagnostic', async () => {
+    process.env.AGENT_HQ_ALLOWED_WORKSPACE_ROOTS = '/draft';
     const response = await requestJson(app, {
       runtime_type: 'codex',
       runtime_config: { codexBin: 'codex' },
       workspace_path: '/draft/workspace',
     });
+    delete process.env.AGENT_HQ_ALLOWED_WORKSPACE_ROOTS;
     expect(response.status).toBe(200);
     expect(db.get).not.toHaveBeenCalled();
     expect(diagnoseRuntimeDriver).toHaveBeenCalledWith(expect.objectContaining({
       runtimeType: 'codex',
       agentId: null,
     }));
+  });
+
+  it('refuses request-supplied workspace and config-home paths outside the host path policy', async () => {
+    for (const body of [
+      { runtime_type: 'codex', runtime_config: { codexBin: 'codex' }, workspace_path: '/etc' },
+      { runtime_type: 'codex', runtime_config: { codexHome: '/Users/someone/.ssh' } },
+      { runtime_type: 'claude-code', runtime_config: { claudeConfigDir: '/' } },
+      { runtime_type: 'hermes', runtime_config: { profile: 'agent-hq', hermesHome: '/var/root' } },
+    ]) {
+      const response = await requestJson(app, body);
+      expect({ body, status: response.status }).toEqual({ body, status: 400 });
+    }
+    expect(diagnoseRuntimeDriver).not.toHaveBeenCalled();
   });
 });

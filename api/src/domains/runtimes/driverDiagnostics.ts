@@ -11,6 +11,7 @@ import { normalizeCodexRuntimeConfig } from '../../runtimes/codex/config';
 import { resolveEffectiveCodexHome } from '../../runtimes/codex/auth';
 import { buildRuntimeChildEnv, sanitizedRuntimeProcessEnv } from '../../runtimes/environment';
 import { probeAllowedRuntimeCliVersion } from '../../runtimes/runtimeCliVersion';
+import { resolveAllowedRuntimeExecutable, validateRuntimeExecutable } from '../../runtimes/executablePolicy';
 
 export const RUNTIME_DIAGNOSTIC_STATUSES = ['pass', 'warn', 'fail', 'skipped'] as const;
 export type RuntimeDiagnosticStatus = (typeof RUNTIME_DIAGNOSTIC_STATUSES)[number];
@@ -80,33 +81,13 @@ function nonEmptyString(value: unknown): string | null {
   return trimmed || null;
 }
 
-async function isExecutableFile(filePath: string): Promise<boolean> {
+function resolvePolicyExecutable(runtimeType: AgentRuntimeType, command: string, pathValue: string): string | null {
+  if (runtimeType !== 'hermes' && runtimeType !== 'openclaw') return null;
   try {
-    const stat = await fs.stat(filePath);
-    if (!stat.isFile()) return false;
-    await fs.access(filePath, fsConstants.X_OK);
-    return true;
+    return resolveAllowedRuntimeExecutable(runtimeType, command, { ...process.env, PATH: pathValue }).path;
   } catch {
-    return false;
+    return null;
   }
-}
-
-/** Resolve a CLI exactly as a subprocess launch would, without invoking a shell. */
-export async function resolveExecutable(command: string, pathValue = process.env.PATH ?? ''): Promise<string | null> {
-  const trimmed = command.trim();
-  if (!trimmed) return null;
-
-  if (path.isAbsolute(trimmed) || trimmed.includes(path.sep) || trimmed.includes('/')) {
-    const candidate = path.resolve(trimmed);
-    return await isExecutableFile(candidate) ? candidate : null;
-  }
-
-  for (const pathEntry of pathValue.split(path.delimiter)) {
-    if (!pathEntry) continue;
-    const candidate = path.join(pathEntry, trimmed);
-    if (await isExecutableFile(candidate)) return candidate;
-  }
-  return null;
 }
 
 function compactVersionOutput(stdout: string, stderr: string): string | null {
@@ -322,7 +303,11 @@ export async function diagnoseRuntimeDriver(input: DiagnoseRuntimeDriverInput): 
   const runtimeType = input.runtimeType;
   const runtimeConfig = input.runtimeConfig ?? {};
   const checks: RuntimeDiagnosticCheck[] = [];
-  const configError = validateAgentRuntimeConfig(runtimeType, runtimeConfig);
+  // openclawBin is not part of the OpenClaw agent config contract (the runtime runs the host's
+  // OPENCLAW_BIN), so the agent validator does not look at it; diagnostics would run it, so the
+  // executable policy is applied here.
+  const configError = validateAgentRuntimeConfig(runtimeType, runtimeConfig)
+    ?? (runtimeType === 'openclaw' ? validateRuntimeExecutable('openclaw', runtimeConfig.openclawBin) : null);
   checks.push({
     key: 'config',
     label: 'Runtime configuration',
@@ -378,8 +363,11 @@ export async function diagnoseRuntimeDriver(input: DiagnoseRuntimeDriverInput): 
     // Controlled runtimes take the path directly from the shared policy probe.
     // That path is the exact file already executed for --version and is reused
     // below for auth status; diagnostics never performs a second PATH lookup.
+    // Every other local runtime resolves through the same host executable policy,
+    // so no request can name the file that gets executed.
     executablePath = controlledVersionResult?.executablePath
-      ?? (controlledVersionResult ? null : await resolveExecutable(
+      ?? (controlledVersionResult ? null : resolvePolicyExecutable(
+        runtimeType,
         command,
         input.pathValue ?? process.env.PATH ?? '',
       ));

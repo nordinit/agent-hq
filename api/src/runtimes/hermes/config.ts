@@ -1,4 +1,5 @@
 import { isProtectedRuntimeConfigEnvKey } from "../environment";
+import { validateRuntimeExecutable } from "../executablePolicy";
 
 export interface HermesRuntimeConfig {
   hermesBin?: string;
@@ -67,6 +68,19 @@ export function validateHermesRuntimeConfig(
   const profile =
     typeof config?.profile === "string" ? config.profile.trim() : "";
   if (!profile) return "runtime_config.profile is required for hermes runtime";
+  // The profile names a directory (~/.hermes/profiles/<profile>) that skills and MCP config are
+  // written into, so it is one plain path segment.
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(profile)) {
+    return "runtime_config.profile must start with a letter or digit and contain only letters, digits, dots, dashes and underscores";
+  }
+
+  if (config?.hermesBin != null && typeof config.hermesBin !== "string") {
+    return "runtime_config.hermesBin must be a string";
+  }
+  // Same host-owned policy as Claude Code and Codex: the bare `hermes` from the host PATH, or
+  // an absolute path the operator listed in AGENT_HQ_ALLOWED_HERMES_BINARIES.
+  const executableError = validateRuntimeExecutable("hermes", config?.hermesBin);
+  if (executableError) return executableError;
 
   if (config?.[REMOVED_HERMES_LIFECYCLE_FIELD] != null) {
     return "removed Hermes lifecycle mode config is no longer supported; use Agent HQ MCP/capability lifecycle tools instead";

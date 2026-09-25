@@ -3,6 +3,7 @@ import { getDb } from '../db/client';
 import { parseRuntimeConfigObject } from '../domains/agents/runtimeConfig';
 import { diagnoseRuntimeDriver } from '../domains/runtimes/driverDiagnostics';
 import { resolveTenantIdFromRequest } from '../lib/tenantContext';
+import { checkRuntimeConfigHostPaths, checkWorkspacePath } from '../lib/hostPathPolicy';
 
 const router = Router();
 
@@ -42,6 +43,7 @@ router.post('/diagnose', async (req: Request, res: Response) => {
     let agentSlug: string | null = null;
     let providerConnectionId: number | null = null;
     let trustedTenantId: number | null = null;
+    let storedRuntimeConfig: unknown = null;
 
     if (req.body.runtime_config !== undefined && req.body.runtime_config !== null && !runtimeConfig) {
       return res.status(400).json({ error: 'runtime_config must be an object or null.' });
@@ -75,6 +77,7 @@ router.post('/diagnose', async (req: Request, res: Response) => {
         });
       }
       runtimeType = storedRuntimeType;
+      storedRuntimeConfig = agent.runtime_config;
       runtimeConfig = req.body.runtime_config === undefined
         ? parseRuntimeConfigObject(agent.runtime_config) ?? {}
         : runtimeConfig;
@@ -87,6 +90,17 @@ router.post('/diagnose', async (req: Request, res: Response) => {
 
     if (!runtimeType) {
       return res.status(400).json({ error: 'runtime_type is required when agent_id is not provided.' });
+    }
+
+    // Diagnostics stat the workspace and config home and run the CLI's auth-status command with
+    // that home, so request-supplied paths obey the same policy as an agent record would.
+    if (req.body.runtime_config !== undefined) {
+      const hostPathError = checkRuntimeConfigHostPaths(runtimeType, runtimeConfig, storedRuntimeConfig);
+      if (hostPathError) return res.status(400).json({ error: hostPathError });
+    }
+    if (req.body.workspace_path !== undefined && workspacePath) {
+      const workspaceCheck = checkWorkspacePath(workspacePath);
+      if (!workspaceCheck.ok) return res.status(400).json({ error: workspaceCheck.error });
     }
 
     const result = await diagnoseRuntimeDriver({

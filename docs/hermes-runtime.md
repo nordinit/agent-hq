@@ -26,7 +26,7 @@ Hermes is currently classified by Agent HQ's contract system as a local runtime.
 
 Agent HQ does not install Hermes for you. Every host that may execute Hermes-backed agents must provide:
 
-- A working Hermes CLI binary on `PATH`, or an absolute path in `runtime_config.hermesBin`.
+- A working Hermes CLI binary on the host `PATH`, or an absolute path in `runtime_config.hermesBin` that is also listed in `AGENT_HQ_ALLOWED_HERMES_BINARIES` on the API host.
 - A dedicated Hermes profile for each Agent HQ Hermes agent.
 - Provider credentials and model configuration available to that Hermes profile or passed through runtime env.
 - Filesystem access from the Agent HQ API process to the prepared task worktree.
@@ -43,7 +43,7 @@ hermes --profile agent-hq-example -z "Say ready"
 
 Use a profile name that clearly belongs to Agent HQ, such as `agent-hq-cinder-backend`. Do not point scheduled Agent HQ agents at a developer's personal default Hermes profile unless state bleed is explicitly acceptable.
 
-For stronger state isolation, configure `hermesHome` to a directory owned by the Agent HQ service account. Agent HQ exports that value as `HERMES_HOME` and also materializes the agent MCP config there.
+For stronger state isolation, configure `hermesHome` to a directory owned by the Agent HQ service account (under `~/.hermes`, `~/.hermes-*`, `$HERMES_HOME`, the Agent HQ data directory, or a root listed in `AGENT_HQ_ALLOWED_RUNTIME_HOME_ROOTS`). Agent HQ exports that value as `HERMES_HOME` and also materializes the agent MCP config there.
 
 ## Runtime Config
 
@@ -72,7 +72,7 @@ Store Hermes settings on the agent as `runtime_config`.
 | Field | Required | Implemented behavior |
 |---|---:|---|
 | `profile` | yes | Passed as `--profile <profile>`. This is the primary Hermes isolation boundary. |
-| `hermesBin` | no | Defaults to `hermes`; can be an absolute path or PATH-resolved command. |
+| `hermesBin` | no | Defaults to `hermes`, resolved through the host `PATH`. Any other value must be an absolute path listed in `AGENT_HQ_ALLOWED_HERMES_BINARIES`. |
 | `hermesHome` | no | Treated as the Hermes home root; Agent HQ exports the resolved profile home as `HERMES_HOME`, materializes MCP config there, and reads native transcript JSON from the profile `sessions` directory. |
 | `invocationMode` | no | Defaults to `"z"` for one-shot `hermes -z`; `"chat-q"` runs `hermes chat -q`. |
 | `sessionMode` | no | Only `"fresh"` is supported. Agent HQ does not pass resume/continue flags. |
@@ -178,7 +178,7 @@ hermes --version
 
 Fix:
 
-- Install Hermes for the same OS user that runs the Agent HQ API, or set `runtime_config.hermesBin` to an absolute executable path.
+- Install Hermes for the same OS user that runs the Agent HQ API, or set `runtime_config.hermesBin` to an absolute executable path listed in `AGENT_HQ_ALLOWED_HERMES_BINARIES`.
 - Restart the Agent HQ API if its service environment does not include the updated `PATH`.
 
 ### Profile is missing or wrong

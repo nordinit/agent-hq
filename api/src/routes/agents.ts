@@ -21,7 +21,7 @@ import {
   slugifySessionKeyPart,
 } from '../lib/sessionKeys';
 import { PathTraversalError, resolveWorkspaceProvider } from '../lib/workspaceProvider';
-import { checkWorkspacePath, isDeletableOpenClawWorkspace } from '../lib/hostPathPolicy';
+import { checkRuntimeConfigHostPaths, checkWorkspacePath, isDeletableOpenClawWorkspace } from '../lib/hostPathPolicy';
 import { getAgentRoutingConfig, updateAgentRoutingConfig } from '../domains/routing/config';
 import {
   defaultAgentModelForProvider,
@@ -745,7 +745,8 @@ router.post('/provision-full', async (req: Request, res: Response) => {
       });
     }
 
-    const runtimeConfigValidationError = validateAgentRuntimeConfig(runtimeType, body.runtime_config ?? null);
+    const runtimeConfigValidationError = validateAgentRuntimeConfig(runtimeType, body.runtime_config ?? null)
+      ?? checkRuntimeConfigHostPaths(runtimeType, body.runtime_config ?? null);
     if (runtimeConfigValidationError) {
       return res.status(400).json({
         ok: false,
@@ -1470,7 +1471,7 @@ router.post('/', async (req: Request, res: Response) => {
     const runtimeConfigValidationError = validateAgentRuntimeConfig(
       effectiveRuntimeTypeCreate,
       runtime_config ?? null,
-    );
+    ) ?? checkRuntimeConfigHostPaths(effectiveRuntimeTypeCreate, runtime_config ?? null);
     if (runtimeConfigValidationError) {
       return res.status(400).json({ error: runtimeConfigValidationError });
     }
@@ -1767,7 +1768,7 @@ router.put('/:id', async (req: Request, res: Response) => {
     const runtimeConfigValidationError = validateAgentRuntimeConfig(
       effectiveRuntimeType,
       (effectiveRuntimeConfig as AgentRuntimeConfigPayload) ?? null,
-    );
+    ) ?? checkRuntimeConfigHostPaths(effectiveRuntimeType, effectiveRuntimeConfig, agent.runtime_config);
     if (runtimeConfigValidationError) {
       return res.status(400).json({ error: runtimeConfigValidationError });
     }

@@ -10,7 +10,10 @@ interface VerifiedCliRange {
   maximumExclusive: readonly [number, number, number];
 }
 
-export const VERIFIED_RUNTIME_CLI_RANGES: Record<PolicyControlledRuntime, VerifiedCliRange> = {
+/** Runtimes whose CLI contract Agent HQ pins to a verified version range. */
+export type VersionVerifiedRuntime = Extract<PolicyControlledRuntime, 'claude-code' | 'codex'>;
+
+export const VERIFIED_RUNTIME_CLI_RANGES: Record<VersionVerifiedRuntime, VerifiedCliRange> = {
   'claude-code': { minimum: [2, 1, 220], maximumExclusive: [2, 2, 0] },
   codex: { minimum: [0, 146, 0], maximumExclusive: [0, 147, 0] },
 };
@@ -56,7 +59,7 @@ function compareVersion(
 }
 
 export function assessRuntimeCliVersion(
-  runtime: PolicyControlledRuntime,
+  runtime: VersionVerifiedRuntime,
   version: string | null,
 ): RuntimeCliVersionResult {
   const { minimum, maximumExclusive } = VERIFIED_RUNTIME_CLI_RANGES[runtime];
@@ -99,7 +102,7 @@ export function assessRuntimeCliVersion(
  * diagnostic resolver/tests; HTTP callers cannot supply it.
  */
 export async function probeAllowedRuntimeCliVersion(params: {
-  runtime: PolicyControlledRuntime;
+  runtime: VersionVerifiedRuntime;
   command: string;
   timeoutMs?: number;
   pathValue?: string;
