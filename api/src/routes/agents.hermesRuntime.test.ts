@@ -10,6 +10,7 @@ import agentsRouter from './agents';
 let tempDir: string;
 const ORIGINAL_OPENCLAW_CONFIG_PATH = process.env.OPENCLAW_CONFIG_PATH;
 const ORIGINAL_DISABLE_OPENCLAW_PLUGIN_REGISTRY_REFRESH = process.env.AGENT_HQ_DISABLE_OPENCLAW_PLUGIN_REGISTRY_REFRESH;
+const ORIGINAL_ALLOWED_WORKSPACE_ROOTS = process.env.AGENT_HQ_ALLOWED_WORKSPACE_ROOTS;
 
 async function resetDb(): Promise<void> {
   await setupTestDb();
@@ -17,6 +18,8 @@ async function resetDb(): Promise<void> {
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-hermes-runtime-'));
   process.env.OPENCLAW_CONFIG_PATH = path.join(tempDir, 'openclaw.json');
   process.env.AGENT_HQ_DISABLE_OPENCLAW_PLUGIN_REGISTRY_REFRESH = '1';
+  // Workspaces in this suite live in the temp dir, outside the default workspace roots.
+  process.env.AGENT_HQ_ALLOWED_WORKSPACE_ROOTS = tempDir;
 
   const db = getDb();
 
@@ -56,6 +59,8 @@ describe('agents Hermes runtime CRUD support', () => {
     else process.env.OPENCLAW_CONFIG_PATH = ORIGINAL_OPENCLAW_CONFIG_PATH;
     if (ORIGINAL_DISABLE_OPENCLAW_PLUGIN_REGISTRY_REFRESH === undefined) delete process.env.AGENT_HQ_DISABLE_OPENCLAW_PLUGIN_REGISTRY_REFRESH;
     else process.env.AGENT_HQ_DISABLE_OPENCLAW_PLUGIN_REGISTRY_REFRESH = ORIGINAL_DISABLE_OPENCLAW_PLUGIN_REGISTRY_REFRESH;
+    if (ORIGINAL_ALLOWED_WORKSPACE_ROOTS === undefined) delete process.env.AGENT_HQ_ALLOWED_WORKSPACE_ROOTS;
+    else process.env.AGENT_HQ_ALLOWED_WORKSPACE_ROOTS = ORIGINAL_ALLOWED_WORKSPACE_ROOTS;
     if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
   });
 

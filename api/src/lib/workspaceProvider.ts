@@ -23,6 +23,8 @@ import { getDb } from '../db/client';
 import { WORKSPACE_ROOT as DEFAULT_WORKSPACE_ROOT } from '../config';
 import { ATLAS_SYSTEM_ROLE } from './atlasAgent';
 import { resolveAtlasWorkspaceRoot } from './atlasAgent';
+import { isAllowedWorkspacePath } from './hostPathPolicy';
+import { resolveAndValidate, WorkspaceBoundaryError } from './workspaceBoundary';
 import { tableColumns as sharedTableColumns } from "../db/introspection";
 
 // ── Public types ──────────────────────────────────────────────────────────────
@@ -115,10 +117,26 @@ function isBinaryByExtension(filePath: string): boolean {
   return BINARY_EXTENSIONS.has(ext);
 }
 
+/**
+ * Resolves a caller-supplied path inside the workspace. The lexical check keeps `..` from
+ * climbing out (with a trailing separator, so `/ws-other` is not inside `/ws`); the canonical
+ * check keeps a symlink inside the workspace from pointing the operation outside it. The
+ * lexical path is returned so deleting or renaming a symlink acts on the link itself.
+ */
 function safePath(relativePath: string, workspaceRoot: string): string {
-  const resolved = path.resolve(workspaceRoot, relativePath);
-  if (!resolved.startsWith(workspaceRoot + path.sep) && resolved !== workspaceRoot) {
+  if (typeof relativePath !== 'string' || relativePath.includes('\0') || !workspaceRoot) {
     throw new PathTraversalError('Path traversal not allowed');
+  }
+  const root = path.resolve(workspaceRoot);
+  const resolved = path.resolve(root, relativePath);
+  if (resolved !== root && !resolved.startsWith(root.endsWith(path.sep) ? root : root + path.sep)) {
+    throw new PathTraversalError('Path traversal not allowed');
+  }
+  try {
+    resolveAndValidate(root, resolved, true);
+  } catch (err) {
+    if (err instanceof WorkspaceBoundaryError) throw new PathTraversalError('Path traversal not allowed');
+    throw err;
   }
   return resolved;
 }
@@ -184,7 +202,7 @@ export class LocalWorkspaceProvider implements WorkspaceProvider {
         return { filename, content: null, exists: false };
       }
       try {
-        const filePath = path.join(this.root, filename);
+        const filePath = safePath(filename, this.root);
         const content = fs.readFileSync(filePath, 'utf-8');
         return { filename, content, exists: true };
       } catch {
@@ -476,6 +494,20 @@ type WorkspaceProviderOptions = {
 // ── Factory ───────────────────────────────────────────────────────────────────
 
 /**
+ * A workspace root read from an agent record is itself confined (see hostPathPolicy): the
+ * artifacts API reads and writes anything below it, so an unconfined root would make that API a
+ * read/write primitive for the whole host.
+ */
+function confinedLocalProvider(workspaceRoot: string): LocalWorkspaceProvider {
+  if (!isAllowedWorkspacePath(workspaceRoot)) {
+    throw new PathTraversalError(
+      `Workspace ${workspaceRoot} is outside the allowed workspace roots; set AGENT_HQ_ALLOWED_WORKSPACE_ROOTS to allow it`,
+    );
+  }
+  return new LocalWorkspaceProvider(workspaceRoot);
+}
+
+/**
 function parseRuntimeConfig(agent: AgentRow): RemoteRuntimeConfig {
   if (!agent.runtime_config) return {};
   try {
@@ -521,16 +553,16 @@ export async function resolveWorkspaceProvider(agentId?: string | number, option
       if (tenantAtlas) {
         return await resolveWorkspaceProvider(tenantAtlas.id, { tenantId, allowDefaultFallback: false });
       }
-      return allowDefaultFallback ? new LocalWorkspaceProvider(await resolveAtlasWorkspaceRoot() || DEFAULT_WORKSPACE_ROOT) : new EmptyWorkspaceProvider();
+      return allowDefaultFallback ? confinedLocalProvider(await resolveAtlasWorkspaceRoot() || DEFAULT_WORKSPACE_ROOT) : new EmptyWorkspaceProvider();
     }
-    return new LocalWorkspaceProvider(await resolveAtlasWorkspaceRoot() || DEFAULT_WORKSPACE_ROOT);
+    return confinedLocalProvider(await resolveAtlasWorkspaceRoot() || DEFAULT_WORKSPACE_ROOT);
   }
 
   try {
     const db = getDb();
     const agent = await db.get('SELECT * FROM agents WHERE id = ?', agentId) as AgentRow | undefined;
     if (!agent) {
-      if (allowDefaultFallback) return new LocalWorkspaceProvider(await resolveAtlasWorkspaceRoot() || DEFAULT_WORKSPACE_ROOT);
+      if (allowDefaultFallback) return confinedLocalProvider(await resolveAtlasWorkspaceRoot() || DEFAULT_WORKSPACE_ROOT);
       throw new FileNotFoundError(`Agent not found: ${agentId}`);
     }
 
@@ -540,19 +572,21 @@ export async function resolveWorkspaceProvider(agentId?: string | number, option
 
     // Local with explicit workspace_path
     if (agent.workspace_path) {
-      return new LocalWorkspaceProvider(agent.workspace_path);
+      return confinedLocalProvider(agent.workspace_path);
     }
 
     // Local OpenClaw agent
     if (agent.openclaw_agent_id) {
-      return new LocalWorkspaceProvider(
+      return confinedLocalProvider(
         path.join(os.homedir(), `.openclaw/workspace-${agent.openclaw_agent_id}`),
       );
     }
-  } catch {
+  } catch (err) {
+    // A workspace outside policy is reported as such, never swapped for another agent's.
+    if (err instanceof PathTraversalError) throw err;
     if (!allowDefaultFallback) throw new FileNotFoundError(`Workspace not found for agent: ${agentId}`);
     // fall through
   }
 
-  return new LocalWorkspaceProvider(await resolveAtlasWorkspaceRoot() || DEFAULT_WORKSPACE_ROOT);
+  return confinedLocalProvider(await resolveAtlasWorkspaceRoot() || DEFAULT_WORKSPACE_ROOT);
 }

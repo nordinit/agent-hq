@@ -20,7 +20,8 @@ import {
   resolveRuntimeAgentSlug,
   slugifySessionKeyPart,
 } from '../lib/sessionKeys';
-import { resolveWorkspaceProvider } from '../lib/workspaceProvider';
+import { PathTraversalError, resolveWorkspaceProvider } from '../lib/workspaceProvider';
+import { checkWorkspacePath, isDeletableOpenClawWorkspace } from '../lib/hostPathPolicy';
 import { getAgentRoutingConfig, updateAgentRoutingConfig } from '../domains/routing/config';
 import {
   defaultAgentModelForProvider,
@@ -787,7 +788,16 @@ router.post('/provision-full', async (req: Request, res: Response) => {
           projectId,
           systemRole: resolvedSystemRole,
         });
-    const workspacePath = body.workspace_path || buildDefaultWorkspacePath(runtimeSlug);
+    const requestedWorkspace = body.workspace_path ? checkWorkspacePath(body.workspace_path) : null;
+    if (requestedWorkspace && !requestedWorkspace.ok) {
+      return res.status(400).json({
+        ok: false,
+        report: {
+          validation: { ok: false, status: 'failed', error: requestedWorkspace.error },
+        },
+      });
+    }
+    const workspacePath = requestedWorkspace?.path || buildDefaultWorkspacePath(runtimeSlug);
     const repoPayloadCheck = rejectAgentRepoPayload(body as unknown as Record<string, unknown>);
     if (!repoPayloadCheck.ok) {
       return res.status(repoPayloadCheck.status).json({
@@ -1508,6 +1518,11 @@ router.post('/', async (req: Request, res: Response) => {
                 systemRole: resolvedSystemRole,
               });
     let resolvedWorkspacePath = workspace_path ?? '';
+    if (resolvedWorkspacePath.trim()) {
+      const workspaceCheck = checkWorkspacePath(resolvedWorkspacePath);
+      if (!workspaceCheck.ok) return res.status(400).json({ error: workspaceCheck.error, field: 'workspace_path' });
+      resolvedWorkspacePath = workspaceCheck.path;
+    }
 
     // Every local-process runtime resolves its cwd as
     // activeRepoRoot -> runtime_config.workingDirectory -> workspaceRoot, and throws
@@ -1717,6 +1732,18 @@ router.put('/:id', async (req: Request, res: Response) => {
     const agent = await db.get('SELECT * FROM agents WHERE id = ? AND tenant_id = ?', req.params.id, tenantId) as Record<string, unknown> | undefined;
     if (!agent) return res.status(404).json({ error: 'Agent not found' });
     const previousProjectId = (agent.project_id as number | null | undefined) ?? null;
+    // A changed workspace must satisfy the host path policy. The stored value is accepted as-is
+    // so editors that send the whole record back keep working for existing agents.
+    let resolvedWorkspacePath = (agent.workspace_path as string | null) ?? null;
+    if (workspace_path !== undefined && workspace_path !== null && workspace_path !== agent.workspace_path) {
+      if (workspace_path === '') {
+        resolvedWorkspacePath = '';
+      } else {
+        const workspaceCheck = checkWorkspacePath(workspace_path);
+        if (!workspaceCheck.ok) return res.status(400).json({ error: workspaceCheck.error, field: 'workspace_path' });
+        resolvedWorkspacePath = workspaceCheck.path;
+      }
+    }
     const resolvedRole = role !== undefined
       ? normalizeAgentRoleLabel(role, 'Agent')
       : String(agent.role ?? '');
@@ -1838,7 +1865,7 @@ router.put('/:id', async (req: Request, res: Response) => {
       resolvedName,
       resolvedRole,
       resolvedSessionKey,
-      workspace_path ?? agent.workspace_path,
+      resolvedWorkspacePath,
       status ?? agent.status,
       resolvedModel,
       runtime_type !== undefined ? runtime_type : (agent.runtime_type ?? 'openclaw'),
@@ -2076,8 +2103,14 @@ router.get('/:id/docs', async (req: Request, res: Response) => {
     if (!agent) return res.status(404).json({ error: 'Agent not found' });
 
     const docFiles = ['SOUL.md', 'AGENTS.md', 'USER.md', 'IDENTITY.md', 'MEMORY.md', 'TOOLS.md', 'HEARTBEAT.md', 'LESSONS.md'];
-    const provider = await resolveWorkspaceProvider(req.params.id);
-    const docs = await provider.readDocs(docFiles);
+    let docs;
+    try {
+      docs = await (await resolveWorkspaceProvider(req.params.id)).readDocs(docFiles);
+    } catch (err) {
+      // A workspace outside the host path policy has no readable docs.
+      if (!(err instanceof PathTraversalError)) throw err;
+      docs = docFiles.map((filename) => ({ filename, content: null, exists: false }));
+    }
 
     return res.json(docs);
   } catch (err) {
@@ -2200,6 +2233,8 @@ router.post('/:id/provision', async (req: Request, res: Response) => {
     const slug = resolveSlug(agent);
     const agentModel = (agent.model as string) || 'anthropic/claude-sonnet-4-6';
     const workspacePath = (agent.workspace_path as string) || path.join(homedir, '.openclaw', `workspace-${slug}`);
+    const workspaceCheck = checkWorkspacePath(workspacePath);
+    if (!workspaceCheck.ok) return res.status(400).json({ error: workspaceCheck.error, field: 'workspace_path' });
     const agentDirPath = path.join(homedir, '.openclaw', 'agents', slug, 'agent');
     const sessionKey = (agent.session_key as string) || buildCanonicalAgentMainSessionKey({
       projectName: agent.project_name as string | null | undefined,
@@ -2684,7 +2719,10 @@ router.post('/:id/skills/sync', async (req: Request, res: Response) => {
     const bodyWorkDir = typeof (req.body as Record<string, unknown>)?.working_directory === 'string'
       ? (req.body as Record<string, unknown>).working_directory as string
       : null;
-    const workingDirectory = bodyWorkDir ?? (agent.workspace_path as string | null) ?? null;
+    // An override is a place skills get written to, so it obeys the workspace path policy.
+    const workDirCheck = bodyWorkDir ? checkWorkspacePath(bodyWorkDir, 'working_directory') : null;
+    if (workDirCheck && !workDirCheck.ok) return res.status(400).json({ error: workDirCheck.error });
+    const workingDirectory = (workDirCheck?.ok ? workDirCheck.path : null) ?? (agent.workspace_path as string | null) ?? null;
 
     if (!workingDirectory) {
       return res.status(400).json({ error: 'Agent has no workspace_path and no working_directory was provided' });
@@ -2759,12 +2797,15 @@ router.post('/:id/mcp/sync', async (req: Request, res: Response) => {
     const bodyWorkDir = typeof (req.body as Record<string, unknown>)?.working_directory === 'string'
       ? (req.body as Record<string, unknown>).working_directory as string
       : null;
+    // An override is a place MCP bundles get written to, so it obeys the workspace path policy.
+    const workDirCheck = bodyWorkDir ? checkWorkspacePath(bodyWorkDir, 'working_directory') : null;
+    if (workDirCheck && !workDirCheck.ok) return res.status(400).json({ error: workDirCheck.error });
     const runtimeType = (agent.runtime_type as string | null) ?? 'openclaw';
 
     const result = await syncAssignedMcpForAgent({
           db,
           agentId: Number(req.params.id),
-          workingDirectory: bodyWorkDir ?? (agent.workspace_path as string | null) ?? null,
+          workingDirectory: (workDirCheck?.ok ? workDirCheck.path : null) ?? (agent.workspace_path as string | null) ?? null,
           materializeOpenClawGlobalConfig: true,
         });
 
@@ -2897,10 +2938,9 @@ router.delete('/:id', async (req: Request, res: Response) => {
       }
     }
 
-    // Workspace cleanup — only delete dirs under ~/.openclaw/workspace-*
+    // Workspace cleanup — only delete a real ~/.openclaw/workspace-* directory
     const workspacePath = agent.workspace_path as string;
-    const safePrefix = os.homedir() + '/.openclaw/workspace-';
-    if (workspacePath && workspacePath.startsWith(safePrefix) && fs.existsSync(workspacePath)) {
+    if (workspacePath && isDeletableOpenClawWorkspace(workspacePath) && fs.existsSync(workspacePath)) {
       fs.rmSync(workspacePath, { recursive: true, force: true });
       console.log(`[agents] Removed workspace: ${workspacePath}`);
     }

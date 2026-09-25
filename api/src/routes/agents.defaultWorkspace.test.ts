@@ -99,7 +99,7 @@ describe('local-process runtimes get an Agent HQ-owned default workspace', () =>
 
   it('never overrides an explicitly supplied workspace_path', async () => {
     const { server, baseUrl } = await startTestServer();
-    const explicit = path.join(tempDir, 'explicit-workspace');
+    const explicit = path.join(tempDir, 'workspaces', 'explicit-workspace');
     try {
       const created = await createAgent(baseUrl, {
         name: 'Explicit Claude',
