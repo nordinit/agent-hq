@@ -2,8 +2,8 @@
  * PM2 config for the PostgreSQL test instance.
  *
  * Runs Agent HQ from THIS worktree against the provisioned PostgreSQL database, on ports
- * that do not collide with anything already running (production is 3501/3500; the dev
- * instances occupy 3510/3511 and 3520/3521).
+ * that do not collide with anything already running (production defaults to 3501/3500 and
+ * ecosystem.dev.config.js to 3511/3510).
  *
  * Deliberately isolated from production in four separate ways, because any one of them
  * failing alone would be enough to touch live data:

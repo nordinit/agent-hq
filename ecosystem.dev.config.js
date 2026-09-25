@@ -43,8 +43,8 @@ module.exports = {
         // ONLY the dev-scoped key, with no fallback to a plain DATABASE_URL. Dev checkouts carry
         // copies of production's .env — both of them did until today — where DATABASE_URL names
         // the production database, so a fallback silently attaches a dev API to production the
-        // first time someone runs this file from the wrong directory. Verified: with this repo's
-        // own .env, `env.DATABASE_URL` resolves to postgresql://localhost/agent_hq_prod.
+        // first time someone runs this file from the wrong directory. Verified: with a production
+        // checkout's .env, `env.DATABASE_URL` resolves to the production database.
         //
         DATABASE_URL: env.AGENT_HQ_DEV_DATABASE_URL,
         OPENCLAW_GATEWAY_URL: env.OPENCLAW_GATEWAY_URL,

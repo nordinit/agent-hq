@@ -69,7 +69,7 @@ Codebase surface, measured on the worktree:
 `postgres`, `pglite`, or ORM dependency present yet — Phase 4 introduces the first one.
 
 Target engine available locally: **PostgreSQL 17.9** (Homebrew, aarch64-apple-darwin24.6.0), socket at
-`/tmp`, superuser `nordini`, with `agent_hq_dev`, `agent_hq_test` and `agent_hq_rehearsal` already
+`/tmp`, superuser = the local login account, with `agent_hq_dev`, `agent_hq_test` and `agent_hq_rehearsal` already
 provisioned.
 
 ## Architecture decisions
