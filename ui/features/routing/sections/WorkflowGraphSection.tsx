@@ -69,7 +69,7 @@ type Selection =
   | { kind: 'arc'; key: string }
   | { kind: 'event'; mappingId: number; target: string }
   | { kind: 'compose'; draft: TransitionDraft }
-  | { kind: 'assign'; agentId: number; agentName: string; status: string; rule?: GraphAssignment }
+  | { kind: 'assign'; agentId: number; agentName: string; status: string; rule?: GraphAssignment; removing?: boolean }
   | { kind: 'gate'; draft: GateDraft }
   | null;
 
@@ -163,6 +163,12 @@ export default function WorkflowGraphSection({
   const layout = useMemo(
     () => computeGraphLayout(graph?.nodes ?? [], graph?.edges ?? []),
     [graph],
+  );
+
+  // Memoized so the composer resets only on a new gesture, not on every canvas re-render.
+  const assignDraft = useMemo(
+    () => (selection?.kind === 'assign' && graph ? assignmentDraft(selection, graph) : null),
+    [selection, graph],
   );
 
   const edgesById = useMemo(
@@ -276,6 +282,17 @@ export default function WorkflowGraphSection({
     tracedNodes.add(trace.input.from_status);
     tracedNodes.add(trace.result.to_status);
   }
+
+  // The hover ✕ on an assignment. It opens the composer on its remove preview rather than
+  // deleting, so the scope guard and "what would this touch" still come first.
+  const removeAssignment = (status: string, assignment: GraphAssignment) => setSelection({
+    kind: 'assign',
+    agentId: assignment.agent_id ?? 0,
+    agentName: assignment.agent_name ?? 'agent',
+    status,
+    rule: assignment,
+    removing: true,
+  });
 
   const runTrace = () => {
     if (!traceForm.fromStatus || !traceForm.outcome) return;
@@ -735,7 +752,7 @@ export default function WorkflowGraphSection({
                       </span>
                       {hasProblem && <AlertTriangle className="ml-auto h-3.5 w-3.5 shrink-0 text-red-400" />}
                     </div>
-                    <div className="mt-1 flex items-center gap-1 overflow-hidden">
+                    <div className="mt-1 flex items-center gap-1 overflow-x-clip">
                       {/* Ambient workflow events are not drawn as arcs, so the status
                           they drop tasks into carries the marker instead. */}
                       {node.inbound_events.map(event => (
@@ -772,21 +789,26 @@ export default function WorkflowGraphSection({
                           // summary above says it once. Mark only a genuine mix.
                           const markScope = markAssignmentScope && presentation === 'override';
                           return (
-                            <span
-                              key={assignment.rule_id}
-                              title={ruleSuperseded
-                                ? 'Workflow-type default, superseded by an override on this workflow'
-                                : assignment.is_override ? 'Defined on this workflow' : undefined}
-                              className={`inline-flex items-center gap-1 truncate rounded px-1.5 py-0.5 text-[11px] ${
-                                assignment.agent_enabled
-                                  ? 'bg-slate-800 text-slate-300'
-                                  : 'bg-red-950/60 text-red-300'
-                              } ${ruleSuperseded ? 'opacity-40 line-through decoration-slate-500' : ''} ${
-                                markScope ? 'ring-1 ring-purple-400' : ''
-                              }`}
-                            >
-                              {assignment.agent_enabled ? <Bot className="h-3 w-3" /> : <Ban className="h-3 w-3" />}
-                              {assignment.agent_name ?? `agent ${assignment.agent_id ?? '?'}`}
+                            <span key={assignment.rule_id} className="group/chip relative inline-flex min-w-0 shrink">
+                              <span
+                                title={ruleSuperseded
+                                  ? 'Workflow-type default, superseded by an override on this workflow'
+                                  : assignment.is_override ? 'Defined on this workflow' : undefined}
+                                className={`inline-flex items-center gap-1 truncate rounded px-1.5 py-0.5 text-[11px] ${
+                                  assignment.agent_enabled
+                                    ? 'bg-slate-800 text-slate-300'
+                                    : 'bg-red-950/60 text-red-300'
+                                } ${ruleSuperseded ? 'opacity-40 line-through decoration-slate-500' : ''} ${
+                                  markScope ? 'ring-1 ring-purple-400' : ''
+                                }`}
+                              >
+                                {assignment.agent_enabled ? <Bot className="h-3 w-3" /> : <Ban className="h-3 w-3" />}
+                                {assignment.agent_name ?? `agent ${assignment.agent_id ?? '?'}`}
+                              </span>
+                              <RemoveAssignmentButton
+                                assignment={assignment}
+                                onRemove={() => removeAssignment(node.id, assignment)}
+                              />
                             </span>
                           );
                         })
@@ -920,9 +942,10 @@ export default function WorkflowGraphSection({
               onCancel={() => setSelection(null)}
               onCommitted={() => { setSelection(null); load(); }}
             />
-          ) : selection?.kind === 'assign' ? (
+          ) : selection?.kind === 'assign' && assignDraft ? (
             <AssignmentComposer
-              draft={assignmentDraft(selection, graph)}
+              draft={assignDraft}
+              startRemoving={Boolean(selection.removing)}
               graph={graph}
               taskTypes={taskTypes}
               context={guardContext}
@@ -991,6 +1014,7 @@ export default function WorkflowGraphSection({
                 status: selectedNode.id,
                 rule: assignment,
               })}
+              onRemoveAssignment={(assignment) => removeAssignment(selectedNode.id, assignment)}
             />
           ) : selectedArc ? (
             <ArcInspector
@@ -1052,12 +1076,14 @@ function NodeInspector({
   graph,
   onAddTransition,
   onEditAssignment,
+  onRemoveAssignment,
 }: {
   node: WorkflowGraphNode;
   findings: WorkflowGraph['lint'];
   graph: WorkflowGraph;
   onAddTransition?: (from: string, to: string) => void;
   onEditAssignment?: (assignment: GraphAssignment) => void;
+  onRemoveAssignment?: (assignment: GraphAssignment) => void;
 }) {
   return (
     <div className="space-y-4">
@@ -1095,7 +1121,7 @@ function NodeInspector({
             {node.assignments.map(assignment => (
               <li
                 key={assignment.rule_id}
-                className="flex items-center justify-between rounded-lg border border-slate-800 bg-slate-900/60 px-2.5 py-1.5 text-xs"
+                className="group/chip relative flex items-center justify-between rounded-lg border border-slate-800 bg-slate-900/60 px-2.5 py-1.5 text-xs"
               >
                 <button
                   onClick={() => onEditAssignment?.(assignment)}
@@ -1117,6 +1143,9 @@ function NodeInspector({
                     <span className="text-amber-400">· superseded</span>
                   )}
                 </span>
+                {onRemoveAssignment && (
+                  <RemoveAssignmentButton assignment={assignment} onRemove={() => onRemoveAssignment(assignment)} />
+                )}
               </li>
             ))}
           </ul>
@@ -1318,5 +1347,32 @@ function ArcInspector({
         </ul>
       </div>
     </div>
+  );
+}
+
+/**
+ * A small ✕ pinned to the top-right corner of an assignment, shown on hover or keyboard focus.
+ * A span with role="button" because on the canvas it sits inside the status node's <button>,
+ * and buttons cannot nest.
+ */
+function RemoveAssignmentButton({ assignment, onRemove }: { assignment: GraphAssignment; onRemove: () => void }) {
+  const name = assignment.agent_name ?? `agent ${assignment.agent_id ?? '?'}`;
+  const activate = (e: React.SyntheticEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    onRemove();
+  };
+  return (
+    <span
+      role="button"
+      tabIndex={0}
+      aria-label={`Remove ${name} from this status`}
+      title={`Remove ${name}`}
+      onClick={activate}
+      onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') activate(e); }}
+      className="absolute -right-1.5 -top-1.5 z-10 flex h-3.5 w-3.5 items-center justify-center rounded-full border border-slate-600 bg-slate-900 text-slate-400 opacity-0 shadow transition-opacity hover:border-red-400 hover:bg-red-950 hover:text-red-300 focus:opacity-100 focus:outline-none focus:ring-1 focus:ring-red-400 group-hover/chip:opacity-100"
+    >
+      <X className="h-2.5 w-2.5" />
+    </span>
   );
 }
