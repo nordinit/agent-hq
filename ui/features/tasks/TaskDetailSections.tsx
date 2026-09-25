@@ -596,8 +596,7 @@ export function FailureStateSection({ task, history, outcomeMap }: { task: Task;
   const recoveryLabel = getFailureRecoveryLabel(task, outcomeMap);
 
   return (
-    <div>
-      <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">Failure State</p>
+    <CollapsibleSection sectionKey="failure-state" title="Failure State">
       <div className={`border rounded-lg p-3 space-y-3 ${tone.panel}`}>
         <div className="flex flex-wrap items-center gap-2">
           <span className={`text-xs px-2 py-1 rounded-full font-semibold ${tone.pill}`}>
@@ -642,7 +641,7 @@ export function FailureStateSection({ task, history, outcomeMap }: { task: Task;
           </div>
         )}
       </div>
-    </div>
+    </CollapsibleSection>
   );
 }
 

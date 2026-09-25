@@ -254,13 +254,8 @@ function RelatedTasksSection({
   }, [onNavigateAway, router, taskHref]);
 
   return (
-    <div>
-      <div className="flex items-center justify-between gap-3 mb-3">
-        <div>
-          <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Related Tasks</p>
-          <p className="text-[10px] text-slate-600 mt-0.5">Relationship labels and allowed actions come from this task&apos;s workflow.</p>
-        </div>
-      </div>
+    <CollapsibleSection sectionKey="related-tasks" title="Related Tasks" className="mb-1">
+      <p className="text-[10px] text-slate-600 mb-3">Relationship labels and allowed actions come from this task&apos;s workflow.</p>
 
       {relationshipTypes.length > 0 ? (
         <div className="rounded-lg border border-slate-700 bg-slate-800/40 p-3 mb-3 space-y-3">
@@ -408,7 +403,7 @@ function RelatedTasksSection({
           ))}
         </div>
       )}
-    </div>
+    </CollapsibleSection>
   );
 }
 
@@ -910,10 +905,11 @@ export function TaskDetailPanel({ task, statuses, onClose, onSave, onDelete, onC
   );
 
   const runsBlock = (
-    <div>
-      <div className="flex items-center gap-1.5 mb-3">
-        <Activity className="w-3.5 h-3.5 text-slate-400" />
-        <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Agent Runs</p>
+    <CollapsibleSection
+      sectionKey="agent-runs"
+      title={<span className="inline-flex items-center gap-1.5"><Activity className="w-3.5 h-3.5" />Agent Runs</span>}
+      className="mb-3"
+      headerExtra={<>
         {/* Opens the newest captured dispatch. Hidden until something is captured, so
             the control never promises context this task does not have. */}
         {latestContextInstanceId !== null && (
@@ -937,9 +933,10 @@ export function TaskDetailPanel({ task, statuses, onClose, onSave, onDelete, onC
           <GitBranch className="w-3 h-3" />
           View path on graph
         </a>
-      </div>
+      </>}
+    >
       <RelatedRunsSection taskId={localTask.id} outcomeMap={outcomeMap} nonFailureOutcomes={nonFailureOutcomes} />
-    </div>
+    </CollapsibleSection>
   );
 
   const descriptionBlock = localTask.description ? (
