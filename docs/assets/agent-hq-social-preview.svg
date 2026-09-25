@@ -28,5 +28,5 @@
   <text x="480" y="274" fill="#f6efe4" font-family="Georgia, 'Times New Roman', serif" font-size="72" font-weight="700">Agent HQ</text>
   <text x="480" y="330" fill="#d9e6dd" font-family="'Helvetica Neue', Arial, sans-serif" font-size="28">Task routing and orchestration control plane for AI agent teams</text>
   <text x="480" y="418" fill="#f6efe4" font-family="'Helvetica Neue', Arial, sans-serif" font-size="26">Projects • Tasks • Routing • Chat • Telemetry</text>
-  <text x="480" y="458" fill="#f6efe4" font-family="'Helvetica Neue', Arial, sans-serif" font-size="26">OpenClaw • Claude Code • Webhook runtimes</text>
-  <text x="480" y="520" fill="#d8b88b" font-family="'Helvetica Neue', Arial, sans-serif" font-size="22" letter-spacing="2">SOURCE-AVAILABLE AGENT OPS</text>
+  <text x="480" y="458" fill="#f6efe4" font-family="'Helvetica Neue', Arial, sans-serif" font-size="26">Claude Code • Codex • Hermes • OpenClaw • Webhook</text>
+  <text x="480" y="520" fill="#d8b88b" font-family="'Helvetica Neue', Arial, sans-serif" font-size="22" letter-spacing="2">OPEN-SOURCE AGENT OPS</text>

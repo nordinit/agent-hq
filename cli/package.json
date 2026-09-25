@@ -2,7 +2,7 @@
   "name": "@nordinit/agent-hq",
   "version": "0.1.29",
   "description": "CLI launcher for Agent HQ — task management for AI agent teams",
-  "license": "SEE LICENSE IN LICENSE",
+  "license": "MIT",
   "bin": {
     "agent-hq": "bin/cli.js",
     "agenthq": "bin/cli.js"

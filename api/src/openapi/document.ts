@@ -17,6 +17,7 @@ type OpenApiDocument = {
     title: string;
     version: string;
     description: string;
+    license: { name: string; url: string };
   };
   servers: Array<{ url: string; description: string }>;
   tags: Array<{ name: string; description: string }>;
@@ -102,6 +103,7 @@ export const openApiDocument: OpenApiDocument = {
       'Public self-hosted REST API for Agent HQ operator workflows.',
       'The document intentionally excludes runtime callback hooks, local filesystem artifact routes, logs, gateway tokens, credential registries, and other internal-only endpoints.',
     ].join(' '),
+    license: { name: 'MIT', url: 'https://opensource.org/license/mit' },
   },
   servers: [
     { url: '/', description: 'Same-origin Agent HQ API server' },

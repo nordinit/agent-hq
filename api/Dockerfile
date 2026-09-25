@@ -9,6 +9,8 @@ COPY api/src/ ./src/
 RUN npm run build
 
 FROM node:22-alpine AS runner
+LABEL org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.source="https://github.com/nordinit/agent-hq"
 
 RUN addgroup -S agenthq && adduser -S agenthq -G agenthq
 
@@ -18,6 +20,7 @@ WORKDIR /app/api
 COPY api/package.json api/package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 COPY --from=builder --chown=agenthq:agenthq /build/api/dist ./dist
+COPY --chown=agenthq:agenthq LICENSE /app/LICENSE
 COPY --chown=agenthq:agenthq db/ /app/db/
 COPY --chown=agenthq:agenthq agent-contracts/ /app/agent-contracts/
 COPY --chown=agenthq:agenthq skills/create-agent/SKILL.md /app/skills/create-agent/SKILL.md

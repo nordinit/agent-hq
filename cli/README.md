@@ -60,4 +60,4 @@ Port overrides use `--port-api`, `--port-ui`, `AGENT_HQ_API_PORT`, and
 
 ## License
 
-Agent HQ is source-available under the Sustainable Use License. See [LICENSE](LICENSE).
+Agent HQ is open source under the MIT License. See [LICENSE](LICENSE).

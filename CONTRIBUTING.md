@@ -103,12 +103,9 @@ Good issue reports include:
 
 ## Contribution licensing
 
-Agent HQ is distributed under the Sustainable Use License (see [`LICENSE`](LICENSE)). By submitting a contribution, you:
+Agent HQ is licensed under the [MIT License](LICENSE), and contributions are accepted under the same license. By submitting a contribution, you certify the [Developer Certificate of Origin 1.1](https://developercertificate.org): that you wrote it, or otherwise have the right to submit it under the MIT License. Sign off each commit with `git commit -s` to record that certification.
 
-- certify that you wrote the contribution or otherwise have the right to submit it under the project's license, and
-- agree that your contribution is licensed to the project maintainers, who may distribute it as part of Agent HQ under the Sustainable Use License or any future license the project adopts (including commercial licensing of Agent HQ editions).
-
-If you cannot agree to these terms for a particular contribution, say so in the pull request before review starts.
+If AI tools helped write a contribution, you are responsible for having the right to submit what they produced.
 
 ## Security
 

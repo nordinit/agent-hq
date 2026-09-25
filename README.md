@@ -1,6 +1,6 @@
 # Agent HQ
 
-**Agent HQ is a source-available control plane for AI agents doing real work.**
+**Agent HQ is an open-source control plane for AI agents doing real work.**
 
 Route tasks to agents, enforce evidence gates, track runs, and automatically move work forward based on agent outcomes and external events.
 
@@ -81,7 +81,7 @@ The same workflow model can also be used for:
 | **MCP/capability callbacks** | Agents call back into Agent HQ to start runs, check in, write evidence, post notes, and submit outcomes. |
 | **Worktree-backed execution** | For code projects, Agent HQ can create isolated task worktrees for agent runs. |
 | **Telemetry and run history** | Track task cycle time, QA outcomes, model usage, agent efficiency, logs, transcripts, artifacts, and run state. |
-| **Source-available self-hosting** | Run Agent HQ locally or with Docker Compose under the Sustainable Use License. |
+| **Open-source self-hosting** | Run Agent HQ locally or with Docker Compose under the MIT License. |
 
 ---
 
@@ -518,15 +518,11 @@ Agent HQ is designed around:
 
 ---
 
-## Source-available license
+## License
 
-Agent HQ is source-available under the **Sustainable Use License**.
+Agent HQ is open source under the [MIT License](LICENSE). Copyright (c) 2026 Nord Initiatives LLC.
 
-You can use and modify Agent HQ for your own internal business purposes, personal use, and non-commercial use, subject to the license terms.
-
-Commercial hosting, resale, white-labeling, or providing Agent HQ as a paid service to others may require a separate commercial agreement.
-
-See [`LICENSE`](LICENSE) for the full license text.
+The license covers the code, not the Agent HQ name or logo.
 
 ---
 
@@ -657,12 +653,6 @@ Agent HQ is designed around runtime adapters and callback contracts. You can int
 Yes.
 
 Task types, fields, statuses, outcomes, assignment rules, transitions, gates, and event mappings are configurable through the UI.
-
-### Why source-available instead of MIT?
-
-Agent HQ is intended to be self-hostable and inspectable while protecting the project from unmanaged commercial resale or hosted clones.
-
-See [`LICENSE`](LICENSE) for the full terms.
 
 ---
 

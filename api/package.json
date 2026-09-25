@@ -1,6 +1,7 @@
 {
   "name": "agent-hq-api",
   "version": "1.0.0",
+  "license": "MIT",
   "description": "Agent HQ API — agent management backend",
   "main": "dist/index.js",
   "bin": {

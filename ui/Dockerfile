@@ -22,6 +22,8 @@ RUN npm run build
 
 # ── Stage 3: runner ───────────────────────────────────────────────────────────
 FROM node:22-alpine AS runner
+LABEL org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.source="https://github.com/nordinit/agent-hq"
 WORKDIR /app
 
 RUN addgroup -S agenthq && adduser -S agenthq -G agenthq
@@ -32,6 +34,7 @@ ENV NEXT_TELEMETRY_DISABLED=1
 
 COPY --from=builder --chown=agenthq:agenthq /build/.next/standalone ./
 COPY --from=builder --chown=agenthq:agenthq /build/.next/static ./.next/static
+COPY --chown=agenthq:agenthq LICENSE ./LICENSE
 
 EXPOSE 3500
 USER agenthq
