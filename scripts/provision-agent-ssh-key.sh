@@ -5,10 +5,12 @@
 # Deploy Key on the agent-hq repo (read_only=false so agents can push branches).
 #
 # Usage:
-#   GITHUB_TOKEN=<pat> ./scripts/provision-agent-ssh-key.sh <agent_id>
+#   GITHUB_TOKEN=<pat> GITHUB_OWNER=<owner> ./scripts/provision-agent-ssh-key.sh <agent_id>
 #
 # Requirements:
 #   - GITHUB_TOKEN env var: a GitHub PAT with `admin:public_key` + repo admin scope
+#   - GITHUB_OWNER env var: the user or organization that owns the repo
+#   - GITHUB_REPO env var (optional): the repo name, default `agent-hq`
 #   - ssh-keygen, curl, jq
 #
 # Idempotency:
@@ -20,7 +22,7 @@
 set -euo pipefail
 
 # ── Constants ──────────────────────────────────────────────────────────────────
-GITHUB_OWNER="${GITHUB_OWNER:-nordinit}"
+GITHUB_OWNER="${GITHUB_OWNER:-}"
 GITHUB_REPO="${GITHUB_REPO:-agent-hq}"
 GITHUB_API="https://api.github.com"
 KEYS_DIR="$(cd "$(dirname "$0")/.." && pwd)/docker/keys"
@@ -36,6 +38,12 @@ AGENT_ID="$1"
 if [[ -z "${GITHUB_TOKEN:-}" ]]; then
   echo "Error: GITHUB_TOKEN environment variable is required." >&2
   echo "  export GITHUB_TOKEN=<github-pat-with-repo-admin-scope>" >&2
+  exit 1
+fi
+
+if [[ -z "${GITHUB_OWNER}" ]]; then
+  echo "Error: GITHUB_OWNER environment variable is required." >&2
+  echo "  export GITHUB_OWNER=<user-or-organization-that-owns-${GITHUB_REPO}>" >&2
   exit 1
 fi
 

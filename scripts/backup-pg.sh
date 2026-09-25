@@ -12,7 +12,7 @@
 #                                       # against the source, then dropped
 #
 # Logs:     $AGENT_HQ_LOG_DIR/backup.log  (default <repo>/logs/backup.log)
-# Schedule: daily 02:00 via launchd job com.atlas-hq.backup
+# Schedule: run it daily from your scheduler (cron, launchd or a systemd timer)
 #
 # This script is version controlled on purpose. It holds no secrets and every
 # path is an overridable default — and a backup script that exists only on the
