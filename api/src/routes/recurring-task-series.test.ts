@@ -306,34 +306,34 @@ describe('recurring task series API', () => {
   it('isolates recurring series and generated task history by tenant context', async () => {
     const db = getDb();
     const defaultTenantId = await getDefaultTenantId(db);
-    const ecoPoolTenantId = Number((await db.run(`
+    const globexTenantId = Number((await db.run(`
       INSERT INTO tenants (name, slug, is_default)
-      VALUES ('EcoPool', 'ecopool', 0)
+      VALUES ('Globex', 'globex', 0)
     `)).lastInsertId);
     await db.run(`
       INSERT INTO projects (id, tenant_id, name, description, context_md)
-      VALUES (714, ?, 'EcoPool', '', '')
-    `, ecoPoolTenantId);
+      VALUES (714, ?, 'Globex', '', '')
+    `, globexTenantId);
     await db.run(`
       INSERT INTO workflows (id, tenant_id, project_id, name, goal, workflow_type, status, length_kind, length_value)
-      VALUES (7141, ?, 714, 'EcoPool Workflow', '', 'recurring_api', 'active', 'time', '2w')
-    `, ecoPoolTenantId);
+      VALUES (7141, ?, 714, 'Globex Workflow', '', 'recurring_api', 'active', 'time', '2w')
+    `, globexTenantId);
     await db.run(`
       INSERT INTO agents (id, tenant_id, project_id, name, role, session_key, workspace_path, status, preferred_provider)
-      VALUES (7143, ?, 714, 'EcoPool Agent', 'Backend Engineer', 'agent:ecopool:test', '/tmp/ecopool', 'idle', 'openai-codex')
-    `, ecoPoolTenantId);
-    await db.run(`INSERT INTO workflow_types (tenant_id, key, name, is_system) VALUES (?, 'recurring_api', 'Recurring API', 1) ON CONFLICT DO NOTHING`, ecoPoolTenantId);
-    await db.run(`INSERT INTO workflow_type_task_types (tenant_id, workflow_type_key, task_type, is_system) VALUES (?, 'recurring_api', 'backend', 1)`, ecoPoolTenantId);
+      VALUES (7143, ?, 714, 'Globex Agent', 'Backend Engineer', 'agent:globex:test', '/tmp/globex', 'idle', 'openai-codex')
+    `, globexTenantId);
+    await db.run(`INSERT INTO workflow_types (tenant_id, key, name, is_system) VALUES (?, 'recurring_api', 'Recurring API', 1) ON CONFLICT DO NOTHING`, globexTenantId);
+    await db.run(`INSERT INTO workflow_type_task_types (tenant_id, workflow_type_key, task_type, is_system) VALUES (?, 'recurring_api', 'backend', 1)`, globexTenantId);
 
     const defaultSeries = await createSeries({ title_template: 'Default weekly maintenance' });
-    await setActiveTenantId(db, ecoPoolTenantId);
+    await setActiveTenantId(db, globexTenantId);
     const ecoRes = await fetch(`${baseUrl}/api/v1/recurring-task-series`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(validPayload({
         project_id: 714,
         workflow_id: 7141,
-        title_template: 'EcoPool weekly maintenance',
+        title_template: 'Globex weekly maintenance',
         agent_id: 7143,
       })),
     });
@@ -348,11 +348,11 @@ describe('recurring task series API', () => {
     });
     expect(defaultRunRes.status).toBe(201);
 
-    await setActiveTenantId(db, ecoPoolTenantId);
+    await setActiveTenantId(db, globexTenantId);
     const ecoList = await fetch(`${baseUrl}/api/v1/recurring-task-series`);
     expect(ecoList.status).toBe(200);
     const ecoListBody = await ecoList.json() as { series: Array<Record<string, unknown>>; total: number };
-    expect(ecoListBody.series.map(series => series.title_template)).toEqual(['EcoPool weekly maintenance']);
+    expect(ecoListBody.series.map(series => series.title_template)).toEqual(['Globex weekly maintenance']);
     expect(ecoListBody.series.map(series => series.title_template)).not.toContain('Default weekly maintenance');
 
     await expect(fetch(`${baseUrl}/api/v1/recurring-task-series/${defaultSeries.id}`)).resolves.toMatchObject({ status: 404 });
@@ -367,7 +367,7 @@ describe('recurring task series API', () => {
     expect(defaultList.status).toBe(200);
     const defaultListBody = await defaultList.json() as { series: Array<Record<string, unknown>>; total: number };
     expect(defaultListBody.series.map(series => series.title_template)).toContain('Default weekly maintenance');
-    expect(defaultListBody.series.map(series => series.title_template)).not.toContain('EcoPool weekly maintenance');
+    expect(defaultListBody.series.map(series => series.title_template)).not.toContain('Globex weekly maintenance');
 
     await expect(fetch(`${baseUrl}/api/v1/recurring-task-series/${ecoSeries.id}/run-now`, {
       method: 'POST',

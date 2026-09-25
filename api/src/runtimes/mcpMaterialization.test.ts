@@ -895,7 +895,7 @@ describe('materializeAgentMcpConfig', () => {
       },
     }), 'utf8');
     await getDb().run(`INSERT INTO agents (id, tenant_id, name, session_key, openclaw_agent_id, runtime_type, workspace_path)
-       VALUES (1, 1, 'Lumen', 'agent:pool-client:lumen-frontend:frontend-engineer:main', 'ecopool-frontend', 'openclaw', ?)`, staleWorkspace);
+       VALUES (1, 1, 'Lumen', 'agent:pool-client:lumen-frontend:frontend-engineer:main', 'globex-frontend', 'openclaw', ?)`, staleWorkspace);
     await getDb().run(`INSERT INTO mcp_servers (id, tenant_id, name, slug, command, args) VALUES (30, 1, 'Agent HQ', 'agent-hq', 'node', '["server.js"]')`);
     await getDb().run(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (1, 30)`);
 
@@ -998,7 +998,7 @@ describe('materializeAgentMcpConfig', () => {
       },
     }), 'utf8');
     await getDb().run(`INSERT INTO agents (id, tenant_id, name, session_key, openclaw_agent_id, runtime_type, workspace_path)
-       VALUES (1, 1, 'Lumen', 'agent:pool-client:lumen-frontend:frontend-engineer:main', 'ecopool-frontend', 'openclaw', ?)`, openClawWorkspace);
+       VALUES (1, 1, 'Lumen', 'agent:pool-client:lumen-frontend:frontend-engineer:main', 'globex-frontend', 'openclaw', ?)`, openClawWorkspace);
     await getDb().run(`INSERT INTO mcp_servers (id, tenant_id, name, slug, command, args) VALUES (30, 1, 'Agent HQ', 'agent-hq', 'node', '["server.js"]')`);
     await getDb().run(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (1, 30)`);
 

@@ -167,7 +167,7 @@ it('previews missing dependencies and imports equivalent portable config with re
     expect.objectContaining({ code: 'deprecated_project_repo_config' }),
   ]));
 
-  await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (2, 'EcoPool', 'ecopool', 0)`);
+  await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (2, 'Globex', 'globex', 0)`);
 
   const result = await importProjectManifest(db, manifest, { projectName: 'Portable Copy', tenantId: 2, actor: 'test' });
   expect(result.project_id).not.toBe(projectId);

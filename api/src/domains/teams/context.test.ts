@@ -136,28 +136,28 @@ describe('team context rendering', () => {
 
   it('marks the dispatching agent as self and lists the rest as teammates', async () => {
     const nova = await createAgent('Nova');
-    const casper = await createAgent('Casper');
+    const vega = await createAgent('Vega');
     const teamId = await createTeam('Delivery Squad', { goal: 'Ship billing.' });
     await addMember(teamId, nova, { role: 'Implementer', responsibilities: 'Writes the code', sortOrder: 1 });
-    await addMember(teamId, casper, { role: 'Reviewer', responsibilities: 'Reviews diffs', sortOrder: 2 });
+    await addMember(teamId, vega, { role: 'Reviewer', responsibilities: 'Reviews diffs', sortOrder: 2 });
 
     const rendered = await renderTeamContextForAgent(getDb(), { teamId, agentId: nova });
     expect(rendered?.section).toContain('You are Nova, Implementer on this team.');
-    expect(rendered?.section).toContain('- Casper — Reviewer. Reviews diffs.');
+    expect(rendered?.section).toContain('- Vega — Reviewer. Reviews diffs.');
     expect(rendered?.section).not.toContain('- Nova');
   });
 
   it('orders members by sort_order then id so the block is byte-stable', async () => {
     const nova = await createAgent('Nova');
-    const casper = await createAgent('Casper');
-    const piper = await createAgent('Piper');
+    const vega = await createAgent('Vega');
+    const kepler = await createAgent('Kepler');
     const teamId = await createTeam('Delivery Squad');
     await addMember(teamId, nova, { sortOrder: 0 });
-    await addMember(teamId, casper, { role: 'Reviewer', sortOrder: 9 });
-    await addMember(teamId, piper, { role: 'Planner', sortOrder: 1 });
+    await addMember(teamId, vega, { role: 'Reviewer', sortOrder: 9 });
+    await addMember(teamId, kepler, { role: 'Planner', sortOrder: 1 });
 
     const rendered = await renderTeamContextForAgent(getDb(), { teamId, agentId: nova });
-    expect(rendered!.section.indexOf('Piper')).toBeLessThan(rendered!.section.indexOf('Casper'));
+    expect(rendered!.section.indexOf('Kepler')).toBeLessThan(rendered!.section.indexOf('Vega'));
 
     const again = await renderTeamContextForAgent(getDb(), { teamId, agentId: nova });
     expect(again!.section).toBe(rendered!.section);
@@ -203,10 +203,10 @@ describe('resolveTeamContextForDispatch', () => {
 
   it('returns the rendered block for a resolvable team', async () => {
     const nova = await createAgent('Nova');
-    const casper = await createAgent('Casper');
+    const vega = await createAgent('Vega');
     const teamId = await createTeam('Delivery Squad', { goal: 'Ship billing.' });
     await addMember(teamId, nova, { role: 'Implementer' });
-    await addMember(teamId, casper, { role: 'Reviewer' });
+    await addMember(teamId, vega, { role: 'Reviewer' });
 
     const resolved = await resolveTeamContextForDispatch(getDb(), { agentId: nova });
     expect(resolved?.teamId).toBe(teamId);

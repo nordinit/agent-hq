@@ -50,12 +50,12 @@ async function seedScopeFixture(db: Db): Promise<void> {
   // State tenant selection explicitly so this fixture never depends on installation seeding.
   await db.run(
     `INSERT INTO tenants (id, name, slug, is_default) VALUES (?, ?, ?, ?), (?, ?, ?, ?) ON CONFLICT DO NOTHING`,
-    1, 'Default Tenant', 'default', 1, 2, 'EcoPool', 'ecopool', 0,
+    1, 'Default Tenant', 'default', 1, 2, 'Globex', 'globex', 0,
   );
   await db.run(`INSERT INTO app_settings (key, value) VALUES ('default_tenant_id', '1'), ('active_tenant_id', '1') ON CONFLICT DO NOTHING`);
   await db.run(
     `INSERT INTO projects (id, tenant_id, name) VALUES (?, ?, ?), (?, ?, ?), (?, ?, ?)`,
-    86, 1, 'Agent HQ', 87, 1, 'Other Tenant One Project', 99, 2, 'EcoPool Project',
+    86, 1, 'Agent HQ', 87, 1, 'Other Tenant One Project', 99, 2, 'Globex Project',
   );
   // Workflow 45 sits in the assigned project without being the dispatched one, which is what
   // separates the two workflow-lifecycle scope tiers: workflow 42 is reachable because it is
@@ -63,7 +63,7 @@ async function seedScopeFixture(db: Db): Promise<void> {
   await db.run(`
     INSERT INTO workflows (id, tenant_id, project_id, name, workflow_type, status)
     VALUES (?, ?, ?, ?, 'dev', 'active'), (?, ?, ?, ?, 'dev', 'active'), (?, ?, ?, ?, 'dev', 'active'), (?, ?, ?, ?, 'dev', 'active')
-  `, 42, 1, 86, 'Enhancements', 44, 1, 87, 'Other Project Workflow', 43, 2, 99, 'EcoPool Workflow', 45, 1, 86, 'Undispatched Same-Project Workflow');
+  `, 42, 1, 86, 'Enhancements', 44, 1, 87, 'Other Project Workflow', 43, 2, 99, 'Globex Workflow', 45, 1, 86, 'Undispatched Same-Project Workflow');
   // session_key is NOT NULL and unique in the real schema. The admin agent is still named Atlas —
   // that is what makes it trusted — but every fixture agent needs its own key.
   await db.run(`
@@ -77,7 +77,7 @@ async function seedScopeFixture(db: Db): Promise<void> {
     7, 1, 86, 'Cinder', 'agent:cinder:main',
     8, 1, 86, 'Atlas', 'agent:atlas-admin:main',
     9, 1, 86, 'QA', 'agent:qa:main',
-    10, 2, 99, 'EcoPool Worker', 'agent:ecopool-worker:main',
+    10, 2, 99, 'Globex Worker', 'agent:globex-worker:main',
     11, 1, null, 'No Project Agent', 'agent:no-project:main',
   );
   await db.run(`
@@ -95,11 +95,11 @@ async function seedScopeFixture(db: Db): Promise<void> {
   await db.run(`
     INSERT INTO workflow_types (tenant_id, project_id, key, name, description, is_system)
     VALUES (?, ?, ?, ?, ?, 0), (?, ?, ?, ?, ?, 0), (?, ?, ?, ?, ?, 0)
-  `, 1, 86, 'dev', 'Development', 'Agent HQ project development workflow', 1, 87, 'other-project-dev', 'Other project development', 'Other project workflow', 2, 99, 'eco-dev', 'Eco development', 'EcoPool workflow');
+  `, 1, 86, 'dev', 'Development', 'Agent HQ project development workflow', 1, 87, 'other-project-dev', 'Other project development', 'Other project workflow', 2, 99, 'eco-dev', 'Eco development', 'Globex workflow');
   await db.run(`
     INSERT INTO tasks (id, tenant_id, project_id, workflow_id, agent_id, assigned_agent_id, title)
     VALUES (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?)
-  `, 448, 1, 86, 42, 7, 9, 'Dispatched Agent HQ task', 449, 2, 99, 43, 9, 9, 'Cross tenant dispatched task', 450, 2, 99, 43, 10, 10, 'EcoPool worker task', 451, 1, 86, 42, null, null, 'Unassigned Agent HQ task', 452, 1, 87, 44, null, null, 'Other project task');
+  `, 448, 1, 86, 42, 7, 9, 'Dispatched Agent HQ task', 449, 2, 99, 43, 9, 9, 'Cross tenant dispatched task', 450, 2, 99, 43, 10, 10, 'Globex worker task', 451, 1, 86, 42, null, null, 'Unassigned Agent HQ task', 452, 1, 87, 44, null, null, 'Other project task');
   await db.run(`
     INSERT INTO job_instances (id, tenant_id, task_id, agent_id, status)
     VALUES (?, ?, ?, ?, 'running'), (?, ?, ?, ?, 'running'), (?, ?, ?, ?, 'running')
@@ -2589,7 +2589,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     });
   });
 
-  it('rejects tenant query/header manipulation for default and EcoPool MCP keys', async () => {
+  it('rejects tenant query/header manipulation for default and Globex MCP keys', async () => {
     const workflowMetadataTenantSelectorRes = await fetch(`${baseUrl}/api/v1/workflows/workflow-metadata?tenant_id=1&workflow_type=dev`, { headers: authHeaders(normalKey) });
     expect(workflowMetadataTenantSelectorRes.status).toBe(403);
     await expect(workflowMetadataTenantSelectorRes.json()).resolves.toMatchObject({

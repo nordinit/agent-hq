@@ -141,14 +141,14 @@ describe('teams API', () => {
   it('previews the exact context block a member will receive', async () => {
     const team = await (await post('/api/v1/teams', { name: 'Delivery Squad', goal: 'Ship billing.' })).json() as any;
     const nova = await createAgent('Nova');
-    const casper = await createAgent('Casper');
+    const vega = await createAgent('Vega');
     await post(`/api/v1/teams/${team.id}/members`, { agent_id: nova, member_role: 'Implementer' });
-    await post(`/api/v1/teams/${team.id}/members`, { agent_id: casper, member_role: 'Reviewer' });
+    await post(`/api/v1/teams/${team.id}/members`, { agent_id: vega, member_role: 'Reviewer' });
 
     const preview = await (await fetch(`${baseUrl}/api/v1/teams/${team.id}/context-preview?agent_id=${nova}`)).json() as any;
     expect(preview.injected).toBe(true);
     expect(preview.section).toContain('You are Nova, Implementer on this team.');
-    expect(preview.section).toContain('- Casper — Reviewer');
+    expect(preview.section).toContain('- Vega — Reviewer');
   });
 
   it('reports injected=false when the block would be omitted', async () => {

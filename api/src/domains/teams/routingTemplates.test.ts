@@ -105,15 +105,15 @@ describe('team routing template application', () => {
 
   it('resolves member_role targeting to the agent holding the role', async () => {
     const teamId = await createTeam();
-    const casper = await createAgent('Casper');
-    await addMember(teamId, casper, 'Reviewer');
+    const vega = await createAgent('Vega');
+    await addMember(teamId, vega, 'Reviewer');
     await addTemplateRule(teamId, { status: 'in_review', memberRole: 'Reviewer' });
     const workflowId = await createWorkflow(teamId);
 
     await applyTeamRouting(getDb(), { workflowId, batchId: 'batch-1' });
 
     const [rule] = await rulesFor(workflowId);
-    expect(Number(rule.agent_id)).toBe(casper);
+    expect(Number(rule.agent_id)).toBe(vega);
     expect(Number(rule.source_team_id)).toBe(teamId);
   });
 
@@ -121,14 +121,14 @@ describe('team routing template application', () => {
     // The point of role targeting: the template does not name an agent, so replacing the
     // reviewer is a membership edit, not a routing edit.
     const teamId = await createTeam();
-    const casper = await createAgent('Casper');
-    await addMember(teamId, casper, 'Reviewer');
+    const vega = await createAgent('Vega');
+    await addMember(teamId, vega, 'Reviewer');
     await addTemplateRule(teamId, { status: 'in_review', memberRole: 'Reviewer' });
     const workflowId = await createWorkflow(teamId);
     await applyTeamRouting(getDb(), { workflowId, batchId: 'batch-1' });
 
     const quinn = await createAgent('Quinn');
-    await getDb().run(`DELETE FROM team_members WHERE team_id = ? AND agent_id = ?`, teamId, casper);
+    await getDb().run(`DELETE FROM team_members WHERE team_id = ? AND agent_id = ?`, teamId, vega);
     await addMember(teamId, quinn, 'Reviewer');
 
     const plan = await applyTeamRouting(getDb(), { workflowId, batchId: 'batch-2' });
@@ -150,7 +150,7 @@ describe('team routing template application', () => {
 
   it('reports ambiguity rather than picking one of two role holders', async () => {
     const teamId = await createTeam();
-    await addMember(teamId, await createAgent('Casper'), 'Reviewer');
+    await addMember(teamId, await createAgent('Vega'), 'Reviewer');
     await addMember(teamId, await createAgent('Quinn'), 'Reviewer');
     await addTemplateRule(teamId, { status: 'in_review', memberRole: 'Reviewer' });
     const workflowId = await createWorkflow(teamId);

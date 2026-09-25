@@ -19,8 +19,8 @@ describe('dispatch prompt team context builder', () => {
       charter: 'Every change lands behind a flag.',
       members: [
         member({ name: 'Nova', memberRole: 'Implementer', isSelf: true }),
-        member({ name: 'Piper', memberRole: 'Planner', responsibilities: 'Breaks work into tasks', isLead: true }),
-        member({ name: 'Casper', memberRole: 'Reviewer', responsibilities: 'Reviews diffs and gates on tests' }),
+        member({ name: 'Kepler', memberRole: 'Planner', responsibilities: 'Breaks work into tasks', isLead: true }),
+        member({ name: 'Vega', memberRole: 'Reviewer', responsibilities: 'Reviews diffs and gates on tests' }),
       ],
     })).toBe([
       '--- Team: Delivery Squad ---',
@@ -29,8 +29,8 @@ describe('dispatch prompt team context builder', () => {
       'You are Nova, Implementer on this team. Writes and lands code changes.',
       '',
       'Your teammates:',
-      '- Piper — Planner (lead). Breaks work into tasks.',
-      '- Casper — Reviewer. Reviews diffs and gates on tests.',
+      '- Kepler — Planner (lead). Breaks work into tasks.',
+      '- Vega — Reviewer. Reviews diffs and gates on tests.',
       '',
       'Working agreements:',
       'Every change lands behind a flag.',
@@ -95,11 +95,11 @@ describe('dispatch prompt team context builder', () => {
       charter: '',
       members: [
         member({ name: 'Nova', isSelf: true, responsibilities: '' }),
-        member({ name: 'Casper', memberRole: 'Reviewer', responsibilities: `${'word '.repeat(80)}end` }),
+        member({ name: 'Vega', memberRole: 'Reviewer', responsibilities: `${'word '.repeat(80)}end` }),
       ],
     });
 
-    const line = rendered.split('\n').find((l) => l.startsWith('- Casper'));
+    const line = rendered.split('\n').find((l) => l.startsWith('- Vega'));
     expect(line).toBeDefined();
     expect(line!).toContain('…');
     expect(line!.length).toBeLessThan(300);
@@ -113,13 +113,13 @@ describe('dispatch prompt team context builder', () => {
       charter: '',
       members: [
         member({ name: 'Nova', isSelf: true }),
-        member({ name: 'Piper' }),
-        member({ name: 'Casper' }),
+        member({ name: 'Kepler' }),
+        member({ name: 'Vega' }),
       ],
     };
     expect(buildTeamContextSection(input)).toBe(buildTeamContextSection(input));
-    expect(buildTeamContextSection(input).indexOf('Piper'))
-      .toBeLessThan(buildTeamContextSection(input).indexOf('Casper'));
+    expect(buildTeamContextSection(input).indexOf('Kepler'))
+      .toBeLessThan(buildTeamContextSection(input).indexOf('Vega'));
   });
 
   it('handles a member with no role and no responsibilities', () => {
@@ -129,7 +129,7 @@ describe('dispatch prompt team context builder', () => {
       charter: '',
       members: [
         member({ name: 'Nova', isSelf: true, memberRole: '', responsibilities: '' }),
-        member({ name: 'Casper', memberRole: '', responsibilities: '' }),
+        member({ name: 'Vega', memberRole: '', responsibilities: '' }),
       ],
     })).toBe([
       '--- Team: Delivery Squad ---',
@@ -138,7 +138,7 @@ describe('dispatch prompt team context builder', () => {
       'You are Nova on this team.',
       '',
       'Your teammates:',
-      '- Casper',
+      '- Vega',
       '',
       "Hand work to a teammate by recording the outcome that routes to them. Do not do a teammate's role yourself.",
       '--- End Team ---',
@@ -152,9 +152,9 @@ describe('dispatch prompt team context builder', () => {
       teamName: 'Delivery Squad',
       goal: 'Ship it.',
       charter: '',
-      members: [member({ name: 'Casper', memberRole: 'Reviewer' })],
+      members: [member({ name: 'Vega', memberRole: 'Reviewer' })],
     });
-    expect(rendered).toContain('- Casper — Reviewer.');
+    expect(rendered).toContain('- Vega — Reviewer.');
     expect(rendered).not.toContain('You are');
   });
 });

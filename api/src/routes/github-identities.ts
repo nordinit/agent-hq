@@ -2,7 +2,7 @@
  * routes/github-identities.ts — CRUD for per-agent GitHub identity/credential records.
  *
  * Task #613: Implement per-agent GitHub identities so Agent HQ agents
- * (dev, QA, Harbor) can act under distinct GitHub accounts for PR open,
+ * (dev, QA, DevOps) can act under distinct GitHub accounts for PR open,
  * approve, and merge operations.
  *
  * Each identity stores:

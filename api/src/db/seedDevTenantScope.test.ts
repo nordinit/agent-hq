@@ -41,7 +41,7 @@ afterEach(async () => {
 it('seeds dev fixtures into the default tenant without leaking into another tenant', async () => {
   const setupDb = getDb();
   const defaultTenantId = await getDefaultTenantId(setupDb);
-  const otherTenant = await createTenantWithDefaults(setupDb, { name: 'EcoPool', slug: 'ecopool' });
+  const otherTenant = await createTenantWithDefaults(setupDb, { name: 'Globex', slug: 'globex' });
   await setupDb.run(`
     INSERT INTO projects (tenant_id, name, description, context_md)
     VALUES (?, 'Tenant 2 Existing', 'preexisting tenant 2 row', '')

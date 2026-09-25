@@ -13,11 +13,11 @@ import { listRecentlyCompletedTasks } from './readModel';
  */
 
 const DEFAULT_TENANT_ID = 1;
-const ECOPOOL_TENANT_ID = 2;
+const GLOBEX_TENANT_ID = 2;
 const DEFAULT_PROJECT_ID = 10;
-const ECOPOOL_PROJECT_ID = 20;
+const GLOBEX_PROJECT_ID = 20;
 const DEFAULT_WORKFLOW_ID = 100;
-const ECOPOOL_WORKFLOW_ID = 200;
+const GLOBEX_WORKFLOW_ID = 200;
 
 /** A canonical-format timestamp N hours in the past, the same form the query's cutoff uses. */
 function hoursAgo(hours: number): string {
@@ -33,16 +33,16 @@ async function ensureTenant(id: number, name: string, slug: string, isDefault: 0
 async function seedScope(): Promise<void> {
   const db = getDb();
   await ensureTenant(DEFAULT_TENANT_ID, 'Default', 'default', 1);
-  await ensureTenant(ECOPOOL_TENANT_ID, 'EcoPool', 'ecopool', 0);
+  await ensureTenant(GLOBEX_TENANT_ID, 'Globex', 'globex', 0);
   await db.run(
     `INSERT INTO projects (id, name, tenant_id) VALUES (?, ?, ?), (?, ?, ?)`,
     DEFAULT_PROJECT_ID, 'Default Project', DEFAULT_TENANT_ID,
-    ECOPOOL_PROJECT_ID, 'EcoPool Project', ECOPOOL_TENANT_ID,
+    GLOBEX_PROJECT_ID, 'Globex Project', GLOBEX_TENANT_ID,
   );
   await db.run(
     `INSERT INTO workflows (id, project_id, name, tenant_id) VALUES (?, ?, ?, ?), (?, ?, ?, ?)`,
     DEFAULT_WORKFLOW_ID, DEFAULT_PROJECT_ID, 'Default Workflow', DEFAULT_TENANT_ID,
-    ECOPOOL_WORKFLOW_ID, ECOPOOL_PROJECT_ID, 'EcoPool Workflow', ECOPOOL_TENANT_ID,
+    GLOBEX_WORKFLOW_ID, GLOBEX_PROJECT_ID, 'Globex Workflow', GLOBEX_TENANT_ID,
   );
 }
 
@@ -85,20 +85,20 @@ describe('listRecentlyCompletedTasks tenant isolation', () => {
       projectId: DEFAULT_PROJECT_ID, workflowId: DEFAULT_WORKFLOW_ID, updatedAt: hoursAgo(1),
     });
     await insertTask({
-      id: 2, tenantId: ECOPOOL_TENANT_ID, title: 'EcoPool completed task',
-      projectId: ECOPOOL_PROJECT_ID, workflowId: ECOPOOL_WORKFLOW_ID, updatedAt: hoursAgo(1),
+      id: 2, tenantId: GLOBEX_TENANT_ID, title: 'Globex completed task',
+      projectId: GLOBEX_PROJECT_ID, workflowId: GLOBEX_WORKFLOW_ID, updatedAt: hoursAgo(1),
     });
     await insertTask({
-      id: 3, tenantId: ECOPOOL_TENANT_ID, title: 'EcoPool stale task',
-      projectId: ECOPOOL_PROJECT_ID, workflowId: ECOPOOL_WORKFLOW_ID, updatedAt: hoursAgo(25),
+      id: 3, tenantId: GLOBEX_TENANT_ID, title: 'Globex stale task',
+      projectId: GLOBEX_PROJECT_ID, workflowId: GLOBEX_WORKFLOW_ID, updatedAt: hoursAgo(25),
     });
     await insertDoneHistory(1, DEFAULT_TENANT_ID, hoursAgo(1));
-    await insertDoneHistory(2, ECOPOOL_TENANT_ID, hoursAgo(1));
-    await insertDoneHistory(3, ECOPOOL_TENANT_ID, hoursAgo(25));
+    await insertDoneHistory(2, GLOBEX_TENANT_ID, hoursAgo(1));
+    await insertDoneHistory(3, GLOBEX_TENANT_ID, hoursAgo(25));
 
     const db = getDb();
-    const ecoPool = await listRecentlyCompletedTasks(db, 24, undefined, ECOPOOL_TENANT_ID);
-    expect(ecoPool.tasks.map(task => task.title)).toEqual(['EcoPool completed task']);
+    const globex = await listRecentlyCompletedTasks(db, 24, undefined, GLOBEX_TENANT_ID);
+    expect(globex.tasks.map(task => task.title)).toEqual(['Globex completed task']);
 
     const defaultCompany = await listRecentlyCompletedTasks(db, 24, undefined, DEFAULT_TENANT_ID);
     expect(defaultCompany.tasks.map(task => task.title)).toEqual(['Default completed task']);
@@ -110,13 +110,13 @@ describe('listRecentlyCompletedTasks tenant isolation', () => {
       projectId: DEFAULT_PROJECT_ID, workflowId: DEFAULT_WORKFLOW_ID, updatedAt: hoursAgo(1),
     });
     await insertTask({
-      id: 2, tenantId: ECOPOOL_TENANT_ID, title: 'EcoPool project task',
-      projectId: ECOPOOL_PROJECT_ID, workflowId: ECOPOOL_WORKFLOW_ID, updatedAt: hoursAgo(1),
+      id: 2, tenantId: GLOBEX_TENANT_ID, title: 'Globex project task',
+      projectId: GLOBEX_PROJECT_ID, workflowId: GLOBEX_WORKFLOW_ID, updatedAt: hoursAgo(1),
     });
 
     const db = getDb();
-    expect((await listRecentlyCompletedTasks(db, 24, DEFAULT_PROJECT_ID, ECOPOOL_TENANT_ID)).tasks).toEqual([]);
-    expect((await listRecentlyCompletedTasks(db, 24, ECOPOOL_PROJECT_ID, ECOPOOL_TENANT_ID)).tasks.map(task => task.title))
-      .toEqual(['EcoPool project task']);
+    expect((await listRecentlyCompletedTasks(db, 24, DEFAULT_PROJECT_ID, GLOBEX_TENANT_ID)).tasks).toEqual([]);
+    expect((await listRecentlyCompletedTasks(db, 24, GLOBEX_PROJECT_ID, GLOBEX_TENANT_ID)).tasks.map(task => task.title))
+      .toEqual(['Globex project task']);
   });
 });

@@ -5,7 +5,7 @@ import { buildTelemetryDefinition, newTelemetryGuide, telemetryGuideFromDefiniti
 import { telemetryGuideSelectionIssue } from './telemetryBuilderOptions.ts';
 import { metricAttributionIssues } from './telemetry-contracts/requirements.ts';
 import type { GroupResult, TelemetryCatalog, TelemetryWidget } from './telemetryTypes.ts';
-const catalog:TelemetryCatalog={fields:[],statuses:[],outcomes:[],projects:[],workflows:[],workflow_types:[],task_types:[],agents:[{id:1,name:'Casper'}],recipes:[],core_metrics:[]};
+const catalog:TelemetryCatalog={fields:[],statuses:[],outcomes:[],projects:[],workflows:[],workflow_types:[],task_types:[],agents:[{id:1,name:'Vega'}],recipes:[],core_metrics:[]};
 const count=buildTelemetryDefinition(newTelemetryGuide());
 const group=(key:GroupResult['key'],value:GroupResult['value']):GroupResult=>({key,value,sample_count:1});
 
@@ -26,7 +26,7 @@ test('journey count defines entry and success explicitly and survives guided reo
   assert.match(telemetryGuideSelectionIssue({...guide,start:''},catalog)!,/starts/);
 });
 test('single-agent and unknown group labels are explicit and never raw IDs',()=>{
-  assert.equal(telemetryGroupLabel([1],{...count,group_by:[{field:'agent_id'}]},catalog),'Casper');
+  assert.equal(telemetryGroupLabel([1],{...count,group_by:[{field:'agent_id'}]},catalog),'Vega');
   assert.equal(telemetryDimensionLabel(null,'agent_id',catalog),'Unknown agent');
   assert.equal(telemetryDimensionLabel(99,'agent_id',catalog),'Agent #99');
 });

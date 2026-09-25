@@ -78,7 +78,7 @@ function build(over: {
     transitions: over.transitions ?? [],
     rules: over.rules ?? [],
     requirements: over.requirements ?? [],
-    agents: over.agents ?? [{ id: 1, name: 'Piper', enabled: true }],
+    agents: over.agents ?? [{ id: 1, name: 'Kepler', enabled: true }],
     eventMappings: over.eventMappings ?? [],
   });
 }
@@ -275,7 +275,7 @@ describe('buildWorkflowGraph', () => {
         ],
         transitions: [transition(1, 'todo', 'done', 'completed')],
         rules: [rule(1, 'todo', 9)],
-        agents: [{ id: 9, name: 'Casper', enabled: false }],
+        agents: [{ id: 9, name: 'Vega', enabled: false }],
       });
       expect(codes(graph)).toContain('rule_targets_disabled_agent');
       expect(graph.stats.error_count).toBeGreaterThan(0);
@@ -298,7 +298,7 @@ describe('buildWorkflowGraph', () => {
       const graph = healthy();
       const todo = graph.nodes.find((node) => node.id === 'todo');
       expect(todo?.assignments).toHaveLength(1);
-      expect(todo?.assignments[0]).toMatchObject({ agent_id: 1, agent_name: 'Piper', agent_enabled: true });
+      expect(todo?.assignments[0]).toMatchObject({ agent_id: 1, agent_name: 'Kepler', agent_enabled: true });
     });
   });
 

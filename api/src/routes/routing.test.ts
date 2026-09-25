@@ -2104,7 +2104,7 @@ describe('routing rules API', () => {
       const db = getDb();
       const tenantContext = require('../lib/tenantContext') as typeof import('../lib/tenantContext');
       await tenantContext.ensureTenantSchema(db);
-      await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (2, 'EcoPool', 'ecopool', 0)`);
+      await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (2, 'Globex', 'globex', 0)`);
       await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (91, 2, 'Pool Client Import')`);
       await db.run(`
         INSERT INTO external_event_mappings (
@@ -2113,8 +2113,8 @@ describe('routing rules API', () => {
         )
         VALUES
           (1, NULL, 'agent_hq_runtime', 'default_only_event', NULL, '[]', '[]', 'status', 'in_progress', 1, 50),
-          (2, NULL, 'agent_hq_runtime', 'ecopool_global_event', NULL, '[]', '[]', 'status', 'ready', 1, 50),
-          (2, 91, 'agent_hq_runtime', 'ecopool_project_event', NULL, '[]', '[]', 'outcome', 'completed_for_review', 1, 60)
+          (2, NULL, 'agent_hq_runtime', 'globex_global_event', NULL, '[]', '[]', 'status', 'ready', 1, 50),
+          (2, 91, 'agent_hq_runtime', 'globex_project_event', NULL, '[]', '[]', 'outcome', 'completed_for_review', 1, 60)
       `);
 
       await db.run(`UPDATE app_settings SET value = '2' WHERE key = 'active_tenant_id'`);
@@ -2122,8 +2122,8 @@ describe('routing rules API', () => {
       expect(response.status).toBe(200);
       const body = await response.json() as { mappings: ExternalEventMapping[] };
       expect(body.mappings.map((mapping) => mapping.event_name)).toEqual(expect.arrayContaining([
-        'ecopool_global_event',
-        'ecopool_project_event',
+        'globex_global_event',
+        'globex_project_event',
       ]));
       expect(body.mappings.map((mapping) => mapping.event_name)).not.toContain('default_only_event');
 
