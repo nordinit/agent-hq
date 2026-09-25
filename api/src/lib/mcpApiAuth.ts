@@ -445,7 +445,7 @@ export const AGENT_MCP_CAPABILITY_CATALOG = [
     key: 'agents.manage_project_agents',
     group: 'Context',
     label: 'Manage project agents',
-    description: 'Allows listing, reading, creating, updating and deleting agents inside the MCP agent\'s assigned project and tenant, including their job instructions, role, model, skills, workspace and routing configuration, and their docs bundle. Refuses any create or update touching system_role, tenant_id or session_key, or naming the Atlas identity, because those still bind an agent\'s identity elsewhere in the product; MCP authority itself comes from the presented key\'s role and cannot be written through this API at all. project_id must name the assigned project, so this cannot move an agent between projects or reach one outside it. Does not allow provisioning, workspace or MCP sync, capability-policy edits, or tool allowlists.',
+    description: 'Allows listing, reading, creating, updating and deleting agents inside the MCP agent\'s assigned project and tenant, including their job instructions, role, model, skills and routing configuration, and their docs bundle. Refuses any create or update touching system_role, tenant_id or session_key, or naming the Atlas identity, because those still bind an agent\'s identity elsewhere in the product; MCP authority itself comes from the presented key\'s role and cannot be written through this API at all. Also refuses changing anything that decides what runs on the host, where, or with which credentials: workspace_path, runtime_type (after creation), the remote gateway URL and auth header, os_user, github_identity_id, provision_openclaw, and every runtime_config key other than model, effort, reasoningEffort, fastMode, provider, systemPromptSuffix, maxTurns and maxBudgetUsd; those may only be sent unchanged. project_id must name the assigned project, so this cannot move an agent between projects or reach one outside it. Does not allow provisioning, workspace or MCP sync, capability-policy edits, or tool allowlists.',
     endpoints: [
       'GET /api/v1/agents',
       'POST /api/v1/agents',
@@ -1583,6 +1583,100 @@ function agentIdentityNameIsReserved(body: Record<string, unknown>): boolean {
   return name === ATLAS_AGENT_NAME.toLowerCase() || slug === ATLAS_AGENT_SLUG.toLowerCase();
 }
 
+/**
+ * Agent fields that decide what runs on this host, where it runs, and with which credentials:
+ * the working directory (also the artifacts API root), the runtime driver, the remote gateway
+ * URL and the auth header sent to it, the OS user whose home task checkouts live in, and the
+ * GitHub identity injected into runs. project agent management edits what an agent is told to
+ * do; these decide what it is allowed to do, so a scoped key may send them only unchanged.
+ */
+const AGENT_HOST_EXECUTION_FIELDS = [
+  'workspace_path',
+  'runtime_type',
+  'hooks_url',
+  'hooks_auth_header',
+  'os_user',
+  'github_identity_id',
+] as const;
+
+/**
+ * The runtime_config keys a scoped key may change: model and effort selection, prompt suffix,
+ * and turn/budget limits. Every other key — executables, config homes, working directory,
+ * permission and sandbox modes and their bypass switches, allowed tools, extra CLI arguments,
+ * environment, webhook URLs and auth headers, provider profile references — must stay as
+ * stored. An allowlist, so a runtime option added later is protected until someone decides
+ * otherwise.
+ */
+const SCOPED_MUTABLE_RUNTIME_CONFIG_KEYS = new Set([
+  'model',
+  'effort',
+  'reasoningEffort',
+  'fastMode',
+  'provider',
+  'systemPromptSuffix',
+  'maxTurns',
+  'maxBudgetUsd',
+]);
+
+function comparableAgentValue(value: unknown): string {
+  if (value === undefined || value === null || value === '') return 'null';
+  if (typeof value === 'number' || typeof value === 'boolean') return JSON.stringify(String(value));
+  if (typeof value !== 'object') return JSON.stringify(value);
+  const sorted = (entry: unknown): unknown => {
+    if (Array.isArray(entry)) return entry.map(sorted);
+    if (entry && typeof entry === 'object') {
+      return Object.fromEntries(Object.keys(entry as Record<string, unknown>).sort()
+        .map((key) => [key, sorted((entry as Record<string, unknown>)[key])]));
+    }
+    return entry;
+  };
+  return JSON.stringify(sorted(value));
+}
+
+function runtimeConfigRecord(value: unknown): Record<string, unknown> {
+  if (typeof value === 'string') {
+    try {
+      return runtimeConfigRecord(JSON.parse(value));
+    } catch {
+      return {};
+    }
+  }
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+/**
+ * Returns the first host-execution field a scoped create or update would change, or null. For a
+ * create, `stored` is null and every such field must be absent; runtime_type may be chosen then,
+ * since the driver's executable and defaults are host policy, but not switched afterwards.
+ * provision_openclaw registers the agent with the OpenClaw CLI, which is provisioning.
+ */
+function agentHostExecutionFieldChange(body: Record<string, unknown>, stored: Record<string, unknown> | null): string | null {
+  if (!stored && body.provision_openclaw) return 'provision_openclaw';
+  for (const field of AGENT_HOST_EXECUTION_FIELDS) {
+    if (!Object.prototype.hasOwnProperty.call(body, field)) continue;
+    if (!stored && field === 'runtime_type') continue;
+    if (comparableAgentValue(body[field]) !== comparableAgentValue(stored?.[field])) return field;
+  }
+  if (!Object.prototype.hasOwnProperty.call(body, 'runtime_config')) return null;
+  // PUT replaces runtime_config wholesale, so a key the caller drops counts as a change too.
+  const requested = runtimeConfigRecord(body.runtime_config);
+  const current = runtimeConfigRecord(stored?.runtime_config);
+  for (const key of new Set([...Object.keys(requested), ...Object.keys(current)])) {
+    if (SCOPED_MUTABLE_RUNTIME_CONFIG_KEYS.has(key)) continue;
+    if (comparableAgentValue(requested[key]) !== comparableAgentValue(current[key])) return `runtime_config.${key}`;
+  }
+  return null;
+}
+
+async function loadAgentHostExecutionFields(db: Db, identity: McpApiIdentity, agentId: number): Promise<Record<string, unknown> | null> {
+  const row = await db.get(`
+    SELECT ${AGENT_HOST_EXECUTION_FIELDS.join(', ')}, runtime_config
+    FROM agents
+    WHERE id = ? AND tenant_id = ?
+  `, agentId, identity.tenantId) as Record<string, unknown> | undefined;
+  return row ?? null;
+}
+
 async function agentBelongsToProject(db: Db, identity: McpApiIdentity, agentId: number, projectId: number): Promise<boolean> {
   if (!await hasTable(db, 'agents')) return false;
   const hasAgentTenant = await hasColumn(db, 'agents', 'tenant_id');
@@ -2305,6 +2399,20 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
           reason: `Normal Agent HQ MCP keys cannot name an agent after the Atlas identity: an agent carrying that name or slug resolves as trusted.`,
           requiredCapability,
         });
+      }
+
+      // An unknown agent id is left to the project check below, which refuses it.
+      const storedHostFields = method === 'PUT' && agentRecordMatch
+        ? await loadAgentHostExecutionFields(db, identity, Number(agentRecordMatch[1]))
+        : null;
+      if (method === 'POST' || storedHostFields) {
+        const hostField = agentHostExecutionFieldChange(body, storedHostFields);
+        if (hostField) {
+          return deny({
+            reason: `Normal Agent HQ MCP keys cannot change "${hostField}" on an agent: it decides what runs on the host, where, or with which credentials. Send it unchanged or omit it; changing it requires an administrative key.`,
+            requiredCapability: 'admin.full_access',
+          });
+        }
       }
 
       const requestedProjectId = parsePositiveInt(body.project_id);

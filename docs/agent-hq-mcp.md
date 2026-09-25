@@ -754,7 +754,7 @@ Available permissions for project operators include:
 | `workflows.read_active_workflow` | workflow detail |
 | `workflows.pause_active_workflow` | pause, resume, and reopen a workflow in the assigned project |
 | `workflows.complete_active_workflow` | complete or close a workflow in the assigned project |
-| `agents.manage_project_agents` | list/read/create/update/delete agents in the assigned project, including job instructions |
+| `agents.manage_project_agents` | list/read/create/update/delete agents in the assigned project, including job instructions; host-execution fields only unchanged |
 | `workflow_definitions.read_project_scope` | read definitions created for or used by the assigned project — type, task types, field schemas, statuses, outcomes, relationship types |
 | `workflow_definitions.manage_project_scope` | create definitions for the assigned project; update/delete definitions and their children when created for or used by that project in the same tenant |
 | `tasks.read_project_context` | task detail, notes, history, relationships |
@@ -809,11 +809,13 @@ Migration 24 backfills existing keys from the old rules, so identities that were
 
 ### Managing project agents over MCP
 
-`agents.manage_project_agents` covers the roster and each agent's record — job instructions, role, model, skills, workspace and routing configuration — plus its docs bundle, for agents in the assigned project.
+`agents.manage_project_agents` covers the roster and each agent's record — job instructions, role, model, skills and routing configuration — plus its docs bundle, for agents in the assigned project.
 
 The write guard is the whole design. `resolveAgentIdentityFields` derives trust from the agent row itself: a `system_role` of `admin` or `atlas`, a `global_mcp_admin` flag, or a name or slug matching the Atlas identity all make an agent trusted, and a trusted agent resolves to the `trusted_admin` default policy under which nearly every capability — `admin.full_access` included — is enabled. A grant that let a connector write those fields would not be project-scoped at all; it would let the connector promote its own row and come back as an administrator.
 
 So any create or update carrying `system_role`, `global_mcp_admin`, `key_global_admin`, `tenant_id` or `session_key` is refused outright, as is one naming the agent `Atlas` or slugging it `atlas`. `project_id` must name the assigned project, and a create must name it explicitly. **If a new input to `resolveAgentIdentityFields` is ever added, it has to be added to `AGENT_TRUST_BEARING_FIELDS` in the same change.**
+
+Fields that decide what runs on the host, where, or with which credentials can only be sent unchanged: `workspace_path`, `runtime_type` (chosen at creation, never switched), `hooks_url` and `hooks_auth_header`, `os_user`, `github_identity_id`, `provision_openclaw`, and every `runtime_config` key except `model`, `effort`, `reasoningEffort`, `fastMode`, `provider`, `systemPromptSuffix`, `maxTurns` and `maxBudgetUsd`. That keeps executables, config homes, working directories, permission and sandbox modes, extra CLI arguments, environment and webhook URLs with administrative keys. The runtime_config list is an allowlist, so a new runtime option is protected until someone decides otherwise. A consequence: a scoped key cannot create a Hermes or webhook agent, both of which need such a key to exist.
 
 Out of scope, and left to administrative keys: `/provision`, `/provision-full` and `/mcp/sync`, which build workspaces and credentials; and `/mcp-permissions` and `/mcp-tool-allowlists`, which decide what an agent may do over MCP. The line is that this capability edits what an agent is *told to do*, not what it is *allowed to do* or where it runs from.
 
