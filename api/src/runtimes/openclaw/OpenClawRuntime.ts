@@ -34,6 +34,7 @@ import {
 } from './transcript';
 import { requireRuntimeTenantId } from '../../lib/runtimeTenantScope';
 import { nowTimestamp } from '../../lib/timestamps';
+import { buildOpenClawEnv } from '../../lib/openclawCli';
 
 function normalizeRepoContextValue(value: string | null | undefined): string | null {
   const normalized = value?.trim();
@@ -153,7 +154,7 @@ function runOpenClawMcpCommand(args: string[], workingDirectory: string, timeout
   // MCP discovery calls back into this API for permissions, so the event loop
   // must remain available while the child process is running.
   return new Promise((resolve, reject) => {
-    execFile(command, args, { cwd: workingDirectory, encoding: 'utf8', timeout: timeoutMs }, (error, stdout, stderr) => {
+    execFile(command, args, { cwd: workingDirectory, encoding: 'utf8', timeout: timeoutMs, env: buildOpenClawEnv() }, (error, stdout, stderr) => {
       const output = [stderr, stdout].filter(part => part?.trim()).join('\n');
       if (error) {
         const detail = typeof error.code === 'number' || error.signal

@@ -1,9 +1,8 @@
-import { spawnSync } from 'child_process';
 import { readLegacyRuntimeRunId, readRuntimeAbortTarget } from '../../runtimes/runtimeAbortTarget';
 import { applyStopBehavior, type StopBehavior } from './instanceStop';
 import { writeTaskRuntimeEndHistory } from '../tasks/history';
 import { resolveRuntime } from '../../runtimes';
-import { OPENCLAW_BIN, OPENCLAW_PATH } from '../../config';
+import { runOpenClawSync } from '../../lib/openclawCli';
 import { insertRuntimeLog } from '../../lib/runtimeTenantScope';
 import { nowTimestamp } from '../../lib/timestamps';
 import { type Db } from "../../db/adapter/types";
@@ -218,7 +217,7 @@ export async function abortInstanceExecutionTransport(
   return { transport, runtimeType, sessionKey, result };
 }
 
-function removeQueuedCronJob(instance: Record<string, unknown>, env: NodeJS.ProcessEnv): { removed: boolean; jobId?: string | null; error?: string } {
+function removeQueuedCronJob(instance: Record<string, unknown>): { removed: boolean; jobId?: string | null; error?: string } {
   try {
     const payloadStr = instance.payload_sent as string | null;
     if (!payloadStr) return { removed: false, jobId: null };
@@ -229,11 +228,7 @@ function removeQueuedCronJob(instance: Record<string, unknown>, env: NodeJS.Proc
     const jobName = nameIdx !== -1 ? args[nameIdx + 1] : null;
     if (!jobName) return { removed: false, jobId: null };
 
-    const listResult = spawnSync(OPENCLAW_BIN, ['cron', 'list', '--json'], {
-      encoding: 'utf-8',
-      env,
-      timeout: 10000,
-    });
+    const listResult = runOpenClawSync(['cron', 'list', '--json'], { timeout: 10000 });
 
     if (listResult.error) {
       return { removed: false, error: listResult.error.message };
@@ -246,11 +241,7 @@ function removeQueuedCronJob(instance: Record<string, unknown>, env: NodeJS.Proc
     const match = jobs.find(job => job.name === jobName);
     if (!match) return { removed: false, jobId: null };
 
-    const rmResult = spawnSync(OPENCLAW_BIN, ['cron', 'rm', match.id], {
-      encoding: 'utf-8',
-      env,
-      timeout: 10000,
-    });
+    const rmResult = runOpenClawSync(['cron', 'rm', match.id], { timeout: 10000 });
 
     if (rmResult.error) {
       return { removed: false, jobId: match.id, error: rmResult.error.message };
@@ -304,13 +295,6 @@ export async function stopInstanceExecution(
 
   if (!instance) throw new Error('Instance not found');
 
-  const env = {
-    ...process.env,
-    PATH: OPENCLAW_PATH,
-    OPENCLAW_HIDE_BANNER: '1',
-    OPENCLAW_SUPPRESS_NOTES: '1',
-  };
-
   // Revoke task authority in a committed transaction before any remote I/O.
   // Retain the original instance above as the immutable cancellation target.
   const stopResult = await db.withTransaction(async tx => {
@@ -342,7 +326,7 @@ export async function stopInstanceExecution(
     `, abortResult.status, abortResult.ok ? null : abortResult.error ?? 'abort failed', id, tenantId, abortResult.status);
   }
 
-  const cronResult = removeQueuedCronJob(instance, env);
+  const cronResult = removeQueuedCronJob(instance);
 
   const abortConfirmed = abortResult?.ok === true;
   const runtimeUncertain = !abortConfirmed;

@@ -249,6 +249,14 @@ self-signed certificate); every other gateway, and every other outbound HTTPS re
 verified. Trust a self-signed remote gateway with `NODE_EXTRA_CA_CERTS`, or, as a last resort,
 set `OPENCLAW_GATEWAY_TLS_INSECURE=1`, which exempts gateway sockets only.
 
+The `openclaw` CLI that the API runs (token backfill, cron cleanup, MCP reload, device pairing)
+is not given a loopback `OPENCLAW_GATEWAY_URL`: it connects to the gateway its own
+`openclaw.json` names and trusts that gateway's certificate from the same file. A remote
+`OPENCLAW_GATEWAY_URL` is passed through; the CLI then authenticates with `OPENCLAW_GATEWAY_TOKEN`
+(set it alongside the URL; `openclaw.json` credentials are not reused) and verifies the gateway's
+certificate. `OPENCLAW_GATEWAY_TLS_INSECURE` does not apply to the CLI, so trust the gateway's CA
+with `NODE_EXTRA_CA_CERTS`.
+
 The CLI manages one narrowly scoped external setting: on first start or when the bundled
 capability-tools plugin path/version changes, it adds or updates that plugin entry in
 `~/.openclaw/openclaw.json`, including the API URL and the path of the file holding the

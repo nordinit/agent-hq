@@ -1,7 +1,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { execFileSync } from 'child_process';
-import { OPENCLAW_BIN, OPENCLAW_PATH } from '../config';
+import { OPENCLAW_BIN } from '../config';
+import { buildOpenClawEnv } from './openclawCli';
 
 const DEFAULT_GATEWAY_PROTOCOL_VERSION = 4;
 const ENV_KEYS = [
@@ -67,7 +68,7 @@ function resolveOpenClawBinaryPath(): string | null {
     const locator = process.platform === 'win32' ? 'where.exe' : 'which';
     const raw = execFileSync(locator, [configured], {
       encoding: 'utf8',
-      env: { ...process.env, PATH: OPENCLAW_PATH },
+      env: buildOpenClawEnv(),
       stdio: ['ignore', 'pipe', 'ignore'],
     });
     const first = raw.split(/\r?\n/).map(line => line.trim()).find(Boolean);

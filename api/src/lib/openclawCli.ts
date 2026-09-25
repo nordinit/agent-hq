@@ -3,6 +3,7 @@ import os from 'os';
 import path from 'path';
 import { spawn, spawnSync, type SpawnSyncOptionsWithStringEncoding, type SpawnSyncReturns } from 'child_process';
 import { OPENCLAW_BIN, OPENCLAW_HOME, OPENCLAW_PATH } from '../config';
+import { isLoopbackHostname } from './openclawGatewayWs';
 
 type OpenClawSpawnOptions = Partial<SpawnSyncOptionsWithStringEncoding>;
 
@@ -103,13 +104,45 @@ export function repairOpenClawGatewayCommand(): {
   return { repaired: true, path: cmdPath };
 }
 
+/**
+ * True when a gateway URL names this host (localhost, 127.x.x.x or ::1), in any scheme.
+ */
+export function isLoopbackGatewayUrl(url: string | undefined): boolean {
+  if (!url?.trim()) return false;
+  try {
+    return isLoopbackHostname(new URL(url.trim()).hostname);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The environment for an openclaw CLI child process. Every spawn of the CLI builds its
+ * environment here.
+ *
+ * OPENCLAW_GATEWAY_URL tells this API where the gateway is, but the CLI reads the same variable
+ * as an override of the gateway its own config (OPENCLAW_CONFIG_PATH) describes. Under an
+ * override the CLI does not pin the local gateway's certificate from its gateway.tls config and
+ * does not reuse the config's credentials, so with TLS verification on (NODE_TLS_REJECT_UNAUTHORIZED
+ * is never set here) every gateway command against the local self-signed gateway failed with
+ * "gateway closed (1006)". A loopback URL is therefore dropped and the CLI connects to its
+ * configured gateway, which it already trusts. A remote URL is kept: the CLI verifies that
+ * gateway's certificate normally, so a private CA must be trusted through NODE_EXTRA_CA_CERTS,
+ * and credentials must come from OPENCLAW_GATEWAY_TOKEN / OPENCLAW_GATEWAY_PASSWORD.
+ *
+ * Pass the gateway token as OPENCLAW_GATEWAY_TOKEN in extraEnv rather than as `--token` on
+ * argv, where any local user can read it with `ps`.
+ */
 export function buildOpenClawEnv(extraEnv: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
+    OPENCLAW_HIDE_BANNER: '1',
+    OPENCLAW_SUPPRESS_NOTES: '1',
     ...extraEnv,
     PATH: OPENCLAW_PATH,
   };
   delete env.OPENCLAW_BIN;
+  if (isLoopbackGatewayUrl(env.OPENCLAW_GATEWAY_URL)) delete env.OPENCLAW_GATEWAY_URL;
   return env;
 }
 
@@ -218,10 +251,7 @@ export function spawnDetachedOpenClawGateway(): { pid: number | null } {
   const child = spawn(invocation.command, invocation.args, {
     detached: true,
     stdio: 'ignore',
-    env: buildOpenClawEnv({
-      OPENCLAW_HIDE_BANNER: '1',
-      OPENCLAW_SUPPRESS_NOTES: '1',
-    }),
+    env: buildOpenClawEnv(),
     shell: shouldUseShell(invocation.command),
     windowsHide: true,
   });

@@ -5,7 +5,8 @@ import * as path from 'path';
 import * as http from 'http';
 import * as crypto from 'crypto';
 import { getDb } from '../db/client';
-import { OPENCLAW_BIN, OPENCLAW_CONFIG_PATH } from '../config';
+import { OPENCLAW_CONFIG_PATH } from '../config';
+import { runOpenClawSync } from '../lib/openclawCli';
 import { getActiveTenantId, resolveTenantIdFromRequest } from '../lib/tenantContext';
 import {
   collectOAuthAuthProfilePaths,
@@ -912,12 +913,7 @@ router.post('/:slug/setup-token', async (req: Request, res: Response) => {
 
     // Validate via OpenClaw — setup tokens are OAuth-derived and don't work
     // with the standard x-api-key header, but OpenClaw can verify them.
-    const { spawnSync } = await import('child_process');
-    const check = spawnSync(OPENCLAW_BIN, ['models', 'list', '--provider', slug, '--json'], {
-      encoding: 'utf-8',
-      timeout: 15_000,
-      env: { ...process.env },
-    });
+    const check = runOpenClawSync(['models', 'list', '--provider', slug, '--json'], { timeout: 15_000 });
     let validation: { ok: boolean; error?: string };
     try {
       const parsed = JSON.parse(check.stdout || '{}');

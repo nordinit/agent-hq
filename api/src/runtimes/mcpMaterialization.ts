@@ -3,6 +3,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { ensureMaterializedMcpApiKeyForAgent } from '../lib/mcpApiAuth';
+import { buildOpenClawEnv } from '../lib/openclawCli';
 import { parseAgentSessionKey, resolveRuntimeAgentSlug } from '../lib/sessionKeys';
 import { fetchEffectiveAgentMcpRows, findAgentIdsWithEffectiveMcpServer } from '../domains/teams/effectiveCapabilities';
 import { type Db } from "../db/adapter/types";
@@ -279,6 +280,7 @@ export function refreshOpenClawPluginRegistry(context: {
     cwd: context.workingDirectory ?? undefined,
     encoding: 'utf8',
     timeout: 60_000,
+    env: buildOpenClawEnv(),
   });
   const stdout = typeof result.stdout === 'string' ? result.stdout.trim() : undefined;
   const stderr = typeof result.stderr === 'string' ? result.stderr.trim() : undefined;
