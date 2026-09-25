@@ -6,7 +6,7 @@
  * types from here so the leaf modules (config, args, errors, mcpConfig) stay
  * independently testable and free of circular imports.
  *
- * Design reference: docs/architecture/claude-code-runtime-v2.md
+ * Design reference: docs/archive/claude-code-runtime-v2.md
  */
 
 // ── Runtime config ───────────────────────────────────────────────────────────

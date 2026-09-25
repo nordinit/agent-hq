@@ -334,7 +334,7 @@ MCP: new `api/src/mcp/domains/teams.ts`, registered in `registerDomains.ts`, so 
 and maintain teams itself. `catalogDrift.test.ts` and `adminCrudCatalog.test.ts` will fail until
 the new domain is registered in the catalog — that is the intended tripwire, not a bug.
 
-OpenAPI additions follow `docs/openapi-schema-backed-convention.md`.
+OpenAPI additions follow `docs/archive/openapi-schema-backed-convention.md` (a proposal that was not adopted).
 
 ---
 

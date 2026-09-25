@@ -275,4 +275,4 @@ Fix:
 - `api/src/routes/agents.hermesRuntime.test.ts`
 - `api/src/services/contracts/transportAdapters.ts`
 - `api/src/domains/runs/transcriptProvider.ts`
-- `docs/architecture/hermes-runtime-adapter-v1.md`
+- `docs/archive/hermes-runtime-adapter-v1.md` (superseded V1 design)

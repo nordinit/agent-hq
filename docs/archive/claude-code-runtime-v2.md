@@ -3,7 +3,7 @@
 Status: **CLI runtime, MCP preflight, live transcript, and local-hardening baseline implemented; production verification and Claude resume remain open**
 
 The current cross-runtime contract and release gates live in
-[`agent-runtime-boundary-v1.md`](./agent-runtime-boundary-v1.md). This document retains
+[`agent-runtime-boundary-v1.md`](../architecture/agent-runtime-boundary-v1.md). This document retains
 the original workflow-65 analysis and empirical CLI notes as history; statements in the
 archived plan describe the system at plan time, not the current runtime.
 

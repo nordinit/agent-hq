@@ -2,7 +2,7 @@
 
 Status: completed and deployed
 Completed: 2026-08-05
-Supersedes: the "After Phase 8 / step 9" item in `docs/postgres-migration-plan.md`
+Supersedes: the "After Phase 8 / step 9" item in `docs/archive/postgres-migration-plan.md`
 
 ## Purpose
 

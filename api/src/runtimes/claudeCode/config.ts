@@ -6,7 +6,7 @@
  * error string (the HTTP layer turns it into a 400), `normalize` throws — the
  * same split the Hermes adapter uses (api/src/runtimes/hermes/config.ts).
  *
- * Design reference: docs/architecture/claude-code-runtime-v2.md
+ * Design reference: docs/archive/claude-code-runtime-v2.md
  */
 
 import {

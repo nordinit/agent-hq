@@ -3,7 +3,7 @@
  * Code headless CLI.
  *
  * Replaces the previous in-process `@anthropic-ai/claude-agent-sdk` runtime.
- * Design and rationale: docs/architecture/claude-code-runtime-v2.md.
+ * Design and rationale: docs/archive/claude-code-runtime-v2.md.
  *
  * Structurally this mirrors runtimes/hermes/HermesRuntime.ts — spawn, hand the
  * run to a fire-and-forget monitorRun(), build exactly one RuntimeEndEvent on

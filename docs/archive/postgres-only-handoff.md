@@ -1,6 +1,6 @@
 # PostgreSQL-only migration — completion handoff
 
-Updated 2026-08-05. Companion to `docs/postgres-only-migration-spec.md`.
+Updated 2026-08-05. Companion to `docs/archive/postgres-only-migration-spec.md`.
 
 ## Current state
 

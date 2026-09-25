@@ -6,7 +6,7 @@
  * driven by stdout chunks so it can be unit-tested against captured fixtures.
  *
  * The event shapes below were captured empirically against Claude Code CLI
- * 2.1.220 (see docs/architecture/claude-code-runtime-v2.md, Phase 0). Three
+ * 2.1.220 (see docs/archive/claude-code-runtime-v2.md, Phase 0). Three
  * observed behaviours drive the design and are easy to get wrong:
  *
  *  1. `system/init` can be emitted MORE THAN ONCE, so the LATEST one wins for

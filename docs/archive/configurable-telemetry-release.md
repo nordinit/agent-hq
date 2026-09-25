@@ -16,7 +16,7 @@ The accepted [specification](configurable-telemetry-spec.md) and [implementation
 | M5 — reporting workspace | Guided/advanced builders, report charts/tables, definition inspection, included/excluded drilldown, snapshots, bounded background jobs, scoped MCP capabilities, and project/workflow portability. |
 | M6 — replacement | The Telemetry page uses the new workspace. The disconnected schema editor and fabricated KPIs are removed from it. Reachable compatibility readers have tenant containment; legacy tables remain for existing consumers. |
 
-Main implementation: [telemetry domain](../api/src/domains/telemetry/), [REST router](../api/src/routes/telemetry-v2.ts), [MCP tools](../api/src/mcp/domains/telemetry.ts), and [workspace](../ui/features/telemetry/TelemetryPage.tsx).
+Main implementation: [telemetry domain](../../api/src/domains/telemetry/), [REST router](../../api/src/routes/telemetry-v2.ts), [MCP tools](../../api/src/mcp/domains/telemetry.ts), and [workspace](../../ui/features/telemetry/TelemetryPage.tsx).
 
 ## What is configurable
 
@@ -47,7 +47,7 @@ The agent capabilities are `telemetry.read`, `telemetry.query`, `telemetry.manag
 
 ## Evidence and retention
 
-See the [producer inventory](telemetry-capture-inventory.md) for canonical sources, safe snapshots, transaction boundaries, coverage and purge behavior, and the [legacy consumer inventory](telemetry-legacy-consumers.md) for compatibility endpoints/readers.
+See the [producer inventory](../telemetry-capture-inventory.md) for canonical sources, safe snapshots, transaction boundaries, coverage and purge behavior, and the [legacy consumer inventory](../telemetry-legacy-consumers.md) for compatibility endpoints/readers.
 
 Capture begins at migration installation. Existing tasks can be bootstrapped, but their current values do not establish earlier state transitions. Backfill scans only trustworthy source rows and records their provenance; completing a scan does not make old best-effort history complete. Coverage reports installation/retention boundaries, pending observations and disabled producers. No production backfill was run during implementation.
 
@@ -87,7 +87,7 @@ Validation is recorded from disposable PostgreSQL fixtures and isolated UI build
 
 Concurrent regression runs exposed a preexisting test-cleanup race: an idle connection interval was incorrectly treated as proof that a test database was abandoned. Cleanup now requires a recorded local owner whose process has definitely exited. Live, unknown and remote owners, and shared template databases, are retained. Database-free regressions cover this behavior; the final full-suite run is serialized with respect to the performance fixture.
 
-The [performance report](telemetry-performance.md) and its [raw measurements](telemetry-performance-results.json) record the synthetic workload, hardware, query plans, latency, worker lag and retained storage. Limits are workload bounds, not a claim of production capacity. Reproduce the benchmark against a dedicated disposable test database before raising operational limits.
+The [performance report](../telemetry-performance.md) and its [raw measurements](../telemetry-performance-results.json) record the synthetic workload, hardware, query plans, latency, worker lag and retained storage. Limits are workload bounds, not a claim of production capacity. Reproduce the benchmark against a dedicated disposable test database before raising operational limits.
 
 ## Deployment sequence
 

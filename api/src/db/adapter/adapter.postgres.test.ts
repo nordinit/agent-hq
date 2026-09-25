@@ -6,7 +6,7 @@ import { runDbContractTests } from './contract';
  * Runs the shared Db contract against a real PostgreSQL server.
  *
  * Skipped unless AGENT_HQ_TEST_PG_URL is set, so the default suite stays runnable with no
- * external services. CI sets it; see docs/postgres-migration-plan.md.
+ * external services. CI sets it; see docs/archive/postgres-migration-plan.md.
  *
  * Each test gets its own schema rather than its own database: creating a database per
  * test is slow and cannot run concurrently, while a schema is cheap and gives the same

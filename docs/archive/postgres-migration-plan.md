@@ -106,7 +106,7 @@ temporary state where the code is async but the engine is not.
 Two large migrations of the same tables must not be in flight at once.
 
 `sprint_id` exists on **13 tables** and `sprint_type` on **6** (verified against the live database on
-2026-07-28 — see `docs/sprint-to-workflow-data-model-migration-spec.md`, correction section, which
+2026-07-28 — see `docs/archive/sprint-to-workflow-data-model-migration-spec.md`, correction section, which
 also documents that the original 2026-06-02 spike under-reported both lists). The tables carrying
 those columns are the same tables the engine migration must move: `tasks`, `sprint_task_*`,
 `recurring_task_series`, `story_point_model_routing`, `task_events`, `external_event_mappings`.
@@ -327,8 +327,8 @@ elapsed with no engine-attributed incident; SQLite dependency removed.
 ### After Phase 8 — deferred work
 
 The `sprint` → `workflow` physical rename (AD-2) begins here, on Postgres, as a separate project. Its
-prerequisites are `docs/sprint-to-workflow-data-model-migration-spec.md` (including the corrected
-column inventory) and the F9 finding in `docs/data-model-legacy-audit-2026-06-03.md`.
+prerequisites are `docs/archive/sprint-to-workflow-data-model-migration-spec.md` (including the corrected
+column inventory) and the F9 finding in `docs/archive/data-model-legacy-audit-2026-06-03.md`.
 
 ## Top risks
 

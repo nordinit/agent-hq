@@ -149,4 +149,4 @@ AGENT_HQ_TEST_PG_URL=postgresql://localhost/postgres npx tsx scripts/audit-telem
 
 The administrative test connection is used to create a separate test database; it is never selected as the application database.
 
-The harness and the v1 routes it exercised were removed on 2026-09-24 (see [legacy telemetry consumers](telemetry-legacy-consumers.md)). Recover both from the repository history to rerun it.
+The harness and the v1 routes it exercised were removed on 2026-09-24 (see [legacy telemetry consumers](../telemetry-legacy-consumers.md)). Recover both from the repository history to rerun it.
