@@ -285,6 +285,8 @@ Fully autonomous — no external cron jobs.
 
 - **Reconciler** runs every ~12s: runtime reconciliation, recurring series, and a dispatch pass per project
 - **Dispatcher**: selects eligible tasks, resolves the agent from assignment rules, resolves the runtime, builds the contract, and fires `runtime.dispatch()`
+- **Eligible tasks** are in a non-terminal status, have no active run, are not paused, belong to an active workflow, and are not blocked by an unfinished related task. A task whose status has no assignment rule is skipped; an `in_progress` task with no live run is resolved with the workflow's `ready` rules.
+- Repo-required workflow types (the starter Development type) block dispatch until the workflow has `repo_path` or `repo_url`
 - Task mutations trigger an immediate dispatch pass for the affected project
 
 ### Runtime dispatch
