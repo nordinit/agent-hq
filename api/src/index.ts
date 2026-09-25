@@ -90,11 +90,13 @@ const allowedBrowserOrigins = parseAllowedOrigins(process.env.AGENT_HQ_ALLOWED_O
 
 app.use(cors(corsOptionsDelegate(allowedBrowserOrigins)));
 app.use('/api/v1', rejectCrossOriginRequests(allowedBrowserOrigins));
+// Every /api/v1 request authenticates as the operator or as an agent's MCP key; see lib/apiAuth.
+// Before body parsing, so an anonymous caller cannot make the API parse a 10 MB body.
+app.use('/api/v1', authenticateApiRequest(apiAuthConfig));
 app.use(express.json({ limit: '10mb' }));
 app.use(handleJsonRequestErrors);
 
-// Every /api/v1 request authenticates as the operator or as an agent's MCP key; see lib/apiAuth.
-app.use('/api/v1', authenticateApiRequest(apiAuthConfig));
+// Scope checks read the body.
 app.use('/api/v1', authorizeMcpApiRequestIfPresent);
 
 function dispatchToWorkflowsAlias(req: express.Request, res: express.Response, targetUrl: string): void {
