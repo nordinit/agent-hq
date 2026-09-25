@@ -12,6 +12,7 @@ import { createTaskWorktree } from './worktreeManager';
 import { ensureTaskClone, type RepoAccessMode } from './repoWorkspaceManager';
 import { prepareRepoWorkspaceDependencies, type RepoWorkspaceDependencySetupResult } from './repoWorkspaceDependencies';
 import { normalizeEnvironmentSetup } from '../lib/environmentSetup';
+import { isSafeSkillName } from '../lib/skillNames';
 import { acquireWorkspaceLease } from './workspaceLease';
 import {
   resolveGitHubIdentity,
@@ -1326,6 +1327,10 @@ export function syncSkillDirs(params: {
   fs.mkdirSync(skillsDir, { recursive: true });
 
   for (const name of skillNames) {
+    if (!isSafeSkillName(name)) {
+      console.warn(`[dispatcher] syncSkillDirs: skill name ${JSON.stringify(name)} is not a safe path segment — skipping`);
+      continue;
+    }
     const source = path.join(skillsBasePath, name);
 
     if (!fs.existsSync(source) || !fs.statSync(source).isDirectory()) {

@@ -74,4 +74,26 @@ describe('Codex skill materialization', () => {
     expect(fs.existsSync(path.join(skillsRoot, 'old-skill'))).toBe(false);
     expect(fs.existsSync(path.join(skillsRoot, 'repo-owned-skill', 'SKILL.md'))).toBe(true);
   });
+
+  it('never follows an unsafe skill name out of the skills directory', async () => {
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-hq-codex-skills-outside-'));
+    workspaces.push(outside);
+    fs.writeFileSync(path.join(outside, 'keep.txt'), 'precious', 'utf8');
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-hq-codex-skills-unsafe-'));
+    workspaces.push(workspace);
+    const skillsRoot = path.join(workspace, '.agents', 'skills');
+    const escape = path.relative(skillsRoot, outside);
+    // A DB row with that name must not help either: materialization refuses the name itself.
+    await db.run(`INSERT INTO skills (tenant_id, name, content, source) VALUES (1, ?, '# Evil', 'atlas')`, escape);
+    const adapter = getSkillMaterializationAdapter('codex');
+
+    const result = await adapter.materialize({ workingDirectory: workspace, skillNames: [escape], db, tenantId: 1 });
+    expect(result.details).toEqual([expect.objectContaining({ skill: escape, action: 'skipped', reason: 'unsafe skill name' })]);
+
+    // The managed-skills manifest sits in a directory the agent can write. An entry naming a
+    // path outside it must not turn stale-skill cleanup into a recursive delete of that path.
+    fs.writeFileSync(path.join(skillsRoot, '.agent-hq-managed-skills.json'), JSON.stringify({ skills: [escape] }), 'utf8');
+    await adapter.materialize({ workingDirectory: workspace, skillNames: [], db, tenantId: 1 });
+    expect(fs.readFileSync(path.join(outside, 'keep.txt'), 'utf8')).toBe('precious');
+  });
 });

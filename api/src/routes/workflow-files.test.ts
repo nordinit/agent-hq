@@ -79,6 +79,19 @@ describe('workflow file versions', () => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
+  it('rejects traversal project and workflow ids before the upload touches the filesystem', async () => {
+    const escapeName = `escaped-${path.basename(tempDir)}`;
+    for (const route of [
+      `/api/v1/projects/700/workflows/%2e%2e%2f%2e%2e%2f%2e%2e%2f${escapeName}/files`,
+      `/api/v1/projects/%2e%2e%2f%2e%2e%2f${escapeName}/workflows/900/files`,
+    ]) {
+      const res = await fetch(`${baseUrl}${route}`, { method: 'POST', body: fileForm('notes.txt', 'payload', 'mallory') });
+      expect({ route, status: res.status }).toEqual({ route, status: 404 });
+    }
+    expect(fs.existsSync(path.join(path.dirname(tempDir), escapeName))).toBe(false);
+    expect(fs.existsSync(path.join(tempDir, 'uploads'))).toBe(false);
+  });
+
   it('records workflow scope, replaces the current file in place, and returns version history', async () => {
     const upload = await fetch(`${baseUrl}/api/v1/projects/700/workflows/900/files`, {
       method: 'POST',

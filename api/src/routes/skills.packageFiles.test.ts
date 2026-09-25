@@ -88,6 +88,29 @@ describe('database-backed skill package files', () => {
     await expect(readUpdated.json()).resolves.toMatchObject({ content: '# Updated guide\n' });
   });
 
+  it('only accepts skill names that are a single safe path segment', async () => {
+    const create = (name: string) => fetch(`${baseUrl}/api/v1/skills`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name, content: '# Skill\n' }),
+    });
+    for (const name of ['../escape', 'nested/name', '..', '.hidden', 'back\\slash', 'tab\tname', 'x'.repeat(129)]) {
+      const res = await create(name);
+      expect({ name, status: res.status }).toEqual({ name, status: 400 });
+    }
+    for (const name of ['create-task', 'Release Notes', 'v2.1_checks']) {
+      const res = await create(name);
+      expect({ name, status: res.status }).toEqual({ name, status: 201 });
+    }
+
+    const imported = await fetch(`${baseUrl}/api/v1/skills/migrate-from-fs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ skills: [{ name: '../../etc', content: '# no' }, { name: 'imported-skill', content: '# yes' }] }),
+    });
+    await expect(imported.json()).resolves.toMatchObject({ imported: ['imported-skill'], skipped: ['../../etc'] });
+  });
+
   it('rejects traversal paths and duplicate SKILL.md storage', async () => {
     const create = await fetch(`${baseUrl}/api/v1/skills`, {
       method: 'POST',

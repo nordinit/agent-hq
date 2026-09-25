@@ -151,6 +151,30 @@ describe('project file versions', () => {
     await expect(download.text()).resolves.toBe('replacement text');
   });
 
+  it('rejects a traversal project id before the upload touches the filesystem', async () => {
+    const escapeName = `escaped-${path.basename(tempDir)}`;
+    const escapeTarget = path.join(path.dirname(tempDir), escapeName);
+    for (const id of [`%2e%2e%2f%2e%2e%2f${escapeName}`, `..%2F..%2F${escapeName}`, '700abc']) {
+      const res = await fetch(`${baseUrl}/api/v1/projects/${id}/files`, {
+        method: 'POST',
+        body: fileForm('notes.txt', 'payload', 'mallory'),
+      });
+      expect({ id, status: res.status }).toEqual({ id, status: 404 });
+    }
+    expect(fs.existsSync(escapeTarget)).toBe(false);
+    expect(fs.existsSync(path.join(tempDir, 'uploads'))).toBe(false);
+  });
+
+  it('refuses uploads over the size limit and keeps nothing on disk', async () => {
+    const form = new FormData();
+    form.append('file', new Blob([new Uint8Array(50 * 1024 * 1024 + 1)], { type: 'application/octet-stream' }), 'big.bin');
+    const res = await fetch(`${baseUrl}/api/v1/projects/700/files`, { method: 'POST', body: form });
+    expect(res.status).toBe(413);
+    await expect(res.json()).resolves.toMatchObject({ code: 'file_too_large' });
+    const projectDir = path.join(tempDir, 'uploads', '700');
+    expect(fs.existsSync(projectDir) ? fs.readdirSync(projectDir) : []).toEqual([]);
+  });
+
   it('keeps project file version reads tenant-scoped', async () => {
     const upload = await fetch(`${baseUrl}/api/v1/projects/700/files`, {
       method: 'POST',

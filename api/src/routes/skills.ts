@@ -4,6 +4,7 @@ import type { Db } from '../db/adapter/types';
 import { resolveTenantIdFromRequest } from '../lib/tenantContext';
 import { normalizeSkillPackagePath, parseSkillPackageFiles, type SkillPackageFile } from '../lib/skillPackage';
 import { isPostgresUniqueViolation } from '../lib/postgresErrors';
+import { isSafeSkillName, SKILL_NAME_RULE } from '../lib/skillNames';
 
 const router = Router();
 
@@ -110,7 +111,7 @@ router.post('/migrate-from-fs', async (req: Request, res: Response) => {
     `;
     for (const item of requested) {
       const name = normalizeName(item?.name);
-      if (!name) {
+      if (!name || !isSafeSkillName(name)) {
         skipped.push(String(item?.name ?? '<missing-name>'));
         continue;
       }
@@ -229,6 +230,8 @@ router.post('/', async (req: Request, res: Response) => {
     const { description, content, source } = req.body as { name?: string; description?: string; content?: string; source?: string; files?: unknown };
     const name = normalizeName(req.body?.name);
     if (!name) return res.status(400).json({ error: 'name is required' });
+    // The name becomes a directory in every workspace the skill is materialized into.
+    if (!isSafeSkillName(name)) return res.status(400).json({ error: SKILL_NAME_RULE });
     const sourceValue = source === 'system' || source === 'workspace' ? source : 'atlas';
     let files: SkillPackageFile[];
     try {

@@ -53,6 +53,7 @@ import { WorkflowAllowedValuesError, workflowAllowedValuesErrorBody } from '../l
 import { resolveTenantIdFromRequest } from '../lib/tenantContext';
 import { resolveUploadsRoot } from '../config';
 import { setUserContentHeaders } from '../lib/userContentHeaders';
+import { resolveUploadDirectory } from '../lib/uploadStorage';
 
 const ACTIVE_TASK_INSTANCE_STATUSES = new Set(['queued', 'dispatched', 'running']);
 
@@ -84,9 +85,14 @@ function parseTaskRouteId(raw: string): number | null {
 
 const storage = multer.diskStorage({
   destination: (req, _file, cb) => {
-    const taskDir = path.join(getTaskUploadsBase(), String(req.params.id));
-    fs.mkdirSync(taskDir, { recursive: true });
-    cb(null, taskDir);
+    try {
+      // router.param already rejected a non-numeric id; this is the filesystem's own check.
+      const taskDir = resolveUploadDirectory(getTaskUploadsBase(), String(req.params.id));
+      fs.mkdirSync(taskDir, { recursive: true });
+      cb(null, taskDir);
+    } catch (err) {
+      cb(err as Error, '');
+    }
   },
   filename: (_req, file, cb) => {
     // Prefix with timestamp to avoid collisions

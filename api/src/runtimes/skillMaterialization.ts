@@ -44,6 +44,7 @@ import os from 'os';
 import path from 'path';
 import { normalizeSkillPackagePath, type SkillPackageFile } from '../lib/skillPackage';
 import { type Db } from "../db/adapter/types";
+import { isSafeSkillName } from '../lib/skillNames';
 
 function resolveDefaultHermesRoot(): string {
   return process.env.HERMES_HOME?.trim() || path.join(os.homedir(), '.hermes');
@@ -138,6 +139,13 @@ function emptyResult(): MaterializationResult {
 }
 
 const MANAGED_SKILLS_MANIFEST = '.agent-hq-managed-skills.json';
+
+function unsafeSkillNameDetail(adapterName: string, name: string): { warning: string; reason: string } {
+  return {
+    warning: `[${adapterName}] skill name ${JSON.stringify(name)} is not a single safe path segment — skipping`,
+    reason: 'unsafe skill name',
+  };
+}
 const HERMES_PROFILE_SKILLS_DIR = 'skills';
 const HERMES_PROFILE_CONTEXT_DIR = '.agent-hq';
 const HERMES_PROFILE_CONTEXT_MANIFEST = 'assigned-skills.json';
@@ -207,8 +215,10 @@ export abstract class FilesystemSkillAdapter implements SkillMaterializationAdap
     try {
       const raw = fs.readFileSync(path.join(skillsDir, MANAGED_SKILLS_MANIFEST), 'utf-8');
       const parsed = JSON.parse(raw);
+      // The manifest lives in a directory the agent can write. An entry that is not a plain
+      // skill name (`../..`) would turn the stale-skill cleanup below into an arbitrary rm -rf.
       return Array.isArray(parsed?.skills)
-        ? parsed.skills.filter((entry: unknown): entry is string => typeof entry === 'string')
+        ? parsed.skills.filter((entry: unknown): entry is string => isSafeSkillName(entry))
         : [];
     } catch {
       return [];
@@ -378,6 +388,15 @@ export abstract class FilesystemSkillAdapter implements SkillMaterializationAdap
     const previouslyManagedSkillNames = this.readManagedSkillNames(skillsDir);
 
     for (const name of skillNames) {
+      // Names are joined onto skillsDir and skillsBasePath below; refuse anything that could
+      // step out of either. Names are validated at creation, but agent records can carry
+      // names that were never created through that route.
+      if (!isSafeSkillName(name)) {
+        const unsafe = unsafeSkillNameDetail(this.adapterName, name);
+        result.warnings.push(unsafe.warning);
+        result.details.push({ skill: name, action: 'skipped', reason: unsafe.reason });
+        continue;
+      }
       const source = await this.resolveSkillDir(name, skillsBasePath, db, workingDirectory, tenantId);
 
       try {
@@ -440,6 +459,12 @@ export abstract class FilesystemSkillAdapter implements SkillMaterializationAdap
 
     const skillsDir = this.getSkillsDir(workingDirectory);
     for (const name of skillNames) {
+      if (!isSafeSkillName(name)) {
+        const unsafe = unsafeSkillNameDetail(this.adapterName, name);
+        result.warnings.push(unsafe.warning);
+        result.details.push({ skill: name, action: 'skipped', reason: unsafe.reason });
+        continue;
+      }
       const linkPath = path.join(skillsDir, name);
       try {
         const st = fs.lstatSync(linkPath);

@@ -6,9 +6,20 @@ import { getDb } from '../db/client';
 import { resolveTenantIdFromRequest } from '../lib/tenantContext';
 import { nowTimestamp } from '../lib/timestamps';
 import { resolveUploadsRoot } from '../config';
+import { requireNumericId } from '../lib/routeParams';
+import {
+  PROJECT_FILE_MAX_BYTES,
+  requireNumericRouteParams,
+  resolveUploadDirectory,
+  singleFileUpload,
+} from '../lib/uploadStorage';
 import { setUserContentHeaders } from '../lib/userContentHeaders';
 
 const router = Router({ mergeParams: true });
+// The project id comes from the parent mount and names the upload directory, so it is checked
+// before anything else runs — multer included.
+router.use(requireNumericRouteParams('id'));
+router.param('fileId', requireNumericId);
 
 function getUploadsBase(): string {
   return process.env.AGENT_HQ_PROJECT_UPLOADS_DIR ?? path.join(resolveUploadsRoot(), 'projects');
@@ -17,10 +28,13 @@ function getUploadsBase(): string {
 // Dynamic multer storage — creates per-project directory
 const storage = multer.diskStorage({
   destination: (req, _file, cb) => {
-    const projectId = (req.params as { id: string }).id;
-    const dir = path.join(getUploadsBase(), projectId);
-    fs.mkdirSync(dir, { recursive: true });
-    cb(null, dir);
+    try {
+      const dir = resolveUploadDirectory(getUploadsBase(), String((req.params as { id: string }).id));
+      fs.mkdirSync(dir, { recursive: true });
+      cb(null, dir);
+    } catch (err) {
+      cb(err as Error, '');
+    }
   },
   filename: (_req, file, cb) => {
     const ext = path.extname(file.originalname);
@@ -30,7 +44,7 @@ const storage = multer.diskStorage({
   },
 });
 
-const upload = multer({ storage });
+const upload = singleFileUpload(multer({ storage, limits: { fileSize: PROJECT_FILE_MAX_BYTES, files: 1 } }), PROJECT_FILE_MAX_BYTES);
 
 function routeErrorStatus(err: unknown): number {
   const status = typeof err === 'object' && err && 'status' in err ? Number((err as { status?: number }).status) : 500;
@@ -151,7 +165,7 @@ router.get('/', async (req: Request, res: Response) => {
 });
 
 // POST /api/v1/projects/:id/files
-router.post('/', upload.single('file'), async (req: Request, res: Response) => {
+router.post('/', upload, async (req: Request, res: Response) => {
   try {
     const db = getDb();
     const tenantId = await resolveTenantIdFromRequest(db, req);
@@ -270,7 +284,7 @@ router.get('/:fileId/versions', async (req: Request, res: Response) => {
 });
 
 // PUT /api/v1/projects/:id/files/:fileId
-router.put('/:fileId', upload.single('file'), async (req: Request, res: Response) => {
+router.put('/:fileId', upload, async (req: Request, res: Response) => {
   try {
     const db = getDb();
     const tenantId = await resolveTenantIdFromRequest(db, req);
