@@ -1,8 +1,8 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import Link from 'next/link';
-import { Cpu, Download, Layers, Paperclip, Upload } from 'lucide-react';
+import { ChevronDown, Cpu, Download, Layers, Paperclip, Upload } from 'lucide-react';
 import { api, Task, TaskAttachment, TaskHistory, TaskNote, JobInstance, CustomFieldDefinition } from '@/lib/api';
 import { formatDateTime, timeAgo } from '@/lib/date';
 import { getRunLifecycle, getTaskOutcomeLabel } from '@/lib/runLifecycle';
@@ -13,6 +13,75 @@ import { shortModelName } from './modelRouting';
 import { ContextViewer } from './ContextViewer';
 
 const { dots: FALLBACK_STATUS_DOT } = getTaskStatusMaps();
+
+// ── Collapsible Section ───────────────────────────────────────────────────────
+
+const COLLAPSED_SECTIONS_KEY = 'agent-hq:task-detail:collapsed-sections';
+
+function readCollapsedSections(): string[] {
+  try {
+    const parsed: unknown = JSON.parse(window.localStorage.getItem(COLLAPSED_SECTIONS_KEY) ?? '[]');
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeCollapsedSection(sectionKey: string, collapsed: boolean) {
+  try {
+    const next = new Set(readCollapsedSections());
+    if (collapsed) next.add(sectionKey);
+    else next.delete(sectionKey);
+    window.localStorage.setItem(COLLAPSED_SECTIONS_KEY, JSON.stringify(Array.from(next)));
+  } catch { /* storage unavailable — collapse state just won't persist */ }
+}
+
+/** Task detail section whose body can be minimized. The choice is remembered per section across tasks. */
+export function CollapsibleSection({
+  sectionKey,
+  title,
+  headerExtra,
+  className = 'mb-2',
+  children,
+}: {
+  sectionKey: string;
+  title: ReactNode;
+  headerExtra?: ReactNode;
+  className?: string;
+  children: ReactNode;
+}) {
+  const [collapsed, setCollapsed] = useState(false);
+
+  useEffect(() => {
+    setCollapsed(readCollapsedSections().includes(sectionKey));
+  }, [sectionKey]);
+
+  const toggle = () => {
+    setCollapsed(previous => {
+      writeCollapsedSection(sectionKey, !previous);
+      return !previous;
+    });
+  };
+
+  return (
+    <div>
+      <div className={`flex items-center gap-1.5 ${collapsed ? '' : className}`}>
+        <button
+          type="button"
+          onClick={toggle}
+          aria-expanded={!collapsed}
+          title={collapsed ? 'Expand section' : 'Minimize section'}
+          className="group inline-flex items-center gap-1.5 text-xs font-semibold text-slate-400 uppercase tracking-wide hover:text-slate-200 transition-colors"
+        >
+          <ChevronDown className={`w-3.5 h-3.5 shrink-0 transition-transform ${collapsed ? '-rotate-90' : ''}`} />
+          {title}
+        </button>
+        {!collapsed && headerExtra}
+      </div>
+      {!collapsed && children}
+    </div>
+  );
+}
 
 // ── Notes Section ─────────────────────────────────────────────────────────────
 
@@ -53,8 +122,7 @@ export function NotesSection({ taskId }: { taskId: number }) {
   };
 
   return (
-    <div>
-      <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3">Notes</p>
+    <CollapsibleSection sectionKey="notes" title={`Notes${notes.length > 0 ? ` (${notes.length})` : ''}`} className="mb-3">
 
       {loading ? (
         <p className="text-xs text-slate-500 italic">Loading…</p>
@@ -118,7 +186,7 @@ export function NotesSection({ taskId }: { taskId: number }) {
           </button>
         </div>
       </div>
-    </div>
+    </CollapsibleSection>
   );
 }
 
@@ -606,8 +674,7 @@ export function TaskFieldsSection({
   if (displayFields.length === 0 && warnings.length === 0) return null;
 
   return (
-    <div>
-      <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">Task Fields</p>
+    <CollapsibleSection sectionKey="task-fields" title="Task Fields">
       <div className="bg-slate-800 border border-slate-700 rounded-lg p-3 space-y-3">
         {warnings.length > 0 && (
           <div className={`rounded-lg border px-3 py-2 text-xs ${task.status === 'done' ? 'border-red-500/40 bg-red-950/30 text-red-200' : 'border-amber-500/30 bg-amber-950/20 text-amber-200'}`}>
@@ -638,7 +705,7 @@ export function TaskFieldsSection({
           )}
         </div>
       </div>
-    </div>
+    </CollapsibleSection>
   );
 }
 

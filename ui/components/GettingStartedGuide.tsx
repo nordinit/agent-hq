@@ -2,17 +2,21 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
-import { ArrowLeft, ArrowRight, Loader2, Sparkles, X } from 'lucide-react';
+import { ArrowLeft, ArrowRight, CheckCircle2, Loader2, Sparkles, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { dispatchAtlasWidgetCommand } from '@/lib/atlasWidget';
 import {
   GETTING_STARTED_CHANGED_EVENT,
-  GETTING_STARTED_STEPS,
-  completeGettingStartedGuide,
+  GETTING_STARTED_PARTS,
+  beginGettingStartedGuide,
+  completeGettingStartedPart,
   dismissGettingStartedGuide,
+  getGettingStartedPart,
   getGettingStartedSnapshot,
+  getNextGettingStartedPart,
   setGettingStartedStep,
   type GettingStartedSnapshot,
+  type GettingStartedStep,
 } from '@/lib/gettingStarted';
 
 type FocusRect = { top: number; left: number; width: number; height: number };
@@ -20,6 +24,8 @@ type FocusRect = { top: number; left: number; width: number; height: number };
 const CARD_WIDTH = 380;
 const CARD_HEIGHT_ESTIMATE = 220;
 const VIEWPORT_MARGIN = 24;
+const MOBILE_VIEWPORT_MARGIN = 16;
+const MOBILE_BREAKPOINT = 640;
 const FOCUS_PADDING = 14;
 
 function clamp(value: number, min: number, max: number) {
@@ -27,10 +33,19 @@ function clamp(value: number, min: number, max: number) {
 }
 
 function getInitialSnapshot(): GettingStartedSnapshot {
-  if (typeof window === 'undefined') {
-    return { status: 'not_started', stepIndex: 0 };
-  }
   return getGettingStartedSnapshot();
+}
+
+// Hidden panels (for example the chat pane on a phone) still match their selector but
+// measure zero, so only an element with a visible size counts as the spotlight target.
+function findStepTarget(step: GettingStartedStep): HTMLElement | null {
+  for (const selector of step.selectors) {
+    const element = document.querySelector(selector) as HTMLElement | null;
+    if (!element) continue;
+    const rect = element.getBoundingClientRect();
+    if (rect.width > 0 && rect.height > 0) return element;
+  }
+  return null;
 }
 
 function expandRect(rect: FocusRect): FocusRect {
@@ -51,10 +66,13 @@ export default function GettingStartedGuide() {
   const measureFrameRef = useRef<number | null>(null);
   const retryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const appliedEnterCommandRef = useRef<string | null>(null);
+  const scrolledStepRef = useRef<string | null>(null);
   const cardRef = useRef<HTMLDivElement | null>(null);
 
   const isActive = snapshot.status === 'active';
-  const step = isActive ? GETTING_STARTED_STEPS[snapshot.stepIndex] ?? null : null;
+  const isChoosing = snapshot.status === 'choosing';
+  const part = getGettingStartedPart(snapshot.partId);
+  const step = isActive ? part.steps[snapshot.stepIndex] ?? null : null;
 
   useEffect(() => {
     const syncFromStorage = () => setSnapshot(getGettingStartedSnapshot());
@@ -72,15 +90,24 @@ export default function GettingStartedGuide() {
 
   useEffect(() => {
     appliedEnterCommandRef.current = null;
-  }, [snapshot.stepIndex]);
+  }, [snapshot.partId, snapshot.stepIndex]);
 
   useEffect(() => {
     if (!isActive || !step?.enterCommand || pathname !== step.route) return;
-    const commandKey = `${snapshot.stepIndex}:${pathname}`;
+    const commandKey = `${snapshot.partId}:${snapshot.stepIndex}:${pathname}`;
     if (appliedEnterCommandRef.current === commandKey) return;
     appliedEnterCommandRef.current = commandKey;
     dispatchAtlasWidgetCommand(step.enterCommand);
-  }, [isActive, pathname, snapshot.stepIndex, step]);
+  }, [isActive, pathname, snapshot.partId, snapshot.stepIndex, step]);
+
+  useEffect(() => {
+    if (!isChoosing) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') dismissGettingStartedGuide();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isChoosing]);
 
   useEffect(() => {
     if (!isActive || !step || pathname !== step.route) {
@@ -89,7 +116,7 @@ export default function GettingStartedGuide() {
     }
 
     const measureTarget = () => {
-      const target = document.querySelector(step.selector) as HTMLElement | null;
+      const target = findStepTarget(step);
       if (!target) {
         setTargetRect(null);
         retryTimeoutRef.current = setTimeout(() => {
@@ -107,9 +134,18 @@ export default function GettingStartedGuide() {
       };
       setTargetRect(nextRect);
 
-      const isOffscreen = rect.top < 80 || rect.bottom > window.innerHeight - 80;
-      if (isOffscreen) {
-        target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      // Bring the target into view once per step; re-scrolling on every scroll event would
+      // fight a reader scrolling through a target taller than the viewport.
+      const stepKey = `${snapshot.partId}:${snapshot.stepIndex}`;
+      if (scrolledStepRef.current !== stepKey) {
+        scrolledStepRef.current = stepKey;
+        const isTall = rect.height > window.innerHeight - 160;
+        const isOffscreen = isTall
+          ? rect.top < 0 || rect.top > window.innerHeight - 160
+          : rect.top < 80 || rect.bottom > window.innerHeight - 80;
+        if (isOffscreen) {
+          target.scrollIntoView({ block: isTall ? 'start' : 'center', behavior: 'smooth' });
+        }
       }
     };
 
@@ -128,7 +164,7 @@ export default function GettingStartedGuide() {
       if (measureFrameRef.current != null) cancelAnimationFrame(measureFrameRef.current);
       if (retryTimeoutRef.current) clearTimeout(retryTimeoutRef.current);
     };
-  }, [isActive, pathname, step]);
+  }, [isActive, pathname, snapshot.partId, snapshot.stepIndex, step]);
 
   useEffect(() => {
     if (!isActive) return;
@@ -167,12 +203,15 @@ export default function GettingStartedGuide() {
 
     const viewportWidth = window.innerWidth;
     const viewportHeight = window.innerHeight;
+    const margin = viewportWidth < MOBILE_BREAKPOINT ? MOBILE_VIEWPORT_MARGIN : VIEWPORT_MARGIN;
+    const cardWidth = Math.min(CARD_WIDTH, viewportWidth - margin * 2);
     const spaceLeft = focusRect.left;
     const spaceRight = viewportWidth - (focusRect.left + focusRect.width);
+    const spaceAbove = focusRect.top;
     const spaceBelow = viewportHeight - (focusRect.top + focusRect.height);
-    const canPlaceLeft = spaceLeft >= CARD_WIDTH + VIEWPORT_MARGIN + 18;
-    const canPlaceRight = spaceRight >= CARD_WIDTH + VIEWPORT_MARGIN + 18;
-    const placeBelow = spaceBelow >= cardHeight + VIEWPORT_MARGIN;
+    const canPlaceLeft = spaceLeft >= cardWidth + margin + 18;
+    const canPlaceRight = spaceRight >= cardWidth + margin + 18;
+    const placeBelow = spaceBelow >= cardHeight + margin || spaceBelow >= spaceAbove;
 
     if (canPlaceLeft || canPlaceRight) {
       const preferredSide = step?.preferredCardSide;
@@ -182,47 +221,57 @@ export default function GettingStartedGuide() {
           ? !canPlaceRight && canPlaceLeft
           : canPlaceLeft;
       const left = shouldPlaceLeft
-        ? clamp(focusRect.left - CARD_WIDTH - 18, VIEWPORT_MARGIN, viewportWidth - CARD_WIDTH - VIEWPORT_MARGIN)
-        : clamp(focusRect.left + focusRect.width + 18, VIEWPORT_MARGIN, viewportWidth - CARD_WIDTH - VIEWPORT_MARGIN);
+        ? clamp(focusRect.left - cardWidth - 18, margin, viewportWidth - cardWidth - margin)
+        : clamp(focusRect.left + focusRect.width + 18, margin, viewportWidth - cardWidth - margin);
 
       const top = clamp(
         focusRect.top + focusRect.height / 2 - cardHeight / 2,
-        VIEWPORT_MARGIN,
-        viewportHeight - cardHeight - VIEWPORT_MARGIN,
+        margin,
+        viewportHeight - cardHeight - margin,
       );
 
       return { top, left } as const;
     }
 
     const top = placeBelow
-      ? clamp(focusRect.top + focusRect.height + 18, VIEWPORT_MARGIN, viewportHeight - cardHeight - VIEWPORT_MARGIN)
-      : clamp(focusRect.top - cardHeight - 18, VIEWPORT_MARGIN, viewportHeight - cardHeight - VIEWPORT_MARGIN);
+      ? clamp(focusRect.top + focusRect.height + 18, margin, viewportHeight - cardHeight - margin)
+      : clamp(focusRect.top - cardHeight - 18, margin, viewportHeight - cardHeight - margin);
 
     const left = clamp(
-      focusRect.left + focusRect.width / 2 - CARD_WIDTH / 2,
-      VIEWPORT_MARGIN,
-      viewportWidth - CARD_WIDTH - VIEWPORT_MARGIN,
+      focusRect.left + focusRect.width / 2 - cardWidth / 2,
+      margin,
+      viewportWidth - cardWidth - margin,
     );
 
     return { top, left } as const;
   }, [cardHeight, focusRect, step]);
 
+  if (isChoosing) {
+    return <GettingStartedChooser completedParts={snapshot.completedParts} />;
+  }
+
   if (!isActive || !step) return null;
 
   const stepNumber = snapshot.stepIndex + 1;
-  const totalSteps = GETTING_STARTED_STEPS.length;
+  const totalSteps = part.steps.length;
+  const isLastStep = snapshot.stepIndex >= totalSteps - 1;
+  const nextPart = getNextGettingStartedPart(part.id);
   const waitingForRoute = pathname !== step.route;
 
-  const finishGuide = () => {
-    completeGettingStartedGuide();
-  };
-
   const handleNext = () => {
-    if (snapshot.stepIndex >= totalSteps - 1) {
-      finishGuide();
+    if (isLastStep) {
+      completeGettingStartedPart();
       return;
     }
     setGettingStartedStep(snapshot.stepIndex + 1);
+  };
+
+  const handleStartNextPart = () => {
+    if (!nextPart) return;
+    completeGettingStartedPart();
+    // The last step opens Atlas with a draft; close it so it does not cover the next part.
+    dispatchAtlasWidgetCommand({ type: 'close' });
+    beginGettingStartedGuide(nextPart.id);
   };
 
   const handleBack = () => {
@@ -258,7 +307,7 @@ export default function GettingStartedGuide() {
           <div className="min-w-0">
             <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.2em] text-amber-400/90">
               <Sparkles className="w-3.5 h-3.5" />
-              Getting Started
+              Getting Started · {part.label}: {part.title}
             </div>
             <h2 className="mt-2 text-lg font-semibold text-white">{step.title}</h2>
             <p className="mt-1 text-xs text-slate-400">
@@ -278,7 +327,7 @@ export default function GettingStartedGuide() {
           {waitingForRoute ? (
             <div className="flex items-center gap-2 text-sm font-medium text-slate-200">
               <Loader2 className="w-4 h-4 text-amber-400 animate-spin" />
-              Opening {step.route === '/' ? 'dashboard' : step.route.replace('/', '').replace('-', ' ')}…
+              Opening {step.pageLabel}…
             </div>
           ) : (
             <p className="text-sm leading-relaxed font-medium text-white">{step.description}</p>
@@ -295,15 +344,87 @@ export default function GettingStartedGuide() {
               <ArrowLeft className="w-4 h-4" />
               Back
             </Button>
-            <Button variant="ghost" onClick={dismissGettingStartedGuide}>
-              Skip tutorial
-            </Button>
+            {isLastStep && nextPart ? (
+              <Button variant="ghost" onClick={handleStartNextPart} disabled={waitingForRoute}>
+                Start {nextPart.label}
+              </Button>
+            ) : !isLastStep && (
+              <Button variant="ghost" onClick={dismissGettingStartedGuide} aria-label="Skip tutorial">
+                Skip
+              </Button>
+            )}
           </div>
 
           <Button variant="primary" onClick={handleNext} disabled={waitingForRoute}>
             {step.continueLabel ?? 'Continue'}
             <ArrowRight className="w-4 h-4" />
           </Button>
+        </div>
+      </div>
+    </>
+  );
+}
+
+function GettingStartedChooser({ completedParts }: { completedParts: GettingStartedSnapshot['completedParts'] }) {
+  return (
+    <>
+      <div className="fixed inset-0 bg-black/60 z-[70]" onClick={dismissGettingStartedGuide} />
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="getting-started-chooser-title"
+        className="fixed left-1/2 top-1/2 z-[72] flex max-h-[calc(100vh-32px)] w-[min(460px,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-2xl border border-slate-500 bg-slate-950 ring-1 ring-black/60 shadow-2xl shadow-black/80"
+      >
+        <div className="flex items-start justify-between gap-3 px-5 py-4 border-b border-slate-700/60">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.2em] text-amber-400/90">
+              <Sparkles className="w-3.5 h-3.5" />
+              Getting Started
+            </div>
+            <h2 id="getting-started-chooser-title" className="mt-2 text-lg font-semibold text-white">Choose a tutorial</h2>
+            <p className="mt-1 text-xs text-slate-400">New to Agent HQ? Start with Part 1.</p>
+          </div>
+          <button
+            onClick={dismissGettingStartedGuide}
+            className="mt-0.5 rounded-lg p-1.5 text-slate-500 transition-colors hover:bg-slate-800 hover:text-white"
+            aria-label="Close"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        <div className="space-y-3 overflow-y-auto px-5 py-4">
+          {GETTING_STARTED_PARTS.map(part => {
+            const completed = completedParts.includes(part.id);
+            return (
+              <button
+                key={part.id}
+                type="button"
+                onClick={() => beginGettingStartedGuide(part.id)}
+                className="group w-full rounded-xl border border-slate-700 bg-slate-900/70 p-4 text-left transition-colors hover:border-amber-500/60 hover:bg-slate-900"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-sm font-semibold text-white">
+                    {part.label}: {part.title}
+                  </p>
+                  {completed && (
+                    <span className="inline-flex items-center gap-1 text-xs text-green-300">
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      Completed
+                    </span>
+                  )}
+                </div>
+                <p className="mt-1 text-sm text-slate-300">{part.summary}</p>
+                <div className="mt-3 flex items-center justify-between text-xs">
+                  <span className="text-slate-500">{part.steps.length} steps</span>
+                  <span className="inline-flex items-center gap-1 font-medium text-amber-300 group-hover:text-amber-200">
+                    {completed ? 'Replay' : 'Start'}
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </span>
+                </div>
+              </button>
+            );
+          })}
         </div>
       </div>
     </>

@@ -30,7 +30,7 @@ export default function SettingsLayout({ children }: { children: React.ReactNode
         </div>
 
         {/* Tabs */}
-        <div className="flex gap-0 overflow-x-auto border-b border-zinc-700/60 scrollbar-none">
+        <div className="flex gap-0 overflow-x-auto border-b border-zinc-700/60 scrollbar-none" data-tour-target="settings-tabs">
           {TABS.map(tab => {
             const active = pathname === tab.href || pathname.startsWith(tab.href + '/');
             return (
