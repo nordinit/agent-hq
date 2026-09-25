@@ -102,8 +102,7 @@ export function createAgentHqMcpServer(options: CreateAgentHqMcpServerOptions): 
   // Register all handlers so live grants need no restart, but advertise only permitted tools.
   // Handlers independently refresh before execution, including calls from a stale client list.
   server.server.setRequestHandler(ListToolsRequestSchema, async () => {
-    const names = new Set((await access()).tool_names);
-    return { tools: registrar.tools.filter(tool => names.has(tool.name)) };
+    return { tools: registrar.listTools(new Set((await access()).tool_names)) };
   });
 
   return server;

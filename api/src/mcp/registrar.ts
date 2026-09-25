@@ -51,15 +51,33 @@ export interface McpRegistrarOptions {
   authenticateResource: () => Promise<void>;
 }
 
-export function createMcpRegistrar(server: McpServer, options: McpRegistrarOptions): McpRegistrar & { tools: Tool[] } {
-  const tools: Tool[] = [];
+export interface McpToolLister {
+  /** Tool listings for the permitted names, in registration order. */
+  listTools(permitted: ReadonlySet<string>): Tool[];
+}
+
+export function createMcpRegistrar(server: McpServer, options: McpRegistrarOptions): McpRegistrar & McpToolLister {
+  // Converting zod shapes to JSON Schema is most of the cost of building a server — hundreds of
+  // milliseconds for the full surface — and the HTTP transport builds one per request, almost all of
+  // them tool calls that never list anything. So convert lazily: only when a client lists tools, only
+  // the tools it may see, and at most once per server. The process-wide catalog still converts every
+  // schema once, so a schema zod cannot represent still fails when the first server is built.
+  const definitions: Array<{ name: string; description: string; schema: Record<string, z.ZodTypeAny>; listing?: Tool }> = [];
 
   return {
-    tools,
+    listTools(permitted) {
+      return definitions
+        .filter((definition) => permitted.has(definition.name))
+        .map((definition) => definition.listing ??= {
+          name: definition.name,
+          description: definition.description,
+          inputSchema: z.toJSONSchema(z.object(definition.schema), { io: 'input' }) as Tool['inputSchema'],
+        });
+    },
     registerTool(names, description, schema, handler, toolOptions) {
       for (const name of names) {
         getToolPermissionRequirement(name); // Missing metadata fails registration, including for admins.
-        tools.push({ name, description, inputSchema: z.toJSONSchema(z.object(schema), { io: 'input' }) as Tool['inputSchema'] });
+        definitions.push({ name, description, schema });
         server.tool(name, description, schema, async (args) => {
           try { await options.authorizeTool(name); } catch (error) {
             return { isError: true, content: [{ type: 'text' as const, text: JSON.stringify(formatMcpToolError(error)) }] };

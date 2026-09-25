@@ -1,9 +1,12 @@
-import {historicalTestFixture} from './historicalTestFixture';
+import fs from 'fs';
+import {historicalTestFixture,migrationsThrough} from './historicalTestFixture';
 import {POSTGRES_MIGRATION_DIRS} from './migrationDirs';
-import {runMigrations} from './migrationRunner';
+import {loadMigrations,runMigrations} from './migrationRunner';
 
 it('migrates existing workflows and telemetry without resetting identities, history, or grants',async()=>{
-  const fixture=await historicalTestFixture(31);const db=fixture.db;
+  // Apply exactly migration 32 so every assertion below is about its effect alone, however many
+  // migrations later releases add; the rest of the release is applied on top at the end.
+  const fixture=await historicalTestFixture(31);const db=fixture.db;const through32=migrationsThrough(32);
   try{
     await db.exec(`
       INSERT INTO tenants(id,name,slug) VALUES(1,'Migration','migration');
@@ -22,7 +25,7 @@ it('migrates existing workflows and telemetry without resetting identities, hist
     const events=await db.all('SELECT id,source_key,payload,occurred_at FROM telemetry_outbox ORDER BY id');
     const identity=await db.value('SELECT telemetry_status_identity FROM tasks WHERE id=1');
     expect(signals.length).toBeGreaterThan(0);expect(identity).toBeTruthy();
-    expect(await runMigrations(db,POSTGRES_MIGRATION_DIRS)).toEqual(['32-workflow-terminology.sql']);
+    expect(await runMigrations(db,through32)).toEqual(['32-workflow-terminology.sql']);
     expect(await db.get('SELECT id,workflow_id,title FROM tasks WHERE id=1')).toEqual({id:1,workflow_id:1,title:'sprint remains a literal regex target'});
     expect(await db.value('SELECT name FROM workflows WHERE id=1')).toBe('A sprint title stays user content');
     expect(await db.all('SELECT generation,active,created_at FROM telemetry_signal_generations ORDER BY generation')).toEqual(signals);
@@ -39,6 +42,10 @@ it('migrates existing workflows and telemetry without resetting identities, hist
     expect(await db.value("SELECT payload->'after'->>'workflow_type' FROM telemetry_outbox WHERE source='tasks' ORDER BY id DESC LIMIT 1")).toBe('agency');
     await db.run("UPDATE workflow_type_task_statuses SET label='Ready now' WHERE id=1");
     expect(await db.all('SELECT generation,active,created_at FROM telemetry_signal_generations ORDER BY generation')).toEqual(signals);
+    expect(await runMigrations(db,through32)).toEqual([]);
+    // Later migrations still apply cleanly on top of the migrated data, and only once.
+    const later=loadMigrations(POSTGRES_MIGRATION_DIRS).map(m=>m.id).filter(id=>parseInt(id,10)>32);
+    expect(await runMigrations(db,POSTGRES_MIGRATION_DIRS)).toEqual(later);
     expect(await runMigrations(db,POSTGRES_MIGRATION_DIRS)).toEqual([]);
-  }finally{await fixture.close();}
+  }finally{await fixture.close();fs.rmSync(through32,{recursive:true,force:true});}
 },60000);
