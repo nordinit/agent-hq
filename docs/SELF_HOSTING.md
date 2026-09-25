@@ -6,9 +6,14 @@ one-shot migration service, the API, and the UI.
 
 ## Requirements
 
-- Docker Engine with Compose v2, or Node.js 22+ plus PostgreSQL 17
+- Docker Engine with Compose v2, or Node.js 22 plus PostgreSQL 17
 - Git for source-checkout installs
 - Enough persistent storage for PostgreSQL and logical backups
+
+The Docker images contain Node and the built API and UI only. They have no `git`, `claude`,
+`codex`, `hermes`, or `openclaw` binaries, so Claude Code, Codex, and Hermes agents, workflows
+that check out a repository per task, and OpenClaw MCP setup (the API calls the `openclaw` CLI)
+need the [native deployment](#native-node-deployment) on the host where those tools run.
 
 ## Docker quick start
 
@@ -28,8 +33,11 @@ Services:
 |---|---|---|
 | `agent-hq-postgres` | PostgreSQL 17 | private Compose network |
 | `agent-hq-migrate` | one-shot install/migration | none |
-| `agent-hq-api` | Express API | `3501` by default |
-| `agent-hq-ui` | Next.js UI | `3500` by default |
+| `agent-hq-api` | Express API | `127.0.0.1:3501` by default |
+| `agent-hq-ui` | Next.js UI | `127.0.0.1:3500` by default |
+
+Compose publishes the API and UI ports on the host address in `AGENT_HQ_BIND_ADDRESS`
+(default `127.0.0.1`). Open `http://localhost:3500` and sign in with the operator token.
 
 Four named volumes persist operator data:
 
@@ -52,13 +60,22 @@ Copy `.env.example` and set the values needed by your deployment:
 ```dotenv
 AGENT_HQ_API_PORT=3501
 AGENT_HQ_UI_PORT=3500
+AGENT_HQ_OPERATOR_TOKEN=replace-with-the-output-of-openssl-rand-hex-32
 AGENT_HQ_POSTGRES_DB=agent_hq
 AGENT_HQ_POSTGRES_USER=agenthq
 AGENT_HQ_POSTGRES_PASSWORD=replace-with-a-long-url-safe-random-value
-NEXT_PUBLIC_API_URL=https://agent-hq.example.com/api
+# AGENT_HQ_BIND_ADDRESS=127.0.0.1
+# AGENT_HQ_ALLOWED_ORIGINS=
 ```
 
 `AGENT_HQ_OPERATOR_TOKEN` is required; see [Authentication](#authentication).
+`AGENT_HQ_ALLOWED_ORIGINS` lists extra browser origins (comma-separated) allowed to call `/api/v1`
+directly; the API refuses other cross-origin browser requests. The UI's own pages go through its
+server and need no entry.
+
+The UI container reaches the API over the Compose network (`AGENT_HQ_INTERNAL_BASE_URL`). The
+browser talks to the UI, except for the chat WebSocket, which it opens on the API port under the
+same host name as the page.
 
 PostgreSQL is not published to the host by default. The bundled local password is
 therefore network-private, but it should still be replaced. Because Compose also interpolates
@@ -152,11 +169,21 @@ export AGENT_HQ_OPERATOR_TOKEN=$(openssl rand -hex 32)   # keep it; the UI needs
 PORT=3501 DATABASE_URL=postgresql://user:password@127.0.0.1:5432/agent_hq npm start
 ```
 
-Run the UI separately with `PORT=3500 AGENT_HQ_OPERATOR_TOKEN=… npm start`, or use the
-checked-in PM2 ecosystem files, which pass `AGENT_HQ_OPERATOR_TOKEN` and
-`AGENT_HQ_AUTH_MODE` from the repository `.env` to both processes. Production reads `DATABASE_URL`; dev maps the deliberately scoped
-`AGENT_HQ_DEV_DATABASE_URL` to the API process so a copied production environment cannot
-silently attach dev to production.
+Run the UI separately from `ui/`:
+
+```bash
+PORT=3500 AGENT_HQ_INTERNAL_BASE_URL=http://127.0.0.1:3501 AGENT_HQ_OPERATOR_TOKEN=… npm start
+```
+
+The UI does not read the repository `.env`. Set `AGENT_HQ_INTERNAL_BASE_URL` to the API address;
+the built-in fallback is `http://127.0.0.1:3551`. Both processes listen on `127.0.0.1` unless `HOST` (API) or
+`AGENT_HQ_UI_HOST` (UI) says otherwise.
+
+Alternatively, use the checked-in PM2 ecosystem files, which read the repository `.env` and pass
+`AGENT_HQ_OPERATOR_TOKEN`, `AGENT_HQ_AUTH_MODE`, and the API address to both processes.
+`ecosystem.production.config.js` reads `DATABASE_URL`; `ecosystem.dev.config.js` maps the
+deliberately scoped `AGENT_HQ_DEV_DATABASE_URL` to the API process so a copied production
+environment cannot silently attach dev to production.
 
 ## CLI launcher
 
@@ -205,10 +232,12 @@ edit contract templates, or accept uploaded files.
 
 ## OpenClaw and runtime settings
 
-Agent HQ can connect to a host OpenClaw gateway or containerized agent gateways. Pass
-gateway URLs/tokens as environment variables or configure them through supported setup
-flows. Never bake secrets into images. When the API runs in Docker and OpenClaw runs on
-the host, use a host-reachable address such as `host.docker.internal` where supported.
+Agent HQ connects to the OpenClaw gateway named by `OPENCLAW_GATEWAY_URL` (default: the port in
+`~/.openclaw/openclaw.json`, or `18789`, on `127.0.0.1`), and an agent can name its own remote
+gateway. Pass gateway URLs and tokens as environment variables or configure them in Settings >
+OpenClaw Gateway. Never bake secrets into images. When the API runs in Docker and OpenClaw runs on
+the host, use a host-reachable address such as `host.docker.internal` where supported; see
+`docker-compose.override.yml.example`.
 
 Certificate verification is skipped only for a gateway on loopback (the local gateway's
 self-signed certificate); every other gateway, and every other outbound HTTPS request, is
