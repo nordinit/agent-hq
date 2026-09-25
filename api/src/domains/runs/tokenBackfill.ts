@@ -7,10 +7,11 @@
  * Runs periodically as part of the reconciler tick.
  */
 
-import { execFile, spawnSync } from 'child_process';
+import { execFile, type ExecFileException } from 'child_process';
 import fs from 'fs';
 import { getDb } from '../../db/client';
-import { OPENCLAW_BIN, OPENCLAW_CONFIG_PATH, OPENCLAW_PATH } from '../../config';
+import { OPENCLAW_BIN, OPENCLAW_CONFIG_PATH } from '../../config';
+import { buildOpenClawEnv, runOpenClawSync } from '../../lib/openclawCli';
 import { parseHookSessionKey } from '../../lib/sessionKeys';
 import { type Db } from "../../db/adapter/types";
 
@@ -27,22 +28,113 @@ function readGatewayToken(): string {
   }
 }
 
-const GATEWAY_AUTH_TOKEN = readGatewayToken();
-
 type TokenMap = Map<number, { input: number | null; output: number | null; total: number | null }>;
 
 function buildSessionsListArgs(): string[] {
-  const args = [
+  return [
     'gateway', 'call', 'sessions.list',
     '--json',
     '--params', JSON.stringify({ activeMinutes: SESSIONS_ACTIVE_MINUTES, limit: 500 }),
   ];
+}
 
-  if (GATEWAY_AUTH_TOKEN) {
-    args.push('--token', GATEWAY_AUTH_TOKEN);
+// The token travels as OPENCLAW_GATEWAY_TOKEN, which the CLI accepts in place of `--token`; on argv
+// `ps` would show it to every local user.
+function buildSessionsListEnv(token: string): NodeJS.ProcessEnv {
+  return buildOpenClawEnv(token ? { OPENCLAW_GATEWAY_TOKEN: token } : {});
+}
+
+const SESSIONS_LIST_TIMEOUT_MS = 15_000;
+// A session is about 2 KB of JSON and up to 500 are requested, which can outgrow the 1 MiB default.
+const SESSIONS_LIST_MAX_BUFFER = 16 * 1024 * 1024;
+
+interface SessionsListOutcome {
+  stdout: string;
+  stderr: string;
+  /** Exit status; null when the process never ran or was killed. */
+  status: number | null;
+  signal: string | null;
+  /** Why the process could not be run or read (ENOENT, output over maxBuffer), if it could not. */
+  spawnError: string | null;
+  timedOut: boolean;
+}
+
+function firstLine(text: string): string {
+  return text.split(/\r?\n/).map(line => line.trim()).find(Boolean) ?? '';
+}
+
+/** The CLI reports a failed `--json` call on stdout as {"ok":false,"error":{type,kind,message}}. */
+function parseCliError(stdout: string): string | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    return null;
   }
+  const error = (parsed as { error?: unknown } | null)?.error;
+  if (!error || typeof error !== 'object') return null;
+  const { type, kind, message } = error as { type?: unknown; kind?: unknown; message?: unknown };
+  const label = [type, kind].filter((part): part is string => typeof part === 'string' && part !== '').join('/');
+  const text = typeof message === 'string' ? firstLine(message) : '';
+  return [label, text].filter(Boolean).join(': ') || null;
+}
 
-  return args;
+/**
+ * One line saying why sessions.list failed, or null when it succeeded. Only the first line of the
+ * CLI's error and of stderr are kept, so repeats of one failure read the same and throttle together.
+ */
+function describeSessionsListFailure(outcome: SessionsListOutcome, token = ''): string | null {
+  let description: string;
+  if (outcome.timedOut) {
+    description = `timed out after ${SESSIONS_LIST_TIMEOUT_MS}ms`;
+  } else if (outcome.spawnError) {
+    description = outcome.spawnError;
+  } else if (outcome.status === 0) {
+    return null;
+  } else {
+    const parts = [outcome.status !== null ? `exit ${outcome.status}` : `killed by ${outcome.signal ?? 'signal'}`];
+    const cliError = parseCliError(outcome.stdout);
+    if (cliError) parts.push(cliError);
+    const stderr = firstLine(outcome.stderr);
+    if (stderr) parts.push(`stderr: ${stderr}`);
+    description = parts.join('; ');
+  }
+  // The token is never on the command line now, but keep it out of the log whatever the CLI echoes.
+  if (token) description = description.split(token).join('<redacted>');
+  return description.slice(0, 500);
+}
+
+// A dead gateway fails every reconciler tick the same way; say so once an hour, not every tick.
+const FAILURE_LOG_INTERVAL_MS = 60 * 60_000;
+const failureLog = new Map<string, { loggedAtMs: number; suppressed: number }>();
+
+function logSessionsListFailure(description: string): void {
+  const nowMs = Date.now();
+  const previous = failureLog.get(description);
+  if (previous && nowMs - previous.loggedAtMs < FAILURE_LOG_INTERVAL_MS) {
+    previous.suppressed += 1;
+    return;
+  }
+  for (const [key, entry] of failureLog) {
+    if (nowMs - entry.loggedAtMs >= FAILURE_LOG_INTERVAL_MS) failureLog.delete(key);
+  }
+  failureLog.set(description, { loggedAtMs: nowMs, suppressed: 0 });
+  const repeats = previous?.suppressed ? ` (repeated ${previous.suppressed} more time(s) since last logged)` : '';
+  console.warn(`[tokenBackfill] Failed to fetch sessions.list: ${description}${repeats}`);
+}
+
+function readSessionsListOutcome(outcome: SessionsListOutcome, token: string): TokenMap {
+  const failure = describeSessionsListFailure(outcome, token);
+  if (failure) {
+    logSessionsListFailure(failure);
+    return new Map();
+  }
+  return buildTokenMap(parseSessionsListOutput(outcome.stdout));
+}
+
+export function resetTokenBackfillStateForTests(): void {
+  failureLog.clear();
+  lastBackfillFetchAtMs = 0;
 }
 
 function buildTokenMap(sessions: SessionEntry[]): TokenMap {
@@ -122,58 +214,54 @@ function toPositiveInt(v: unknown): number | null {
  * instanceId → token data for all canonical or legacy dispatched run sessions.
  */
 export function fetchHookSessionTokens(): TokenMap {
-  const result = spawnSync(
-    OPENCLAW_BIN,
-    buildSessionsListArgs(),
-    {
-      encoding: 'utf-8',
-      timeout: 15_000,
-      env: {
-        ...process.env,
-        PATH: OPENCLAW_PATH,
-        OPENCLAW_HIDE_BANNER: '1',
-        OPENCLAW_SUPPRESS_NOTES: '1',
-      },
-    },
-  );
+  const token = readGatewayToken();
+  const result = runOpenClawSync(buildSessionsListArgs(), {
+    timeout: SESSIONS_LIST_TIMEOUT_MS,
+    maxBuffer: SESSIONS_LIST_MAX_BUFFER,
+    env: buildSessionsListEnv(token),
+  });
+  const error = result.error as NodeJS.ErrnoException | undefined;
 
-  if (result.error || result.status !== 0) {
-    console.warn('[tokenBackfill] Failed to fetch sessions.list:', result.stderr?.slice(0, 200));
-    return new Map();
-  }
-
-  return buildTokenMap(parseSessionsListOutput(result.stdout ?? ''));
+  return readSessionsListOutcome({
+    stdout: result.stdout ?? '',
+    stderr: result.stderr ?? '',
+    status: result.status,
+    signal: result.signal,
+    spawnError: error && error.code !== 'ETIMEDOUT' ? error.message : null,
+    timedOut: error?.code === 'ETIMEDOUT',
+  }, token);
 }
 
 export async function fetchHookSessionTokensAsync(): Promise<TokenMap> {
-  const args = buildSessionsListArgs();
-
-  const result = await new Promise<{ stdout: string; stderr: string; code: number | null }>((resolve) => {
+  const token = readGatewayToken();
+  const outcome = await new Promise<SessionsListOutcome>((resolve) => {
     execFile(
       OPENCLAW_BIN,
-      args,
+      buildSessionsListArgs(),
       {
         encoding: 'utf-8',
-        timeout: 15_000,
-        env: {
-          ...process.env,
-          PATH: OPENCLAW_PATH,
-          OPENCLAW_HIDE_BANNER: '1',
-          OPENCLAW_SUPPRESS_NOTES: '1',
-        },
+        timeout: SESSIONS_LIST_TIMEOUT_MS,
+        maxBuffer: SESSIONS_LIST_MAX_BUFFER,
+        env: buildSessionsListEnv(token),
       },
-      (error, stdout, stderr) => {
-        resolve({ stdout: stdout ?? '', stderr: stderr ?? '', code: error && 'code' in error ? Number(error.code ?? 1) : 0 });
+      (error: ExecFileException | null, stdout, stderr) => {
+        // A numeric code is the exit status; a string code (ENOENT, maxBuffer) means the process
+        // could not be run or read; neither, with the child killed, is the timeout firing.
+        const exitStatus = typeof error?.code === 'number' ? error.code : null;
+        const spawnError = typeof error?.code === 'string' ? error.message : null;
+        resolve({
+          stdout: stdout ?? '',
+          stderr: stderr ?? '',
+          status: error ? exitStatus : 0,
+          signal: error?.signal ?? null,
+          spawnError,
+          timedOut: Boolean(error?.killed) && spawnError === null,
+        });
       },
     );
   });
 
-  if (result.code !== 0) {
-    console.warn('[tokenBackfill] Failed to fetch sessions.list:', result.stderr.slice(0, 200));
-    return new Map();
-  }
-
-  return buildTokenMap(parseSessionsListOutput(result.stdout));
+  return readSessionsListOutcome(outcome, token);
 }
 
 /**
