@@ -73,15 +73,15 @@ it('seeds dev fixtures into the default tenant without leaking into another tena
     expect(Number(nullCount.n)).toBe(0);
   }
 
-  // seed-dev must add exactly 'Agency' and 'Agent HQ' to the DEFAULT tenant, and leave every other
+  // seed-dev must add exactly 'Sample Project' and 'Agent HQ' to the DEFAULT tenant, and leave every other
   // project — including tenant 2's 'Default Project' and 'Tenant 2 Existing' — untouched.
   expect(await listProjects()).toEqual(sortProjects([
     ...projectsBeforeSeed,
-    { tenant_id: defaultTenantId, name: 'Agency' },
+    { tenant_id: defaultTenantId, name: 'Sample Project' },
     { tenant_id: defaultTenantId, name: 'Agent HQ' },
   ]));
   expect(projectsBeforeSeed).toContainEqual({ tenant_id: otherTenant.id, name: 'Default Project' });
-  expect(projectsBeforeSeed).not.toContainEqual({ tenant_id: defaultTenantId, name: 'Agency' });
+  expect(projectsBeforeSeed).not.toContainEqual({ tenant_id: defaultTenantId, name: 'Sample Project' });
 
   const tenantTwoDevTaskCount = await db.get(`
     SELECT COUNT(*) AS n

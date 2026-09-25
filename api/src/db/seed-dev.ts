@@ -39,9 +39,10 @@ async function seedIfEmpty(
 }
 
 // ── Agents ────────────────────────────────────────────────────────────────────
-// Pixel claude-code runtime config (task #306 migration)
-const pixelRuntimeConfig = JSON.stringify({
-  workingDirectory: `${OPENCLAW_DIR}/workspace-agency-frontend`,
+// A small neutral sample: the built-in Atlas plus three claude-code agents and one openclaw
+// agent, enough to exercise both runtimes. Replace them with your own agents in the UI.
+const frontendRuntimeConfig = JSON.stringify({
+  workingDirectory: `${OPENCLAW_DIR}/workspace-sample-frontend`,
   model: 'claude-sonnet-4-6',
   effort: 'high',
   allowedTools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep', 'WebSearch', 'WebFetch'],
@@ -49,9 +50,8 @@ const pixelRuntimeConfig = JSON.stringify({
   maxBudgetUsd: 5.00,
 });
 
-// Forge claude-code runtime config (task #305 migration)
-const forgeRuntimeConfig = JSON.stringify({
-  workingDirectory: `${OPENCLAW_DIR}/workspace-agency-backend`,
+const backendRuntimeConfig = JSON.stringify({
+  workingDirectory: `${OPENCLAW_DIR}/workspace-sample-backend`,
   model: 'claude-sonnet-4-6',
   effort: 'high',
   allowedTools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
@@ -60,12 +60,11 @@ const forgeRuntimeConfig = JSON.stringify({
 });
 
 const devAgents = [
-  { name: 'Atlas',          role: 'Built-in assistant — dev session',       session_key: 'agent:atlas:main',            workspace_path: `${OPENCLAW_DIR}/workspace-atlas`,            openclaw_agent_id: 'atlas',           runtime_type: 'openclaw',    runtime_config: null, system_role: 'atlas' },
-  { name: 'Forge',          role: 'Senior Backend Engineer — dev session',   session_key: 'agent:agency-backend:main',   workspace_path: `${OPENCLAW_DIR}/workspace-agency-backend`,  openclaw_agent_id: 'agency-backend',  runtime_type: 'claude-code', runtime_config: forgeRuntimeConfig },
-  { name: 'Kai',            role: 'Developer Tools Engineer — dev session',  session_key: 'agent:agency-tools:main',     workspace_path: `${OPENCLAW_DIR}/workspace-agency-tools`,    openclaw_agent_id: null,              runtime_type: 'claude-code', runtime_config: forgeRuntimeConfig },
-  { name: 'Pixel',          role: 'Senior Frontend Engineer — dev session',  session_key: 'agent:agency-frontend:main',  workspace_path: `${OPENCLAW_DIR}/workspace-agency-frontend`, openclaw_agent_id: null,              runtime_type: 'claude-code', runtime_config: pixelRuntimeConfig },
-  { name: 'Harbor (DevOps)',role: 'Release engineer / DevOps — dev session', session_key: 'agent:agency-devops:main',    workspace_path: `${OPENCLAW_DIR}/workspace-agency-devops`,   openclaw_agent_id: null,              runtime_type: 'openclaw',    runtime_config: null },
-  { name: 'Vera',           role: 'QA Engineer — dev session',               session_key: 'agent:agency-qa:main',        workspace_path: `${OPENCLAW_DIR}/workspace-agency-qa`,       openclaw_agent_id: 'agency-qa',       runtime_type: 'openclaw',    runtime_config: null },
+  { name: 'Atlas',             role: 'Built-in assistant — dev session',       session_key: 'agent:atlas:main',            workspace_path: `${OPENCLAW_DIR}/workspace-atlas`,            openclaw_agent_id: 'atlas',     runtime_type: 'openclaw',    runtime_config: null, system_role: 'atlas' },
+  { name: 'Sample Backend',    role: 'Backend Engineer — dev session',         session_key: 'agent:sample-backend:main',   workspace_path: `${OPENCLAW_DIR}/workspace-sample-backend`,   openclaw_agent_id: null,        runtime_type: 'claude-code', runtime_config: backendRuntimeConfig },
+  { name: 'Sample Tools',      role: 'Developer Tools Engineer — dev session', session_key: 'agent:sample-tools:main',     workspace_path: `${OPENCLAW_DIR}/workspace-sample-tools`,     openclaw_agent_id: null,        runtime_type: 'claude-code', runtime_config: backendRuntimeConfig },
+  { name: 'Sample Frontend',   role: 'Frontend Engineer — dev session',        session_key: 'agent:sample-frontend:main',  workspace_path: `${OPENCLAW_DIR}/workspace-sample-frontend`,  openclaw_agent_id: null,        runtime_type: 'claude-code', runtime_config: frontendRuntimeConfig },
+  { name: 'Sample QA',         role: 'QA Engineer — dev session',              session_key: 'agent:sample-qa:main',        workspace_path: `${OPENCLAW_DIR}/workspace-sample-qa`,        openclaw_agent_id: 'sample-qa', runtime_type: 'openclaw',    runtime_config: null },
 ];
 
 const INSERT_AGENT_SQL = `
@@ -82,11 +81,11 @@ async function main(): Promise<void> {
   await seedIfEmpty(
     db,
     'projects',
-    `SELECT COUNT(*) AS cnt FROM projects WHERE tenant_id = ${defaultTenantId} AND name IN ('Agency', 'Agent HQ')`,
+    `SELECT COUNT(*) AS cnt FROM projects WHERE tenant_id = ${defaultTenantId} AND name IN ('Sample Project', 'Agent HQ')`,
     async () => {
       await db.run(`
         INSERT INTO projects (tenant_id, name, description, context_md) VALUES
-          (?, 'Agency', 'Dev sandbox: General IT agency work bucket', '## Agency (dev)\nDev environment — safe to mutate.'),
+          (?, 'Sample Project', 'Dev sandbox: general sample work bucket', '## Sample Project (dev)\nDev environment — safe to mutate.'),
           (?, 'Agent HQ', 'Dev sandbox: Agent HQ internal platform project', '## Agent HQ (dev)\nDev environment — safe to mutate.')
       `, defaultTenantId, defaultTenantId);
     }
@@ -124,15 +123,15 @@ async function main(): Promise<void> {
     'workflows',
     `SELECT COUNT(*) AS cnt FROM workflows WHERE tenant_id = ${defaultTenantId} AND name IN ('Dev Workflow 1', 'Agent HQ Enhancements (dev)')`,
     async () => {
-      // We need a project id — get first agency project
-      const agencyProject = await db.get<{ id: number }>(`SELECT id FROM projects WHERE tenant_id = ? AND name = 'Agency' LIMIT 1`, defaultTenantId);
+      // We need a project id — get the sample project
+      const sampleProject = await db.get<{ id: number }>(`SELECT id FROM projects WHERE tenant_id = ? AND name = 'Sample Project' LIMIT 1`, defaultTenantId);
       const atlasProject  = await db.get<{ id: number }>(`SELECT id FROM projects WHERE tenant_id = ? AND name = 'Agent HQ' LIMIT 1`, defaultTenantId);
 
-      if (agencyProject) {
+      if (sampleProject) {
         await db.run(`
           INSERT INTO workflows (tenant_id, project_id, name, goal, workflow_type, status, length_kind, length_value) VALUES
             (?, ?, 'Dev Workflow 1', 'Validate dev environment isolation and seed data', 'dev', 'active', 'time', '2w')
-        `, defaultTenantId, agencyProject.id);
+        `, defaultTenantId, sampleProject.id);
       }
       if (atlasProject) {
         await db.run(`
@@ -156,17 +155,17 @@ async function main(): Promise<void> {
     'tasks',
     `SELECT COUNT(*) AS cnt FROM tasks WHERE tenant_id = ${defaultTenantId}`,
     async () => {
-      const agencyProject = await db.get<{ id: number }>(`SELECT id FROM projects WHERE tenant_id = ? AND name = 'Agency' LIMIT 1`, defaultTenantId);
+      const sampleProject = await db.get<{ id: number }>(`SELECT id FROM projects WHERE tenant_id = ? AND name = 'Sample Project' LIMIT 1`, defaultTenantId);
       const workflow = await db.get<{ id: number }>(`SELECT id FROM workflows WHERE tenant_id = ? AND name = 'Dev Workflow 1' LIMIT 1`, defaultTenantId);
-      const forgeAgent = await db.get<{ id: number }>(`SELECT id FROM agents WHERE tenant_id = ? AND session_key = 'agent:agency-backend:main' LIMIT 1`, defaultTenantId);
+      const backendAgent = await db.get<{ id: number }>(`SELECT id FROM agents WHERE tenant_id = ? AND session_key = 'agent:sample-backend:main' LIMIT 1`, defaultTenantId);
 
-      if (agencyProject) {
+      if (sampleProject) {
         await db.run(`
           INSERT INTO tasks (tenant_id, title, description, status, priority, project_id, workflow_id, assigned_agent_id) VALUES
             (?, 'Sample dev task — todo', 'A representative task in todo state for dev/test use', 'todo', 'medium', ?, ?, ?),
             (?, 'Sample dev task — in_progress', 'A representative task in in_progress state for dev/test use', 'in_progress', 'high', ?, ?, ?),
             (?, 'Sample dev task — review', 'A representative task in review state for dev/test use', 'review', 'low', ?, ?, ?)
-        `, defaultTenantId, agencyProject.id, workflow?.id ?? null, forgeAgent?.id ?? null, defaultTenantId, agencyProject.id, workflow?.id ?? null, forgeAgent?.id ?? null, defaultTenantId, agencyProject.id, workflow?.id ?? null, forgeAgent?.id ?? null);
+        `, defaultTenantId, sampleProject.id, workflow?.id ?? null, backendAgent?.id ?? null, defaultTenantId, sampleProject.id, workflow?.id ?? null, backendAgent?.id ?? null, defaultTenantId, sampleProject.id, workflow?.id ?? null, backendAgent?.id ?? null);
       }
     }
   );
