@@ -251,7 +251,6 @@ Story-point-based: 1-2pt → haiku, 3-4pt → sonnet, 5+pt → opus. Agent overr
 | Module | Function | Interval |
 |---|---|---|
 | scheduler | Legacy per-agent job scheduler disabled; recurring task series scheduler owns scheduled task creation | startup no-op |
-| workflowScheduler | Disabled; recurring task series own scheduled task creation | startup no-op |
 | watchdog | Stalled/timeout detection, worktree cleanup, Telegram alerts | 60s poll |
 | reconciler | Eligibility + dispatch sweep | ~60s |
 
