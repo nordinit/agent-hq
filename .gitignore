@@ -12,7 +12,6 @@ node_modules/
 .env
 .env.*
 !.env.example
-!docker/.env.agents.example
 .env.local
 dist/
 
@@ -20,12 +19,9 @@ uploads/
 api/dist/
 ui/.next/
 
-# Per-agent SSH keys — never commit private keys
-docker/keys/*
-!docker/keys/.gitkeep
-
-# Fleet env file — contains secrets
-.env.agents
+# Per-agent SSH keys written by scripts/provision-agent-ssh-key.sh — never
+# commit private keys
+docker/keys/
 
 # Local Docker Compose overrides — may contain secrets
 docker-compose.override.yml
