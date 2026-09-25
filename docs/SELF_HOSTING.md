@@ -6,7 +6,7 @@ one-shot migration service, the API, and the UI.
 
 ## Requirements
 
-- Docker Engine with Compose v2, or Node.js 20+ plus PostgreSQL 17
+- Docker Engine with Compose v2, or Node.js 22+ plus PostgreSQL 17
 - Git for source-checkout installs
 - Enough persistent storage for PostgreSQL and logical backups
 

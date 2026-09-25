@@ -9,7 +9,7 @@ ui/dist
 ui/.next
 ui/out
 
-# Database files — data is mounted via volume at runtime
+# Local database files, dumps and backups — never part of an image
 *.db
 *.db-shm
 *.db-wal

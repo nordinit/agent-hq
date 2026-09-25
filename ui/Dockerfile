@@ -3,13 +3,13 @@
 ###############################################################################
 
 # ── Stage 1: deps ─────────────────────────────────────────────────────────────
-FROM node:20-alpine AS deps
+FROM node:22-alpine AS deps
 WORKDIR /build
 COPY ui/package.json ui/package-lock.json ./
 RUN npm ci
 
 # ── Stage 2: builder ─────────────────────────────────────────────────────────
-FROM node:20-alpine AS builder
+FROM node:22-alpine AS builder
 WORKDIR /build
 COPY --from=deps /build/node_modules ./node_modules
 COPY ui/ ./
@@ -21,7 +21,7 @@ ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
 
 # ── Stage 3: runner ───────────────────────────────────────────────────────────
-FROM node:20-alpine AS runner
+FROM node:22-alpine AS runner
 WORKDIR /app
 
 RUN addgroup -S agenthq && adduser -S agenthq -G agenthq

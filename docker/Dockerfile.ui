@@ -1,7 +1,7 @@
 ###############################################################################
 # Dockerfile.ui — Production image for the Agent HQ UI
 #
-# Stack: Node.js 20 LTS (Alpine), Next.js built and served with `next start`
+# Stack: Node.js 22 LTS (Alpine), Next.js built and served with `next start`
 # Port:  3500 (default; override via PORT env var)
 #
 # ── Build ─────────────────────────────────────────────────────────────────────
@@ -21,7 +21,7 @@
 ###############################################################################
 
 # ── Stage 1: build ────────────────────────────────────────────────────────────
-FROM node:20-alpine AS builder
+FROM node:22-alpine AS builder
 
 # NEXT_PUBLIC_* vars are inlined at build time by Next.js — accept via ARG and
 # promote to ENV so the `next build` process can read them.
@@ -41,7 +41,7 @@ COPY ui/ ./
 RUN npm run build
 
 # ── Stage 2: runtime ──────────────────────────────────────────────────────────
-FROM node:20-alpine AS runtime
+FROM node:22-alpine AS runtime
 
 # Create a non-root user for the UI process
 RUN addgroup -S agenthq && adduser -S agenthq -G agenthq

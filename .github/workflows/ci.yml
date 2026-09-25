@@ -87,3 +87,48 @@ jobs:
       - name: Build
         working-directory: ui
         run: npm run build
+
+  cli:
+    name: CLI and OpenClaw plugin — test
+    runs-on: ubuntu-latest
+    # Neither suite needs an install: both run node:test against dependency-free modules.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Test CLI
+        run: npm run test:cli
+
+      - name: Test OpenClaw capability-tools plugin
+        working-directory: plugins/openclaw-capability-tools
+        run: npm test
+
+  docker:
+    name: Docker image — ${{ matrix.image }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: api
+            dockerfile: api/Dockerfile
+          - image: ui
+            dockerfile: ui/Dockerfile
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Build only: the image stays in the builder cache and nothing is pushed or loaded.
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: false
+          tags: agent-hq-${{ matrix.image }}:ci
+          cache-from: type=gha,scope=ci-${{ matrix.image }}
+          cache-to: type=gha,scope=ci-${{ matrix.image }},mode=max

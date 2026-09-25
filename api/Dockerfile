@@ -1,5 +1,5 @@
 # Agent HQ API image. Build context is the repository root.
-FROM node:20-alpine AS builder
+FROM node:22-alpine AS builder
 
 WORKDIR /build/api
 COPY api/package.json api/package-lock.json ./
@@ -8,7 +8,7 @@ COPY api/tsconfig.json ./
 COPY api/src/ ./src/
 RUN npm run build
 
-FROM node:20-alpine AS runner
+FROM node:22-alpine AS runner
 
 RUN addgroup -S agenthq && adduser -S agenthq -G agenthq
 
