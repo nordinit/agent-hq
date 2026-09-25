@@ -5,11 +5,13 @@
 
 ## Verification
 
+- [ ] `node scripts/check-workflow-terminology.mjs`
 - [ ] `cd api && npm run lint`
-- [ ] `cd api && npm test`
+- [ ] `cd api && npm test` (needs `AGENT_HQ_TEST_PG_URL`)
 - [ ] `cd api && npm run build`
-- [ ] `cd ui && npx tsc --noEmit`
+- [ ] `cd ui && npm run verify`
 - [ ] `cd ui && npm run build`
+- [ ] `npm run test:cli`
 - [ ] docs-only change
 
 ## Risks

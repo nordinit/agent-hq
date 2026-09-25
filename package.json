@@ -21,7 +21,7 @@
     "open": "node cli/bin/cli.js open"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22"
   },
   "keywords": [
     "agent-hq",
