@@ -164,7 +164,7 @@ Task cycle time, QA breakdown, model usage, agent efficiency, creation/outcome q
 | `setup.ts` | `/api/v1/setup` | Onboarding/health check |
 | `skills.ts` | `/api/v1/skills` | Skill directory management |
 | `tasks.ts` | `/api/v1/tasks` | Task CRUD + outcome + evidence + integrity + notes + blockers + attachments |
-| `telemetry.ts` | `/api/v1/telemetry` | Task/run analytics |
+| `telemetry-v2.ts` | `/api/v1/telemetry/v2` | Configurable telemetry: catalog, metrics, profiles, saved views/reports, dashboard pages, queries, export/import |
 | `tools.ts` | `/api/v1/tools` | Tool registry CRUD + agent assignments |
 | `workflow-files.ts` | `/api/v1/projects/:projectId/workflows/:workflowId/files` | Workflow-scoped file uploads and version history |
 | `workflows.ts` | `/api/v1/workflows` | Workflow CRUD + metrics; workflow types under `/types` |
@@ -199,7 +199,11 @@ Key fields: id, title, description, status, priority, agent_id, project_id, work
 - `instance_artifacts` — per-instance stage, summary, commit, branch, heartbeat timestamps, stale flag
 - `chat_messages` — transcript with event types (text, thought, tool_call, tool_result, turn_start, system, error)
 - `logs` — execution logs per instance/agent
-- `task_creation_events` / `task_outcome_metrics` — telemetry
+- `telemetry_*` — configurable telemetry (`/api/v1/telemetry/v2`): versioned definitions, captured observations, retained query results, coverage
+- `task_outcome_metrics` — legacy per-task summary; task creation maintains `spawned_defects`, read by task reads and reflection context
+- `task_events` — task status transitions, read by routing traces and telemetry backfill
+- `integrity_events` — handoff/evidence anomalies written by task lifecycle code; no current reader
+- `task_creation_events`, `telemetry_schema_config` — retained legacy data; no current writer or reader
 
 ### 8.6 Supporting tables
 projects, workflows, task_notes, task_history, task_dependencies, task_attachments, provider_config, github_identities, tools, agent_tool_assignments, story_point_model_routing, app_settings, security_events, dispatch_log.

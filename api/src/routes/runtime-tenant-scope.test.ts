@@ -24,7 +24,6 @@ jest.mock('../domains/runs/transcriptProvider', () => ({
 import chatRouter from './chat';
 import logsRouter from './logs';
 import sessionsRouter from './sessions';
-import telemetryRouter from './telemetry';
 import {
   chatMessageTenantScope,
   insertRuntimeLog,
@@ -99,16 +98,6 @@ async function setupDb(): Promise<void> {
       (2, 2, 602, 202, 'two private log', '2026-06-01T02:02:00Z'),
       (3, 1, NULL, 202, 'conflicting tenant log', '2026-06-01T03:02:00Z');
 
-    INSERT INTO task_creation_events (id, tenant_id, task_id, project_id, workflow_id, job_id, agent_id, source, confidence, scope_size, assumptions, open_questions, needs_split)
-    VALUES
-      (1, 1, 1001, 11, 111, 101, 101, 'manual', 'high', 'small', '[]', '[]', 0),
-      (2, 2, 2002, 22, 222, 202, 202, 'manual', 'high', 'small', '[]', '[]', 0);
-
-    INSERT INTO task_outcome_metrics (id, tenant_id, task_id, project_id, workflow_id, job_id, agent_id, first_pass_qa, failure_reasons, outcome_quality)
-    VALUES
-      (1, 1, 1001, 11, 111, 101, 101, 1, '[]', 'good'),
-      (2, 2, 2002, 22, 222, 202, 202, 1, '[]', 'good');
-
     SELECT setval(pg_get_serial_sequence('sessions', 'id'), 2, true);
     SELECT setval(pg_get_serial_sequence('logs', 'id'), 3, true);
   `);
@@ -120,7 +109,6 @@ function buildApp(): express.Express {
   app.use('/api/v1/chat', chatRouter);
   app.use('/api/v1/logs', logsRouter);
   app.use('/api/v1/sessions', sessionsRouter);
-  app.use('/api/v1/telemetry', telemetryRouter);
   return app;
 }
 
@@ -134,7 +122,7 @@ describe('runtime tenant scope', () => {
     await teardownTestDb();
   });
 
-  it('filters chat sessions, canonical sessions, logs, instance history, and telemetry to the active tenant', async () => {
+  it('filters chat sessions, canonical sessions, logs, and instance history to the active tenant', async () => {
     await setActiveTenant(2);
     const app = buildApp();
 
@@ -157,14 +145,6 @@ describe('runtime tenant scope', () => {
 
     const instances = await requestJson(app, '/api/v1/logs/instances');
     expect(instances.body.map((row: any) => row.id)).toEqual([602]);
-
-    const telemetry = await requestJson(app, '/api/v1/telemetry/review');
-    expect(telemetry.body.total).toBe(1);
-    expect(telemetry.body.tasks.map((row: any) => row.id)).toEqual([2002]);
-
-    const overview = await requestJson(app, '/api/v1/telemetry/overview');
-    expect(overview.body.total_created).toBe(1);
-    expect(overview.body.total_with_outcome).toBe(1);
   });
 
   it('imports canonical sessions with tenant ownership derived from the owning task', async () => {
