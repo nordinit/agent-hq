@@ -15,6 +15,7 @@ import { TaskModal } from '@/features/tasks/TaskModal';
 import { resolveEffectiveModel, shortModelName, useModelRoutingRules } from './modelRouting';
 import {
   AttachmentsSection,
+  CollapsibleSection,
   FailureStateSection,
   formatRuntimeEndSource,
   HistorySection,
@@ -1010,14 +1011,11 @@ export function TaskDetailPanel({ task, statuses, onClose, onSave, onDelete, onC
 
               {/* Description */}
               {localTask.description ? (
-                <div>
-                  <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">
-                    Description
-                  </p>
+                <CollapsibleSection sectionKey="description" title="Description">
                   <p className="text-sm text-slate-300 whitespace-pre-wrap bg-slate-800 border border-slate-700 rounded-lg p-3 leading-relaxed">
                     {localTask.description}
                   </p>
-                </div>
+                </CollapsibleSection>
               ) : (
                 <p className="text-sm text-slate-600 italic">No description</p>
               )}
@@ -1045,10 +1043,9 @@ export function TaskDetailPanel({ task, statuses, onClose, onSave, onDelete, onC
               <div className="border-t border-slate-800" />
 
               {/* History Section */}
-              <div>
-                <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3">History</p>
+              <CollapsibleSection sectionKey="history" title="History" className="mb-3">
                 <HistorySection taskId={localTask.id} />
-              </div>
+              </CollapsibleSection>
             </div>
           ) : (
             /* Edit mode */
