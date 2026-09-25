@@ -65,13 +65,23 @@ function isMainlineBranch(branch: string | null | undefined): boolean {
   return normalized === 'main' || normalized === 'master' || normalized === 'origin/main' || normalized === 'origin/master';
 }
 
+// Review and QA evidence exist to show work was checked somewhere other than production, so a
+// gated review_url or qa_tested_url that points at production is refused. Only the operator knows
+// what production looks like for their installation: AGENT_HQ_PRODUCTION_URL_MARKERS lists
+// comma-separated, case-insensitive substrings (a hostname, a port such as ":8443") that mark a URL
+// as production. Unset, no URL is treated as production here. Read per call so a changed
+// environment applies without a reload.
+function productionUrlMarkers(): string[] {
+  return (process.env.AGENT_HQ_PRODUCTION_URL_MARKERS ?? '')
+    .split(',')
+    .map((marker) => marker.trim().toLowerCase())
+    .filter(Boolean);
+}
+
 function isProductionLikeUrl(url: string | null | undefined): boolean {
   const value = String(url ?? '').trim().toLowerCase();
   if (!value) return false;
-  return value.includes(':3500')
-    || value.includes('agent-hq-production')
-    || value.includes('agent-hq-prod')
-    || value.includes('nordinitiatives.com');
+  return productionUrlMarkers().some((marker) => value.includes(marker));
 }
 
 const PLACEHOLDER_VALUES = new Set(['-', '—', 'n/a', 'na', 'none', 'null', 'undefined', 'tbd', 'todo', 'pending', 'placeholder']);

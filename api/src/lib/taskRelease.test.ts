@@ -214,6 +214,49 @@ describe('taskRelease configurable outcome routing', () => {
     expect(result.errors).not.toContain('default: review_commit');
   });
 
+  describe('production URL markers', () => {
+    const originalMarkers = process.env.AGENT_HQ_PRODUCTION_URL_MARKERS;
+
+    afterEach(() => {
+      if (originalMarkers === undefined) delete process.env.AGENT_HQ_PRODUCTION_URL_MARKERS;
+      else process.env.AGENT_HQ_PRODUCTION_URL_MARKERS = originalMarkers;
+    });
+
+    async function gateReviewUrl(reviewUrl: string) {
+      await db.run(`
+        INSERT INTO workflow_task_transition_requirements
+          (tenant_id, workflow_id, project_id, workflow_type, task_type, outcome, field_name, requirement_type, match_field, severity, message, enabled, priority)
+        VALUES (?, 10, 1, 'enhancements', NULL, 'ship_it', 'review_url', 'required', NULL, 'block', 'ship_it requires review_url', 1, 10)
+      `, tenantId);
+      const task = {
+        id: 42,
+        status: 'in_progress',
+        workflow_id: 10,
+        task_type: 'backend',
+        custom_fields_json: JSON.stringify({ review_url: reviewUrl }),
+      } as never;
+      return requireReleaseGate(db, task, 'ship_it', 'backend');
+    }
+
+    it('treats no URL as production when the operator configures no markers', async () => {
+      delete process.env.AGENT_HQ_PRODUCTION_URL_MARKERS;
+      const result = await gateReviewUrl('http://localhost:3500/tasks/42');
+      expect(result.errors).toEqual([]);
+    });
+
+    it('refuses review evidence that matches a configured production marker', async () => {
+      process.env.AGENT_HQ_PRODUCTION_URL_MARKERS = ' hq.example.com , :8443 ,';
+      const result = await gateReviewUrl('https://HQ.Example.com/tasks/42');
+      expect(result.errors).toEqual(['review_url must reference a non-production artifact']);
+    });
+
+    it('accepts review evidence that matches none of the configured markers', async () => {
+      process.env.AGENT_HQ_PRODUCTION_URL_MARKERS = 'hq.example.com,:8443';
+      const result = await gateReviewUrl('https://review-42.example.net/tasks/42');
+      expect(result.errors).toEqual([]);
+    });
+  });
+
   it('still restates the task status as a release badge', async () => {
     // The badge survives because it describes where the task is, rather than ruling on it.
     const review = await evaluateTaskIntegrity({ status: 'review', workflow_id: 10, task_type: 'design' }, db);

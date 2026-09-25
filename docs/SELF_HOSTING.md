@@ -73,6 +73,11 @@ AGENT_HQ_POSTGRES_PASSWORD=replace-with-a-long-url-safe-random-value
 directly; the API refuses other cross-origin browser requests. The UI's own pages go through its
 server and need no entry.
 
+`AGENT_HQ_PRODUCTION_URL_MARKERS` (optional) lists comma-separated, case-insensitive substrings
+that mark a URL as production, such as your production hostname or port. Workflow gates then
+refuse `review_url` and `qa_tested_url` evidence containing one, so review and QA cannot cite
+production. Unset, no URL is treated as production.
+
 The UI container reaches the API over the Compose network (`AGENT_HQ_INTERNAL_BASE_URL`). The
 browser talks to the UI, except for the chat WebSocket, which it opens on the API port under the
 same host name as the page.
