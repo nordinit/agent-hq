@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { availableTelemetryDisplays, moveTelemetryWidget, sortedTelemetryGroups, telemetryDimensionLabel, telemetryGroupLabel, telemetryTimeSeries, telemetryWidgetQuery } from './telemetryViews.ts';
+import { availableTelemetryDisplays, sortedTelemetryGroups, telemetryDimensionLabel, telemetryGroupLabel, telemetryTimeSeries, telemetryWidgetQuery } from './telemetryViews.ts';
 import { buildTelemetryDefinition, newTelemetryGuide, telemetryGuideFromDefinition } from './telemetryBuilder.ts';
 import { telemetryGuideSelectionIssue } from './telemetryBuilderOptions.ts';
 import { metricAttributionIssues } from './telemetry-contracts/requirements.ts';
@@ -48,6 +48,4 @@ test('widgets retain pins, intersect scope, and do not turn snapshot counts into
   assert.throws(()=>telemetryWidgetQuery(widget,count,{project_id:12}),/conflicts/);
   assert.equal(telemetryWidgetQuery({...widget,view:{scope:{include_archived:true}}},count,{include_archived:false}).scope?.include_archived,false);
   assert.equal(telemetryWidgetQuery({...widget,view:{timezone:'America/New_York'}},count,{}, {timezone:'UTC'}).timezone,'America/New_York');
-  const widgets=[widget,{...widget,id:'two'}];const moved=moveTelemetryWidget(widgets,0,1);
-  assert.deepEqual(moved.map(item=>item.id),['two','one']);assert.equal(widgets[0].id,'one');
 });

@@ -65,7 +65,3 @@ export function telemetryResponseResults(response: TelemetryQueryResponse): Tele
   if(response.error) throw new Error(typeof response.error==='string'?response.error:response.error.message??'Calculation failed.');
   return (response.results??(response.coverage?[response as TelemetryResult]:[])).map(result=>({...result,query_id:result.query_id??response.query_id,expires_at:result.expires_at??response.expires_at,as_of:result.as_of??response.as_of!}));
 }
-export function moveTelemetryWidget(widgets: TelemetryWidget[], from: number, to: number) {
-  if(from<0||to<0||from>=widgets.length||to>=widgets.length)return widgets;
-  const next=[...widgets];const [widget]=next.splice(from,1);next.splice(to,0,widget);return next;
-}

@@ -6,9 +6,9 @@ The number, horizontal bars, and table support current snapshots. Time charts re
 
 **Save view** stores the pinned metric revision, breakdown, chart, sort, filters, and time settings separately from the metric. Updating the metric does not silently update existing views. Select the metric again to start a view of its latest revision.
 
-The dashboard selector retains **Operational overview** and adds named metric dashboards. Create a dashboard, add saved views, and use **Edit dashboard** to arrange, duplicate, remove, or resize widgets. Drag handles and Earlier/Later buttons change order. Width and height controls provide keyboard-accessible resizing. Save persists the layout. Adding a view copies its pinned configuration, so later changes to the source view do not alter existing dashboards.
+Dashboards are configurable pages; see [Configurable dashboard pages](dashboard-pages.md) for layout editing, filters, and storage. While editing a page, **+ Add block** offers saved views alongside metrics. Adding a view copies its pinned configuration into the page's metric bindings, so later changes to the source view do not alter existing dashboards.
 
-Shared project and time filters apply to dashboard widgets. A widget can narrow scope and override its time range; overrides are labeled. Current snapshots ignore historical dashboard dates and continue to describe current inventory. Refresh recalculates widgets; pending query edits are marked stale. Each widget has independent errors and can expand or open in Analyze.
+Page project and time filters apply to its metric blocks. A binding can narrow scope and override its time range; overrides are labeled. Current snapshots ignore historical dashboard dates and continue to describe current inventory. Each block reports its own errors, and a saved, unchanged binding opens in Analyze from its detail drawer.
 
 ## Validation and attribution
 

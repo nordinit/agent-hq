@@ -27,7 +27,7 @@ Dashboard endpoints are under `/api/v1/telemetry/v2/dashboards`: list, create, r
 
 Page documents have a schema version, appearance, scope/date defaults, metric bindings, and a section/column/block tree. Limits are 24 sections, 80 blocks total, 40 blocks per column, and 10 metric bindings. Column weights are integers totaling 12 per section. Block/column/section identities must be unique. Link blocks accept HTTP(S) URLs and local paths.
 
-Legacy dashboards remain available in the selector. Rolling back the UI does not require deleting new page documents or reversing the additive resource-kind migration. Autosaved drafts, a revision-history/restore UI, reusable sections, richer text/image editing, and simultaneous collaborative editing remain follow-on work.
+Rolling back the UI does not require deleting new page documents or reversing the additive resource-kind migration. Autosaved drafts, a revision-history/restore UI, reusable sections, richer text/image editing, and simultaneous collaborative editing remain follow-on work.
 
 ## Isolated preview and verification
 
