@@ -64,6 +64,19 @@ function serializeEnvValue(value) {
   return typeof value === 'string' ? value : JSON.stringify(value);
 }
 
+/**
+ * Agent HQ credentials in the gateway's environment — the plugin's own API token, an operator
+ * token, an MCP key, a database password — belong to the gateway, not to the tools it runs. A
+ * shell or script tool runs agent-directed commands, and inheriting the operator token would hand
+ * every agent full operator access to the API. Errs towards stripping: a false match costs a tool
+ * an environment variable, a miss leaks a secret.
+ */
+const AGENT_HQ_CREDENTIAL_ENV_RE = /^AGENT_HQ_\w*(?:TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL|DATABASE_URL)/i;
+
+export function isAgentHqCredentialEnvName(name) {
+  return AGENT_HQ_CREDENTIAL_ENV_RE.test(name);
+}
+
 export function buildToolExecutionEnv(input, executionEnv = {}, baseEnv = process.env) {
   const normalizedInput = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
   const directInputEnv = Object.fromEntries(
@@ -71,9 +84,12 @@ export function buildToolExecutionEnv(input, executionEnv = {}, baseEnv = proces
       .filter(([key]) => ENV_NAME_RE.test(key) && !(key in baseEnv) && !(key in executionEnv))
       .map(([key, value]) => [key, serializeEnvValue(value)]),
   );
+  const inheritedEnv = Object.fromEntries(
+    Object.entries(baseEnv).filter(([key]) => !isAgentHqCredentialEnvName(key)),
+  );
 
   return {
-    ...baseEnv,
+    ...inheritedEnv,
     ...executionEnv,
     ...directInputEnv,
     TOOL_INPUT: JSON.stringify(normalizedInput),

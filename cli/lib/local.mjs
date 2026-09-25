@@ -247,7 +247,7 @@ function configureOpenClawPluginAt(pluginDir, apiPort) {
     enabled: true,
     // The plugin calls the API, which requires a credential. It reads the operator token from the
     // file on each call, so the secret itself stays out of openclaw.json and out of the
-    // gateway's environment, which every tool the plugin runs inherits.
+    // gateway's environment, and a rotated token needs no gateway restart.
     config: {
       ...existingPluginConfig,
       apiUrl: `http://127.0.0.1:${apiPort}`,

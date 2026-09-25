@@ -10,7 +10,9 @@ Every Agent HQ `/api/v1` request must authenticate, so the plugin needs a creden
 2. `apiTokenFile` in the plugin's OpenClaw config: a file holding the token alone, or dotenv lines with `AGENT_HQ_OPERATOR_TOKEN` (such as the `~/.agent-hq/.env` that `agent-hq start` writes). Re-read on every fetch, so a rotated token is picked up without a restart.
 3. `AGENT_HQ_API_TOKEN` in the gateway's environment.
 
-Prefer `apiTokenFile`. The gateway's environment is inherited by every shell and script tool the plugin runs, and a token in `openclaw.json` sits in a file that is often copied around while debugging.
+Prefer `apiTokenFile`: it keeps the secret out of the gateway's environment and out of `openclaw.json`, a file that is often copied around while debugging.
+
+Shell and script tools inherit the gateway's environment minus any Agent HQ credential: variables named `AGENT_HQ_*` containing `TOKEN`, `KEY`, `SECRET`, `PASSWORD`, `CREDENTIAL` or `DATABASE_URL` are removed, so a tool never receives the plugin's token. A tool definition that needs one must set it in its own `env`.
 
 The API URL comes from `apiUrl` in the plugin config, then `AGENT_HQ_API_URL`, then `http://127.0.0.1:3501`.
 
