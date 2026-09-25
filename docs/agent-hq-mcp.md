@@ -79,7 +79,7 @@ Once connected, you can ask things like:
 - raw database access
 - arbitrary instance control beyond the scoped lifecycle write surfaces
 - raw attachment internals outside the typed project-file and workflow-file tools
-- browser pool or other internal runtime concerns
+- internal runtime concerns
 
 ---
 
