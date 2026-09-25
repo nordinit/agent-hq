@@ -4,6 +4,7 @@ import * as path from 'path';
 import multer from 'multer';
 import { getDb } from '../../db/client';
 import { resolveUploadsRoot } from '../../config';
+import { setUserContentHeaders } from '../../lib/userContentHeaders';
 
 function getChatUploadsBase(): string {
   return process.env.AGENT_HQ_CHAT_UPLOADS_DIR ?? path.join(resolveUploadsRoot(), 'chat');
@@ -84,8 +85,8 @@ export function registerAttachmentRoutes(router: Router): void {
       if (!record) return res.status(404).json({ error: 'Attachment not found' });
       const filepath = record.filepath as string;
       if (!fs.existsSync(filepath)) return res.status(404).json({ error: 'File not found on disk' });
-      res.setHeader('Content-Disposition', `inline; filename="${record.filename as string}"`);
-      res.setHeader('Content-Type', record.mime_type as string);
+      // The MIME type is whatever the uploader declared; only inert types are shown inline.
+      setUserContentHeaders(res, { mimeType: record.mime_type, filename: String(record.filename ?? '') });
       return res.sendFile(filepath);
     } catch (err) {
       return res.status(500).json({ error: String(err) });

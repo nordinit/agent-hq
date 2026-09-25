@@ -52,6 +52,7 @@ import { getMcpIdentityFromRequest } from '../lib/mcpApiAuth';
 import { WorkflowAllowedValuesError, workflowAllowedValuesErrorBody } from '../lib/taskStatusValidation';
 import { resolveTenantIdFromRequest } from '../lib/tenantContext';
 import { resolveUploadsRoot } from '../config';
+import { setUserContentHeaders } from '../lib/userContentHeaders';
 
 const ACTIVE_TASK_INSTANCE_STATUSES = new Set(['queued', 'dispatched', 'running']);
 
@@ -1063,8 +1064,8 @@ router.get('/:id/attachments/:attachmentId/download', async (req: Request, res: 
     if (!attachment) return res.status(404).json({ error: 'Attachment not found' });
     if (!fs.existsSync(attachment.filepath)) return res.status(404).json({ error: 'File not found on disk' });
 
-    res.setHeader('Content-Type', attachment.mime_type || 'application/octet-stream');
-    res.setHeader('Content-Disposition', `inline; filename="${attachment.filename}"`);
+    // The MIME type is whatever the uploader declared; only inert types are shown inline.
+    setUserContentHeaders(res, { mimeType: attachment.mime_type, filename: attachment.filename });
     fs.createReadStream(attachment.filepath).pipe(res);
   } catch (err) {
     res.status(500).json({ error: String(err) });

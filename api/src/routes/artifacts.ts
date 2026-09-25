@@ -7,8 +7,10 @@
  */
 
 import { Router, Request, Response } from 'express';
+import path from 'path';
 import { getDb } from '../db/client';
 import { resolveTenantIdFromRequest } from '../lib/tenantContext';
+import { setUserContentHeaders } from '../lib/userContentHeaders';
 import {
   resolveWorkspaceProvider,
   FileNotFoundError,
@@ -122,6 +124,9 @@ router.post('/mkdir', async (req: Request, res: Response) => {
 });
 
 // GET /api/v1/artifacts/raw?path=...  — serves the file with proper Content-Type
+//
+// Agents write these files, so they are user content: SVG and anything else that can script is
+// a sandboxed download, never a document rendered in the UI's origin. <img> previews still work.
 router.get('/raw', async (req: Request, res: Response) => {
   try {
     const relPath = req.query.path as string;
@@ -130,7 +135,7 @@ router.get('/raw', async (req: Request, res: Response) => {
     const provider = await getWorkspaceProviderForRequest(req);
     const raw = await provider.rawFile(relPath);
 
-    res.setHeader('Content-Type', raw.mime);
+    setUserContentHeaders(res, { mimeType: raw.mime, filename: path.basename(relPath) });
     res.setHeader('Cache-Control', 'no-cache');
 
     if (raw.stream) {

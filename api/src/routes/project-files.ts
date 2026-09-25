@@ -6,6 +6,7 @@ import { getDb } from '../db/client';
 import { resolveTenantIdFromRequest } from '../lib/tenantContext';
 import { nowTimestamp } from '../lib/timestamps';
 import { resolveUploadsRoot } from '../config';
+import { setUserContentHeaders } from '../lib/userContentHeaders';
 
 const router = Router({ mergeParams: true });
 
@@ -237,11 +238,7 @@ router.get('/:fileId/download', async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'File not found on disk' });
     }
 
-    res.setHeader('Content-Type', file.mime_type || 'application/octet-stream');
-    res.setHeader(
-      'Content-Disposition',
-      `attachment; filename="${encodeURIComponent(file.original_name)}"`
-    );
+    setUserContentHeaders(res, { mimeType: file.mime_type, filename: file.original_name, download: true });
     return res.sendFile(path.resolve(file.file_path));
   } catch (err) {
     return sendRouteError(res, err);

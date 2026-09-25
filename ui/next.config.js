@@ -9,6 +9,19 @@ const nextConfig = {
   // complete tracing boundary for the UI image, so pin it explicitly.
   outputFileTracingRoot: path.resolve(__dirname),
   reactStrictMode: true,
+  poweredByHeader: false,
+  // The operator UI drives host-executing tools with a click, so no other site may frame it.
+  async headers() {
+    return [{
+      source: '/:path*',
+      headers: [
+        { key: 'X-Frame-Options', value: 'DENY' },
+        { key: 'Content-Security-Policy', value: "frame-ancestors 'none'" },
+        { key: 'X-Content-Type-Options', value: 'nosniff' },
+        { key: 'Referrer-Policy', value: 'same-origin' },
+      ],
+    }];
+  },
 };
 
 module.exports = nextConfig;

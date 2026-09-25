@@ -58,6 +58,7 @@ import { createMcpOAuthRouter, resolveMcpOAuthConfigFromEnv } from './mcp/oauth/
 import { authorizeMcpApiRequestIfPresent } from './lib/mcpApiAuth';
 import { ApiAuthConfigError, authenticateApiRequest, createChatWebSocketVerifier, resolveApiAuthConfigFromEnv } from './lib/apiAuth';
 import { handleJsonRequestErrors } from './lib/jsonRequestErrors';
+import { apiSecurityHeaders } from './lib/userContentHeaders';
 import openApiRouter from './openapi/router';
 import { getDashboardTokenUsageLast24h } from './domains/dashboard/stats';
 import { resolveTenantIdFromRequest } from './lib/tenantContext';
@@ -81,6 +82,8 @@ if (apiAuthConfig.mode === 'report') {
 }
 
 const app = express();
+app.disable('x-powered-by');
+app.use(apiSecurityHeaders);
 const PORT = process.env.PORT ?? 3501;
 // Loopback by default: agents run commands on this host, so the API stays off the network unless
 // the operator publishes it deliberately. Containers set HOST=0.0.0.0 and publish the port on the
