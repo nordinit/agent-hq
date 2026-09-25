@@ -12,6 +12,12 @@
  *
  * Abort (optional): POST to abortUrl with { runId, sessionKey }.
  * If abortUrl is not configured, abort() is a no-op.
+ *
+ * The URLs are operator configuration. Scoped MCP keys cannot set runtime_type or any
+ * runtime_config key beyond model/effort/limits (see agentHostExecutionFieldChange in
+ * lib/mcpApiAuth.ts), so no private-address filtering is applied here. What the endpoint
+ * answers is another matter: dispatch errors end up in run records and task history that
+ * agents read, so they carry the HTTP status and never the response body.
  */
 
 import type { AgentRuntime, DispatchParams, PrepareAuthProfilesParams, RuntimeAuthProfileSyncResult } from './types';
@@ -125,18 +131,17 @@ export class WebhookRuntime implements AgentRuntime {
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      throw new Error(
-        `WebhookRuntime: POST ${this.config.dispatchUrl} failed — ${message}`,
-      );
+      // The URL can carry credentials in its query string; the operator already knows it.
+      throw new Error(`WebhookRuntime: dispatch request failed — ${message}`);
     } finally {
       clearTimeout(timer);
     }
 
     if (!resp.ok) {
       const text = await resp.text().catch(() => '');
-      throw new Error(
-        `WebhookRuntime: POST ${this.config.dispatchUrl} returned ${resp.status}: ${text.slice(0, 500)}`,
-      );
+      // Operator-only server log; the thrown error is what reaches run records and agents.
+      console.warn(`[webhook-runtime] dispatch endpoint returned HTTP ${resp.status}: ${text.slice(0, 200)}`);
+      throw new Error(`WebhookRuntime: dispatch endpoint returned HTTP ${resp.status}`);
     }
 
     const result = (await resp.json().catch(() => ({}))) as Partial<DispatchResponse>;

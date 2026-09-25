@@ -49,6 +49,30 @@ describe('WebhookRuntime', () => {
     expect(JSON.stringify(body)).not.toContain('/api/v1/instances');
   });
 
+  it('reports a failed dispatch by status without echoing the endpoint response or URL', async () => {
+    global.fetch = jest.fn(async (..._args: Parameters<typeof fetch>) => ({
+      ok: false,
+      status: 500,
+      text: async () => 'root:x:0:0:root:/root:/bin/bash\nAWS_SECRET_ACCESS_KEY=abc123',
+    } as unknown as Response)) as jest.MockedFunction<typeof fetch>;
+    jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const runtime = new WebhookRuntime({ dispatchUrl: 'http://10.0.0.5/dispatch?token=hook-secret' });
+    const failure = await runtime.dispatch(buildParams()).then(() => null, (err: Error) => err);
+
+    expect(failure?.message).toBe('WebhookRuntime: dispatch endpoint returned HTTP 500');
+    expect(failure?.message).not.toMatch(/root:x|AWS_SECRET|hook-secret/);
+  });
+
+  it('does not put the dispatch URL in network errors', async () => {
+    global.fetch = jest.fn(async (..._args: Parameters<typeof fetch>): Promise<Response> => {
+      throw new Error('fetch failed');
+    }) as jest.MockedFunction<typeof fetch>;
+
+    const runtime = new WebhookRuntime({ dispatchUrl: 'http://10.0.0.5/dispatch?token=hook-secret' });
+    await expect(runtime.dispatch(buildParams())).rejects.toThrow('WebhookRuntime: dispatch request failed — fetch failed');
+  });
+
   it('rejects removed lifecycleProxy config clearly', () => {
     expect(() => new WebhookRuntime({
       dispatchUrl: 'https://remote.example/dispatch',
