@@ -554,7 +554,7 @@ export default function WorkspacesPage() {
   };
 
   return (
-    <div className="flex flex-col h-full" style={{ minHeight: 'calc(100vh - 3rem)' }}>
+    <div className="flex flex-col h-full" style={{ minHeight: 'calc(100vh - 3rem)' }} data-tour-target="workspaces-main">
       <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
         <div className="flex items-center gap-2">
           <Files className="w-5 h-5 text-amber-400" />

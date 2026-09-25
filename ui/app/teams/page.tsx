@@ -57,7 +57,7 @@ export default function TeamsPage() {
   };
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-6 space-y-6" data-tour-target="teams-main">
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold text-slate-100 flex items-center gap-2">

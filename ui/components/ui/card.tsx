@@ -1,8 +1,9 @@
 import React from 'react';
 
-export function Card({ children, className = '' }: { children: React.ReactNode; className?: string }) {
+// Extra attributes (for example data-tour-target) pass through to the wrapper div.
+export function Card({ children, className = '', ...props }: React.HTMLAttributes<HTMLDivElement>) {
   return (
-    <div className={`bg-slate-800/60 border border-slate-700/50 rounded-xl p-5 ${className}`}>
+    <div {...props} className={`bg-slate-800/60 border border-slate-700/50 rounded-xl p-5 ${className}`}>
       {children}
     </div>
   );

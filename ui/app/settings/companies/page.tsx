@@ -90,7 +90,7 @@ export default function SettingsCompaniesPage() {
   }
 
   return (
-    <div className="max-w-5xl space-y-5">
+    <div className="max-w-5xl space-y-5" data-tour-target="settings-tenants-main">
       <div className="flex items-center justify-between gap-3">
         <div>
           <h2 className="text-lg font-semibold text-white">Tenants</h2>

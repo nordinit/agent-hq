@@ -238,7 +238,7 @@ export default function RoutingPage() {
       )}
 
       {/* Tabs — scrollable on mobile */}
-      <div className="border-b border-slate-700/50 overflow-x-auto scrollbar-none">
+      <div className="border-b border-slate-700/50 overflow-x-auto scrollbar-none" data-tour-target="routing-tabs">
         <div className="flex gap-1 min-w-max">
           {tabs.map(tab => (
             <button

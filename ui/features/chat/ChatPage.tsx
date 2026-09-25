@@ -1374,7 +1374,7 @@ function ChatPageInner() {
   return (
     <div className="flex h-full flex-col md:flex-row">
       {/* ── Col 1: Agent list ── */}
-      <div className={`${mobileView === 'agents' ? 'flex' : 'hidden'} w-full shrink-0 bg-slate-800/40 border-r border-slate-700/50 flex-col md:flex md:w-48`}>
+      <div className={`${mobileView === 'agents' ? 'flex' : 'hidden'} w-full shrink-0 bg-slate-800/40 border-r border-slate-700/50 flex-col md:flex md:w-48`} data-tour-target="chat-agents-panel">
         <div className="px-4 py-3 border-b border-slate-700/50 space-y-3">
           <div className="flex items-center gap-2">
             <MessageSquare className="w-4 h-4 text-amber-400" />

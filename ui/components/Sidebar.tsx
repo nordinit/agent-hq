@@ -26,7 +26,7 @@ import {
   MoreHorizontal,
   X,
 } from 'lucide-react';
-import { beginGettingStartedGuide } from '@/lib/gettingStarted';
+import { openGettingStartedChooser } from '@/lib/gettingStarted';
 import { Button } from '@/components/ui/button';
 
 const navItems = [
@@ -178,7 +178,7 @@ export default function Sidebar() {
           <div className="px-5 py-4 border-t border-slate-800">
             <button
               type="button"
-              onClick={() => beginGettingStartedGuide(0)}
+              onClick={() => openGettingStartedChooser()}
               className="mb-3 inline-flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-xs font-medium text-slate-300 transition-colors hover:border-slate-500 hover:text-white"
             >
               <HelpCircle className="w-3.5 h-3.5 text-amber-400" />
@@ -202,9 +202,9 @@ export default function Sidebar() {
           <div className="px-1 py-3 border-t border-slate-800 flex flex-col items-center gap-1">
             <button
               type="button"
-              onClick={() => beginGettingStartedGuide(0)}
+              onClick={() => openGettingStartedChooser()}
               className="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
-              title="Replay getting started guide"
+              title="Getting started guide"
             >
               <HelpCircle className="w-4 h-4 text-amber-400" />
             </button>
@@ -276,7 +276,7 @@ export default function Sidebar() {
                     size="md"
                     onClick={() => {
                       setShowMobileMenu(false);
-                      beginGettingStartedGuide(0);
+                      openGettingStartedChooser();
                     }}
                     className="w-full justify-start rounded-2xl border border-slate-800 bg-slate-900/70 px-3 py-3 text-left text-slate-300 hover:border-slate-700"
                   >
