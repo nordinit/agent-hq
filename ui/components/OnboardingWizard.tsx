@@ -294,7 +294,7 @@ export default function OnboardingWizard({ onClose }: Props) {
     try {
       await api.skipOnboarding();
       markOnboarded();
-      beginGettingStartedGuide(0);
+      beginGettingStartedGuide('essentials');
       onClose();
       router.push('/');
     } catch (e) {
@@ -576,7 +576,7 @@ export default function OnboardingWizard({ onClose }: Props) {
 
   async function handleFinish() {
     markOnboarded();
-    beginGettingStartedGuide(0);
+    beginGettingStartedGuide('essentials');
     onClose();
     router.push('/');
   }
