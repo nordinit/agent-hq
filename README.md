@@ -503,11 +503,11 @@ Inputs:
 
 - scope: a project, a workflow type, or a single workflow (a workflow rule overrides a workflow-type rule, which overrides a project rule)
 - a story-point threshold: the smallest `max_points` bucket that covers the task's story points wins
-- optionally, a provider: rules for the agent's preferred provider win over rules without one
+- the agent's preferred provider: only rules for that provider or for no provider apply, and a provider-specific rule wins a tie
 
 Outputs:
 
-- provider and model
+- model (a provider-qualified name such as `anthropic/claude-sonnet-4-6`)
 - thinking level
 - fast mode
 - max turns

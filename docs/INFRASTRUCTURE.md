@@ -312,9 +312,9 @@ The runtime is chosen by `agents.runtime_type` (`api/src/runtimes/index.ts`); an
 
 ### Model routing
 Model routing rules (`story_point_model_routing`) are scoped to a project, a workflow type (within
-a project or for all projects), or a single workflow; the most specific scope wins. Within a scope, a rule for the
-agent's preferred provider wins over a provider-less rule, and the smallest `max_points`
-bucket that covers the task's story points is chosen. A rule sets the model, thinking level,
+a project or for all projects), or a single workflow; the most specific scope wins. Within a scope, only rules for the
+agent's preferred provider or for no provider apply; the smallest `max_points` bucket that
+covers the task's story points is chosen, and a provider-specific rule wins a tie. A rule sets the model, thinking level,
 fast mode, max turns, and max budget. A matching rule's model takes precedence over the agent's
 own model. The default install adds project rules for up to 2, 5, and 13 story points.
 
