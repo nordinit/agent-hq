@@ -63,6 +63,9 @@ module.exports = {
         AGENT_HQ_AUTH_MODE: env.AGENT_HQ_AUTH_MODE,
       },
       autorestart: true,
+      // Database outages must not spin a new API process on every failed boot.
+      // PM2 increases this delay up to 15 seconds, then resets it after stability.
+      exp_backoff_restart_delay: 1000,
       watch: false,
       merge_logs: true,
     },

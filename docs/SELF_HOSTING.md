@@ -190,6 +190,12 @@ Alternatively, use the checked-in PM2 ecosystem files, which read the repository
 deliberately scoped `AGENT_HQ_DEV_DATABASE_URL` to the API process so a copied production
 environment cannot silently attach dev to production.
 
+The production and development APIs use PM2 exponential restart backoff, starting at one second
+and increasing to 15 seconds. This keeps a PostgreSQL outage from causing a tight
+process restart loop. When updating an existing PM2 process, apply the same policy
+with `pm2 restart agent-hq-api --exp-backoff-restart-delay=1000`, then run `pm2 save`
+so the policy survives PM2 resurrection.
+
 ## CLI launcher
 
 `agent-hq start` uses Docker by default when Docker is available, giving a complete

@@ -61,6 +61,8 @@ module.exports = {
         AGENT_HQ_AUTH_MODE: env.AGENT_HQ_AUTH_MODE,
       },
       autorestart: true,
+      // Keep database outages from causing a tight API restart loop.
+      exp_backoff_restart_delay: 1000,
       watch: false,
       merge_logs: true,
     },
