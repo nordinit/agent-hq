@@ -1,6 +1,5 @@
 import crypto from 'crypto';
 import fs from 'fs';
-import os from 'os';
 import path from 'path';
 import { WebSocket } from 'ws';
 import {
@@ -10,17 +9,11 @@ import {
 } from '../../config';
 import { openClawGatewayWsOptions } from '../../lib/openclawGatewayWs';
 import { resolveOpenClawGatewayProtocolVersion } from '../../lib/openclawGatewayProtocol';
+import { loadDeviceIdentity } from '../../lib/openclawDeviceIdentity';
+export { loadDeviceIdentity, DeviceIdentity } from '../../lib/openclawDeviceIdentity';
 
 export const GATEWAY_URL = OPENCLAW_GATEWAY_URL;
 export const GATEWAY_WS_URL = OPENCLAW_GATEWAY_WS_URL;
-
-export interface DeviceIdentity {
-  version: number;
-  deviceId: string;
-  publicKeyPem: string;
-  privateKeyPem: string;
-  createdAtMs: number;
-}
 
 export interface GatewayRpcCallResult {
   ok: boolean;
@@ -278,21 +271,6 @@ export function getGatewayAuthToken(): string {
 
 export function getHooksToken(): string {
   return process.env.OPENCLAW_HOOKS_TOKEN ?? readHooksTokenFromConfig() ?? '';
-}
-
-export function loadDeviceIdentity(): DeviceIdentity | null {
-  try {
-    const identityPath = path.join(os.homedir(), '.openclaw', 'identity', 'device.json');
-    const raw = fs.readFileSync(identityPath, 'utf8');
-    const parsed = JSON.parse(raw);
-    if (parsed?.version === 1 && typeof parsed.deviceId === 'string' &&
-        typeof parsed.publicKeyPem === 'string' && typeof parsed.privateKeyPem === 'string') {
-      return parsed as DeviceIdentity;
-    }
-    return null;
-  } catch {
-    return null;
-  }
 }
 
 function base64UrlEncode(buf: Buffer): string {
