@@ -1,6 +1,5 @@
 import fs from 'fs';
-import os from 'os';
-import path from 'path';
+import { loadDeviceIdentity } from './openclawDeviceIdentity';
 import { OPENCLAW_CONFIG_PATH } from '../config';
 import { runOpenClawSync } from './openclawCli';
 
@@ -110,14 +109,7 @@ function collectPendingRequests(value: unknown, acc: PendingRequest[], inherited
 }
 
 function loadLocalDeviceId(): string | null {
-  try {
-    const identityPath = path.join(os.homedir(), '.openclaw', 'identity', 'device.json');
-    const raw = fs.readFileSync(identityPath, 'utf8');
-    const parsed = JSON.parse(raw) as { deviceId?: unknown };
-    return typeof parsed.deviceId === 'string' && parsed.deviceId.trim() ? parsed.deviceId.trim() : null;
-  } catch {
-    return null;
-  }
+  return loadDeviceIdentity()?.deviceId.trim() || null;
 }
 
 export function isLocalGatewayTarget(target: string | null | undefined): boolean {

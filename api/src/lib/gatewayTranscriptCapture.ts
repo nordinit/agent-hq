@@ -58,6 +58,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { OPENCLAW_GATEWAY_WS_URL } from '../config';
+import { loadDeviceIdentity } from './openclawDeviceIdentity';
 import { getDb } from '../db/client';
 import { normalizeChatMessageRole } from './chatMessageRoles';
 import { tableHasColumn } from './durableRunIdentity';
@@ -96,33 +97,6 @@ function normalizeChatRole(role: unknown, eventType?: unknown) {
 }
 
 // ── Device Identity (for signed connect) ─────────────────────────────────────
-
-interface DeviceIdentity {
-  version: number;
-  deviceId: string;
-  publicKeyPem: string;
-  privateKeyPem: string;
-  createdAtMs: number;
-}
-
-function loadDeviceIdentity(): DeviceIdentity | null {
-  try {
-    const identityPath = path.join(os.homedir(), '.openclaw', 'identity', 'device.json');
-    const raw = fs.readFileSync(identityPath, 'utf8');
-    const parsed = JSON.parse(raw);
-    if (
-      parsed?.version === 1 &&
-      typeof parsed.deviceId === 'string' &&
-      typeof parsed.publicKeyPem === 'string' &&
-      typeof parsed.privateKeyPem === 'string'
-    ) {
-      return parsed as DeviceIdentity;
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
 
 function base64UrlEncode(buf: Buffer): string {
   return buf.toString('base64').replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/g, '');

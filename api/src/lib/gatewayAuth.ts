@@ -1,7 +1,5 @@
 import * as crypto from 'crypto';
-import * as fs from 'fs';
-import * as os from 'os';
-import * as path from 'path';
+import { loadDeviceIdentity } from './openclawDeviceIdentity';
 import { getConfiguredGatewayAuthToken } from './gatewaySettings';
 
 export interface GatewayDeviceIdentity {
@@ -27,18 +25,7 @@ export async function getGatewayAuthToken(): Promise<string> {
 }
 
 export function loadGatewayDeviceIdentity(): GatewayDeviceIdentity | null {
-  try {
-    const identityPath = path.join(os.homedir(), '.openclaw', 'identity', 'device.json');
-    const raw = fs.readFileSync(identityPath, 'utf8');
-    const parsed = JSON.parse(raw);
-    if (parsed?.version === 1 && typeof parsed.deviceId === 'string' &&
-        typeof parsed.publicKeyPem === 'string' && typeof parsed.privateKeyPem === 'string') {
-      return parsed as GatewayDeviceIdentity;
-    }
-    return null;
-  } catch {
-    return null;
-  }
+  return loadDeviceIdentity();
 }
 
 function base64UrlEncode(buf: Buffer): string {
