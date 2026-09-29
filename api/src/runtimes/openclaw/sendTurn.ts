@@ -13,6 +13,7 @@ export async function sendOpenClawTurn(params: {
   runId?: string;
   cwd?: string;
   metadata?: Record<string, unknown>;
+  beforeSend?: () => void;
   instance?: { db: Db; id: number; tenantId: number };
 }): Promise<{ ok: boolean; runId?: string; error?: string }> {
   const runId = params.runId ?? randomUUID();
@@ -29,6 +30,7 @@ export async function sendOpenClawTurn(params: {
     if (!stored.changes) return { ok: false, error: 'Run was stopped before dispatch' };
   }
 
+  params.beforeSend?.();
   const result = await gatewayWsSend({ ...params, runId });
   // chat.send uses the idempotency key as its run ID. Retain an explicitly
   // returned ID for compatibility with other gateway versions.

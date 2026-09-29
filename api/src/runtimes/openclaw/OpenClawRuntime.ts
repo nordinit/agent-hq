@@ -1,3 +1,5 @@
+import { assertOpenClawBundleRevision } from './mcpAdmission';
+import { serializeOpenClawMaintenance } from './maintenanceCommand';
 /**
  * runtimes/OpenClawRuntime.ts — AgentRuntime backed by the OpenClaw gateway.
  *
@@ -6,7 +8,7 @@
  * The dispatcher now calls this via the AgentRuntime interface.
  */
 
-import { execFile } from 'child_process';
+import { probeOpenClawMcpBundle } from './mcpPreflight';
 import type {
   AgentRuntime,
   DispatchParams,
@@ -34,7 +36,6 @@ import {
 } from './transcript';
 import { requireRuntimeTenantId } from '../../lib/runtimeTenantScope';
 import { nowTimestamp } from '../../lib/timestamps';
-import { buildOpenClawEnv } from '../../lib/openclawCli';
 
 function normalizeRepoContextValue(value: string | null | undefined): string | null {
   const normalized = value?.trim();
@@ -93,7 +94,7 @@ function appendOpenClawRepoContext(message: string, repoContextSection: string |
   return `${message.trimEnd()}\n\n${repoContextSection}`;
 }
 
-const MCP_STALE_NOTICE_IDS = new Set(['mcp-stale-catalog', 'mcp-not-yet-listed', 'mcp-not-yet-connected']);
+const MCP_STALE_NOTICE_IDS = new Set(['mcp-stale-catalog', 'mcp-stale-config', 'mcp-not-yet-listed', 'mcp-not-yet-connected']);
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -108,115 +109,13 @@ function openClawToolNameMatches(actualName: string, requiredName: string): bool
   return actualName.endsWith(`___${requiredName}`) || actualName.endsWith(`__${requiredName}`);
 }
 
-function extractJsonObject(raw: string): unknown {
-  const start = raw.indexOf('{');
-  const end = raw.lastIndexOf('}');
-  if (start < 0 || end < start) throw new Error('command output did not contain a JSON object');
-  return JSON.parse(raw.slice(start, end + 1));
-}
-
-function collectStringValues(value: unknown, keys: Set<string>, out = new Set<string>()): string[] {
-  if (!value || typeof value !== 'object') return Array.from(out).sort();
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      if (typeof item === 'string') out.add(item);
-      else collectStringValues(item, keys, out);
-    }
-    return Array.from(out).sort();
-  }
-  const record = value as Record<string, unknown>;
-  for (const [key, child] of Object.entries(record)) {
-    if (keys.has(key)) {
-      if (typeof child === 'string') out.add(child);
-      else if (Array.isArray(child)) {
-        for (const item of child) {
-          if (typeof item === 'string') out.add(item);
-          else collectStringValues(item, keys, out);
-        }
-      }
-    } else {
-      collectStringValues(child, keys, out);
-    }
-  }
-  return Array.from(out).sort();
-}
-
-function formatCommandFailure(command: string, args: string[], status: number | null, signal: NodeJS.Signals | null, output: string): string {
-  const detail = output.trim().split('\n').slice(-6).join('\n').trim();
-  return `${[command, ...args].join(' ')} failed` +
-    (status !== null ? ` with status ${status}` : '') +
-    (signal ? ` signal ${signal}` : '') +
-    (detail ? `: ${detail}` : '');
-}
-
-function runOpenClawMcpCommand(args: string[], workingDirectory: string, timeoutMs: number, failureMessage: string): Promise<string> {
-  const command = process.env.OPENCLAW_BIN?.trim() || 'openclaw';
-  // MCP discovery calls back into this API for permissions, so the event loop
-  // must remain available while the child process is running.
-  return new Promise((resolve, reject) => {
-    execFile(command, args, { cwd: workingDirectory, encoding: 'utf8', timeout: timeoutMs, env: buildOpenClawEnv() }, (error, stdout, stderr) => {
-      const output = [stderr, stdout].filter(part => part?.trim()).join('\n');
-      if (error) {
-        const detail = typeof error.code === 'number' || error.signal
-          ? formatCommandFailure(command, args, typeof error.code === 'number' ? error.code : null, error.signal ?? null, output)
-          : error.message;
-        reject(new Error(`${failureMessage}: ${detail}`));
-        return;
-      }
-      resolve(output);
-    });
-  });
-}
-
-async function reloadOpenClawMcpRuntimeCache(workingDirectory: string): Promise<void> {
-  await runOpenClawMcpCommand(['mcp', 'reload'], workingDirectory, 30_000, 'OpenClaw MCP runtime cache reload failed');
-  console.log(`[OpenClawRuntime] MCP runtime cache reload complete: cwd=${workingDirectory}`);
-}
-
-async function probeOpenClawMcpServer(params: {
-  serverName: string;
-  workingDirectory: string;
-  requiredToolNames: string[];
-}): Promise<void> {
-  const output = await runOpenClawMcpCommand(
-    ['mcp', 'probe', params.serverName, '--json'],
-    params.workingDirectory,
-    60_000,
-    `OpenClaw MCP server "${params.serverName}" startup probe failed`,
-  );
-
-  let parsed: unknown;
-  try {
-    parsed = extractJsonObject(output);
-  } catch (err) {
-    throw new Error(
-      `OpenClaw MCP server "${params.serverName}" startup probe returned unreadable JSON: ` +
-      (err instanceof Error ? err.message : String(err)),
-    );
-  }
-
-  const toolNames = collectStringValues(parsed, new Set(['tools']));
-  const missing = missingRequiredTools(toolNames, params.requiredToolNames);
-  console.log(
-    `[OpenClawRuntime] MCP server initialization probe complete: server=${params.serverName} ` +
-    `toolCount=${toolNames.length} requiredTools=${params.requiredToolNames.join(', ') || '(none)'} ` +
-    `missing=${missing.join(', ') || '(none)'}`,
-  );
-  if (missing.length > 0) {
-    throw new Error(
-      `OpenClaw MCP server "${params.serverName}" initialized without required tool(s): ` +
-      `${missing.join(', ')}; discoveredToolCount=${toolNames.length}`,
-    );
-  }
-}
-
 async function waitForOpenClawMcpReadiness(params: {
   sessionKey: string;
   agentSlug: string;
   readiness: NonNullable<DispatchParams['openClawMcpReadiness']>;
 }): Promise<void> {
   const requiredToolNames = Array.from(new Set(params.readiness.requiredToolNames)).sort();
-  if (params.readiness.materializedCount <= 0 || requiredToolNames.length === 0) return;
+  if (params.readiness.materializedCount <= 0) return;
 
   const configuredTimeoutMs = Number(process.env.AGENT_HQ_OPENCLAW_MCP_READINESS_TIMEOUT_MS ?? 15_000);
   const configuredPollMs = Number(process.env.AGENT_HQ_OPENCLAW_MCP_READINESS_POLL_MS ?? 500);
@@ -229,15 +128,13 @@ async function waitForOpenClawMcpReadiness(params: {
 
   const workingDirectory = params.readiness.workingDirectory?.trim();
   if (workingDirectory) {
-    await reloadOpenClawMcpRuntimeCache(workingDirectory);
-    const requiredByServer = params.readiness.requiredToolsByServerName ?? {};
-    for (const serverName of params.readiness.serverNames) {
-      await probeOpenClawMcpServer({
-        serverName,
-        workingDirectory,
-        requiredToolNames: requiredByServer[serverName] ?? [],
-      });
-    }
+    if (!params.readiness.bundlePath) throw new Error('OpenClaw MCP readiness requires the materialized bundle path');
+    await probeOpenClawMcpBundle({
+      bundlePath: params.readiness.bundlePath,
+      workingDirectory,
+      serverNames: params.readiness.serverNames,
+      requiredToolsByServerName: params.readiness.requiredToolsByServerName ?? {},
+    });
   }
 
   const startedAt = Date.now();
@@ -361,6 +258,19 @@ export class OpenClawRuntime implements AgentRuntime {
    * dispatch — fire an isolated agent turn via the OpenClaw gateway WebSocket path.
    */
   async dispatch(params: DispatchParams): Promise<{ runId: string }> {
+    const readiness = params.openClawMcpReadiness;
+    if (readiness?.agentId != null && readiness.configPath) {
+      return serializeOpenClawMaintenance(`${readiness.configPath}:agent:${readiness.agentId}`, () => this.dispatchPrepared(params));
+    }
+    return this.dispatchPrepared(params);
+  }
+
+  private async dispatchPrepared(params: DispatchParams): Promise<{ runId: string }> {
+    const readiness = params.openClawMcpReadiness;
+    const assertCurrent = () => {
+      if (readiness?.bundlePath && readiness.bundleRevision) assertOpenClawBundleRevision(readiness.bundlePath, readiness.bundleRevision);
+    };
+    assertCurrent();
     const routedSessionKey = params.sessionKey.startsWith('agent:')
       ? params.sessionKey
       : `agent:${params.agentSlug}:${params.sessionKey}`;
@@ -424,6 +334,7 @@ export class OpenClawRuntime implements AgentRuntime {
 
     const dispatchDb = params.instanceId != null ? params.db ?? getDb() : undefined;
     const wsResult = await sendOpenClawTurn({
+      beforeSend: assertCurrent,
       sessionKey: routedSessionKey,
       message: dispatchMessage,
       timeoutMs: (params.timeoutSeconds ?? 900) * 1000,

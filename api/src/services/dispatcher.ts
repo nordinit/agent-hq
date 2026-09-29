@@ -108,7 +108,8 @@ function hasMaterializedAgentHqLifecycleMcp(bundlePath: string | undefined, agen
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
     const servers = (parsed as { mcpServers?: unknown }).mcpServers;
     if (!servers || typeof servers !== 'object' || Array.isArray(servers)) return false;
-    return Object.prototype.hasOwnProperty.call(servers, `agent-hq__agent-${agentId}`);
+    const aliases = (parsed as { agentHqServerNames?: Record<string, string> }).agentHqServerNames;
+    return Object.prototype.hasOwnProperty.call(servers, aliases?.[`agent-hq__agent-${agentId}`] ?? `agent-hq__agent-${agentId}`);
   } catch {
     return false;
   }
@@ -1578,17 +1579,20 @@ async function fireAgentRun(
             `[dispatcher] MCP materialization complete: ${mcpResult.count} server(s) for instance #${instanceId}; servers=${mcpResult.serverNames.join(', ') || '(none)'}; bundle=${mcpResult.bundlePath ?? '(none)'}`,
           );
         }
-        if (runtimeTypeForMcp === 'openclaw' && mcpResult.ok && mcpResult.count > 0) {
+        if (runtimeTypeForMcp === 'openclaw' && mcpResult.ok && mcpResult.bundleRevision) {
           openClawMcpReadiness = {
             serverNames: mcpResult.serverNames,
             requiredToolNames: requiredOpenClawMcpToolsForServerNames(mcpResult.serverNames),
             requiredToolsByServerName: requiredOpenClawMcpToolsByServerName(mcpResult.serverNames),
             materializedCount: mcpResult.count,
             bundlePath: mcpResult.bundlePath ?? null,
+            bundleRevision: mcpResult.bundleRevision,
+            agentId: job.agent_id!,
+            configPath: mcpResult.openClawConfigPath,
             workingDirectory: mcpResult.workingDirectory ?? null,
           };
           console.log(
-            `[dispatcher] MCP registry refresh complete for instance #${instanceId}; requiredTools=${openClawMcpReadiness.requiredToolNames.join(', ') || '(none)'}`,
+            `[dispatcher] MCP configuration prepared for instance #${instanceId}; requiredTools=${openClawMcpReadiness.requiredToolNames.join(', ') || '(none)'}`,
           );
         }
         if (

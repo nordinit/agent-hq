@@ -5,6 +5,9 @@ import { getDb } from '../db/client';
 import { setupTestDb, teardownTestDb } from '../db/testDb';
 import {
   ensureOpenClawMcpWorkspaceBundleEnabled,
+  openClawMcpBundleId,
+  openClawMcpServerName,
+  openClawMcpServerPrefix,
   materializeAgentMcpConfig,
   materializeHermesMcpConfig,
   materializeOpenClawGlobalMcpConfig,
@@ -17,6 +20,12 @@ const ORIGINAL_DISABLE_OPENCLAW_PLUGIN_REGISTRY_REFRESH = process.env.AGENT_HQ_D
 
 function makeTempDir(prefix: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+}
+
+function readBundleConfig(workspace: string): any {
+  const raw = JSON.parse(fs.readFileSync(path.join(workspace, '.openclaw', 'extensions', 'agent-hq-mcp', '.mcp.json'), 'utf8'));
+  if (!raw.agentHqServerNames) return raw;
+  return { ...raw, mcpServers: Object.fromEntries(Object.entries(raw.agentHqServerNames).map(([name, alias]) => [name, raw.mcpServers[String(alias)]])) };
 }
 
 let registryFixtureReady = false;
@@ -44,6 +53,46 @@ describe('materializeAgentMcpConfig', () => {
     if (ORIGINAL_DISABLE_OPENCLAW_PLUGIN_REGISTRY_REFRESH === undefined) delete process.env.AGENT_HQ_DISABLE_OPENCLAW_PLUGIN_REGISTRY_REFRESH;
     else process.env.AGENT_HQ_DISABLE_OPENCLAW_PLUGIN_REGISTRY_REFRESH = ORIGINAL_DISABLE_OPENCLAW_PLUGIN_REGISTRY_REFRESH;
     if (registryFixtureReady) await teardownTestDb();
+  });
+
+  it('preserves nonempty files, mtimes and credentials across ten unchanged publications', async () => {
+    await createRegistryTables();
+    await getDb().run(`INSERT INTO agents (id,tenant_id,name,session_key) VALUES (1,1,'Agent','agent:test-1:main')`);
+    await getDb().run(`INSERT INTO mcp_servers (id,tenant_id,name,slug,command,args) VALUES (40,1,'HQ','agent-hq','node','["server.js"]')`);
+    await getDb().run(`INSERT INTO agent_mcp_assignments (agent_id,mcp_server_id) VALUES (1,40)`);
+    const workspace = makeTempDir('ahq-noop-');
+    const first = await materializeAgentMcpConfig({ db: getDb(), agentId: 1, workingDirectory: workspace });
+    expect(first.ok).toBe(true);
+    const files = [first.path, first.bundlePath, path.join(path.dirname(first.bundlePath), '.claude-plugin', 'plugin.json')];
+    const before = files.map(file => [fs.readFileSync(file, 'utf8'), fs.statSync(file).mtimeMs]);
+    const keys = await getDb().value('SELECT count(*) FROM mcp_api_keys');
+    for (let i = 0; i < 10; i++) {
+      const next = await materializeAgentMcpConfig({ db: getDb(), agentId: 1, workingDirectory: workspace });
+      expect(next.ok).toBe(true); expect(next.changed).toBe(false);
+    }
+    expect(files.map(file => [fs.readFileSync(file, 'utf8'), fs.statSync(file).mtimeMs])).toEqual(before);
+    expect(await getDb().value('SELECT count(*) FROM mcp_api_keys')).toBe(keys);
+    await getDb().run('DELETE FROM agent_mcp_assignments WHERE agent_id = 1');
+    const empty = await materializeAgentMcpConfig({ db: getDb(), agentId: 1, workingDirectory: workspace });
+    expect(empty.count).toBe(0); expect(empty.changed).toBe(true);
+    expect(readBundleConfig(workspace).mcpServers).toEqual({});
+    expect(fs.existsSync(files[2])).toBe(true);
+  });
+
+  it.each(['list', 'entries'])('denies foreign namespaces and preserves manual policies with agents.%s', shape => {
+    const configPath = process.env.OPENCLAW_CONFIG_PATH!;
+    const first = makeTempDir('ahq-scope-a-'); const second = makeTempDir('ahq-scope-b-');
+    const list = [{ id: 'a', workspace: first, tools: { deny: ['exec'] } }, { id: 'b', workspace: second }];
+    fs.writeFileSync(configPath, JSON.stringify({ agents: shape === 'list' ? { list } : { entries: Object.fromEntries(list.map(({ id, ...entry }) => [id, entry])) } }));
+    expect(ensureOpenClawMcpWorkspaceBundleEnabled(configPath, openClawMcpBundleId(first)).ok).toBe(true);
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    const entries = shape === 'list' ? config.agents.list : Object.values(config.agents.entries) as any[];
+    expect(entries[0].tools.deny).toEqual(['exec', `${openClawMcpServerPrefix(second)}*`]);
+    expect(entries[1].tools.deny).toEqual([`${openClawMcpServerPrefix(first)}*`]);
+    expect(ensureOpenClawMcpWorkspaceBundleEnabled(configPath, openClawMcpBundleId(first)).changed).toBe(false);
+    const longName = 'dev-environment-lease-manager__agent-123456';
+    expect(openClawMcpServerName(first, longName).length).toBeLessThanOrEqual(30);
+    expect(openClawMcpServerName(first, longName)).not.toBe(openClawMcpServerName(second, longName));
   });
 
   it('uses the same allowlist for discovery and the opt-in invocation gateway without putting credentials in launch arguments', async () => {
@@ -90,7 +139,7 @@ describe('materializeAgentMcpConfig', () => {
     }
   });
 
-  it('materializes explicitly assigned MCP servers into workspace bundle files and Codex-scoped OpenClaw config', async () => {
+  it('materializes explicitly assigned MCP servers into workspace bundle files and retires stale global overrides', async () => {
     await createRegistryTables();
     await getDb().run(`INSERT INTO agents (id, tenant_id, name, session_key, openclaw_agent_id) VALUES (1, 1, 'Agent', 'agent:cinder-backend:main', 'cinder-backend')`);
     await getDb().run(`INSERT INTO mcp_servers (id, tenant_id, name, slug, command, args) VALUES (30, 1, 'Agent HQ', 'agent-hq', 'node', '["server.js"]')`);
@@ -116,7 +165,7 @@ describe('materializeAgentMcpConfig', () => {
           materializeOpenClawGlobalConfig: true,
         });
     const config = JSON.parse(fs.readFileSync(path.join(workingDirectory, '.mcp.json'), 'utf8'));
-    const bundleConfig = JSON.parse(fs.readFileSync(path.join(workingDirectory, '.openclaw', 'extensions', 'agent-hq-mcp', '.mcp.json'), 'utf8'));
+    const bundleConfig = readBundleConfig(workingDirectory);
     const bundleManifest = JSON.parse(fs.readFileSync(path.join(workingDirectory, '.openclaw', 'extensions', 'agent-hq-mcp', '.claude-plugin', 'plugin.json'), 'utf8'));
     const openClawConfig = fs.existsSync(process.env.OPENCLAW_CONFIG_PATH!)
       ? JSON.parse(fs.readFileSync(process.env.OPENCLAW_CONFIG_PATH!, 'utf8'))
@@ -138,18 +187,9 @@ describe('materializeAgentMcpConfig', () => {
     expect(config.mcpServers.custom).toBeUndefined();
     expect(config.mcpServers['custom__agent-1']).toBeUndefined();
     expect(bundleConfig.mcpServers['agent-local-tool-mcp']).toBeUndefined();
-    expect(bundleManifest).toMatchObject({ name: 'agent-hq-mcp', mcpServers: ['.mcp.json'] });
-    expect(openClawConfig.mcp?.servers['agent-hq__agent-1']).toMatchObject({
-      command: 'node',
-      args: ['server.js'],
-      codex: { agents: ['cinder-backend'] },
-    });
-    expect(openClawConfig.mcp?.servers['agent-hq__agent-1'].env.AGENT_HQ_MCP_API_KEY).toBe(config.mcpServers['agent-hq__agent-1'].env.AGENT_HQ_MCP_API_KEY);
-    expect(openClawConfig.mcp?.servers['dev-environment-lease-manager__agent-1']).toMatchObject({
-      command: '.venv/bin/dev-env-lease-mcp',
-      args: ['--config', 'config/environments.json'],
-      codex: { agents: ['cinder-backend'] },
-    });
+    expect(bundleManifest).toMatchObject({ name: openClawMcpBundleId(workingDirectory), mcpServers: ['.mcp.json'] });
+    expect(openClawConfig.mcp?.servers['agent-hq__agent-1']).toBeUndefined();
+    expect(openClawConfig.mcp?.servers['dev-environment-lease-manager__agent-1']).toBeUndefined();
     expect(openClawConfig.mcp?.servers['custom__agent-1']).toBeDefined();
   });
 
@@ -345,8 +385,7 @@ describe('materializeAgentMcpConfig', () => {
     const openClawConfig = fs.existsSync(process.env.OPENCLAW_CONFIG_PATH!)
       ? JSON.parse(fs.readFileSync(process.env.OPENCLAW_CONFIG_PATH!, 'utf8'))
       : {};
-    expect(openClawConfig.mcp?.servers['agent-hq__agent-1'].env.AGENT_HQ_MCP_API_KEY).toBe(firstKey);
-    expect(openClawConfig.mcp?.servers['agent-hq__agent-1'].codex.agents).toEqual(['agent']);
+    expect(openClawConfig.mcp?.servers['agent-hq__agent-1']).toBeUndefined();
     const keyCount = await getDb().get(`SELECT COUNT(*) as count FROM mcp_api_keys WHERE agent_id = 1`) as { count: number };
     expect(keyCount.count).toBe(1);
   });
@@ -541,7 +580,7 @@ describe('materializeAgentMcpConfig', () => {
     expect(refreshOpenClawPluginRegistry).not.toHaveBeenCalled();
   });
 
-  it('keeps assigned MCP entries isolated in each workspace and Codex-scoped in shared OpenClaw config', async () => {
+  it('keeps assigned MCP entries isolated in each workspace with distinct plugin identities', async () => {
     await createRegistryTables();
     const firstWorkspace = makeTempDir('agent-hq-mcp-agent-one-');
     const secondWorkspace = makeTempDir('agent-hq-mcp-agent-two-');
@@ -563,8 +602,8 @@ describe('materializeAgentMcpConfig', () => {
     const openClawConfig = fs.existsSync(process.env.OPENCLAW_CONFIG_PATH!)
       ? JSON.parse(fs.readFileSync(process.env.OPENCLAW_CONFIG_PATH!, 'utf8'))
       : {};
-    const firstConfig = JSON.parse(fs.readFileSync(path.join(firstWorkspace, '.openclaw', 'extensions', 'agent-hq-mcp', '.mcp.json'), 'utf8'));
-    const secondConfig = JSON.parse(fs.readFileSync(path.join(secondWorkspace, '.openclaw', 'extensions', 'agent-hq-mcp', '.mcp.json'), 'utf8'));
+    const firstConfig = readBundleConfig(firstWorkspace);
+    const secondConfig = readBundleConfig(secondWorkspace);
     const firstServer = firstConfig.mcpServers['agent-hq__agent-1'];
     const secondServer = secondConfig.mcpServers['agent-hq__agent-2'];
     const firstOpenClawServer = openClawConfig.mcp?.servers['agent-hq__agent-1'];
@@ -577,10 +616,9 @@ describe('materializeAgentMcpConfig', () => {
     expect(firstServer.env.AGENT_HQ_MCP_API_KEY).not.toBe(secondServer.env.AGENT_HQ_MCP_API_KEY);
     expect(firstConfig.mcpServers['agent-hq__agent-2']).toBeUndefined();
     expect(secondConfig.mcpServers['agent-hq__agent-1']).toBeUndefined();
-    expect(firstOpenClawServer.env.AGENT_HQ_MCP_API_KEY).toBe(firstServer.env.AGENT_HQ_MCP_API_KEY);
-    expect(firstOpenClawServer.codex.agents).toEqual(['cinder-backend']);
-    expect(secondOpenClawServer.env.AGENT_HQ_MCP_API_KEY).toBe(secondServer.env.AGENT_HQ_MCP_API_KEY);
-    expect(secondOpenClawServer.codex.agents).toEqual(['beacon-pm']);
+    expect(firstOpenClawServer).toBeUndefined();
+    expect(secondOpenClawServer).toBeUndefined();
+    expect(first.bundlePluginId).not.toBe(second.bundlePluginId);
   });
 
   it('projects only the active Agent HQ and lease-manager MCP servers for each OpenClaw agent workspace', async () => {
@@ -613,7 +651,7 @@ describe('materializeAgentMcpConfig', () => {
             });
       expect(result.ok).toBe(true);
       const workspace = workspaces.get(agent.id)!;
-      const bundleConfig = JSON.parse(fs.readFileSync(path.join(workspace, '.openclaw', 'extensions', 'agent-hq-mcp', '.mcp.json'), 'utf8'));
+      const bundleConfig = readBundleConfig(workspace);
       const visibleServerNames = Object.keys(bundleConfig.mcpServers).sort();
       expect(visibleServerNames).toEqual([
         `agent-hq__agent-${agent.id}`,
@@ -632,17 +670,7 @@ describe('materializeAgentMcpConfig', () => {
       ? JSON.parse(fs.readFileSync(process.env.OPENCLAW_CONFIG_PATH!, 'utf8'))
       : {};
     const globalServerNames = Object.keys(openClawConfig.mcp?.servers ?? {}).sort();
-    expect(globalServerNames).toEqual(agents.flatMap(agent => [
-      `agent-hq__agent-${agent.id}`,
-      `dev-environment-lease-manager__agent-${agent.id}`,
-    ]).sort());
-    for (const agent of agents) {
-      const agentHqServer = openClawConfig.mcp.servers[`agent-hq__agent-${agent.id}`];
-      const leaseServer = openClawConfig.mcp.servers[`dev-environment-lease-manager__agent-${agent.id}`];
-      expect(agentHqServer.codex.agents).toEqual([agent.slug]);
-      expect(leaseServer.codex.agents).toEqual([agent.slug]);
-      expect(leaseServer.env.AGENT_HQ_MCP_API_KEY).toBe(agentHqServer.env.AGENT_HQ_MCP_API_KEY);
-    }
+    expect(globalServerNames).toEqual([]);
   });
 
   it('removes the active agent Agent HQ scoped MCP entries from shared OpenClaw global config while preserving others', () => {
@@ -845,7 +873,7 @@ describe('materializeAgentMcpConfig', () => {
     expect(second.changed).toBe(false);
     expect(config.plugins.entries.existing.enabled).toBe(true);
     expect(config.plugins.entries['agent-hq-mcp']).toEqual({ enabled: true });
-    expect(config.plugins.allow).toEqual(['existing']);
+    expect(config.plugins.allow).toEqual(['existing', 'agent-hq-mcp']);
   });
 
   it('preserves existing agent-hq-mcp plugin entry config when enabling it', () => {
@@ -914,7 +942,7 @@ describe('materializeAgentMcpConfig', () => {
     ]));
   });
 
-  it('reconciles scoped global MCP config for assigned OpenClaw agents outside dispatch', async () => {
+  it('retires scoped global MCP config for assigned OpenClaw agents outside dispatch', async () => {
     await createRegistryTables();
     const root = makeTempDir('agent-hq-openclaw-routed-bundle-');
     const openClawWorkspace = path.join(root, 'ws-harlow');
@@ -959,22 +987,15 @@ describe('materializeAgentMcpConfig', () => {
           materializeOpenClawGlobalConfig: true,
           refreshOpenClawPluginRegistry,
         });
-    const bundleConfig = JSON.parse(fs.readFileSync(path.join(openClawWorkspace, '.openclaw', 'extensions', 'agent-hq-mcp', '.mcp.json'), 'utf8'));
+    const bundleConfig = readBundleConfig(openClawWorkspace);
     const openClawConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
 
     expect(result.ok).toBe(true);
     expect(result.workingDirectory).toBe(openClawWorkspace);
     expect(bundleConfig.mcpServers['agent-hq__agent-4444'].env.AGENT_HQ_MCP_API_KEY).toMatch(/^ahq_mcp_/);
     expect(fs.existsSync(path.join(storedWorkspace, '.openclaw', 'extensions', 'agent-hq-mcp', '.mcp.json'))).toBe(false);
-    expect(openClawConfig.plugins.entries['agent-hq-mcp']).toEqual({ enabled: true });
-    expect(openClawConfig.mcp.servers['agent-hq__agent-4444']).toMatchObject({
-      command: 'node',
-      args: ['server.js'],
-      codex: { agents: ['tooling-pm'] },
-    });
-    expect(openClawConfig.mcp.servers['agent-hq__agent-4444'].env.AGENT_HQ_MCP_API_KEY).toBe(
-      bundleConfig.mcpServers['agent-hq__agent-4444'].env.AGENT_HQ_MCP_API_KEY,
-    );
+    expect(openClawConfig.plugins.entries[openClawMcpBundleId(openClawWorkspace)]).toEqual({ enabled: true });
+    expect(openClawConfig.mcp.servers['agent-hq__agent-4444']).toBeUndefined();
     expect(openClawConfig.mcp.servers['agent-hq__agent-94'].env.AGENT_HQ_MCP_API_KEY).toBe('other-agent-key');
     expect(refreshOpenClawPluginRegistry).toHaveBeenCalledTimes(1);
     expect(refreshOpenClawPluginRegistry).toHaveBeenCalledWith(expect.objectContaining({

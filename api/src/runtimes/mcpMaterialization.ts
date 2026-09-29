@@ -1,9 +1,12 @@
-import { spawnSync } from 'child_process';
+import { stableJson } from './openclaw/stableJson';
+import { openClawBundleRevision } from './openclaw/mcpAdmission';
+import { createHash, randomUUID } from 'crypto';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { ensureMaterializedMcpApiKeyForAgent } from '../lib/mcpApiAuth';
-import { buildOpenClawEnv } from '../lib/openclawCli';
+import { runMaintenanceCommand, serializeOpenClawMaintenance } from './openclaw/maintenanceCommand';
+import { reconcileOpenClawMcp } from '../services/openclawMcpReconciliation';
 import { parseAgentSessionKey, resolveRuntimeAgentSlug } from '../lib/sessionKeys';
 import { fetchEffectiveAgentMcpRows, findAgentIdsWithEffectiveMcpServer } from '../domains/teams/effectiveCapabilities';
 import { type Db } from "../db/adapter/types";
@@ -18,6 +21,34 @@ const OPENCLAW_MCP_BUNDLE_MANIFEST_PATH = path.join('.claude-plugin', 'plugin.js
 const OPENCLAW_AGENT_SCOPED_SERVER_SEPARATOR = '__agent-';
 const AGENT_HQ_API_KEY_SERVER_SLUGS = new Set(['agent-hq', 'dev-environment-lease-manager']);
 const FAIL_CLOSED_MCP_TOOL_INCLUDE = '__agent_hq_no_allowed_mcp_tools__';
+
+/** Stable workspace identity prevents config-wide discovery from merging different agents. */
+export function openClawMcpBundleId(workingDirectory: string): string {
+  return `agent-hq-mcp-${createHash('sha256').update(path.resolve(workingDirectory)).digest('hex').slice(0, 16)}`;
+}
+
+export function openClawMcpServerPrefix(workingDirectory: string): string {
+  return `ahq-${createHash('sha256').update(path.resolve(workingDirectory)).digest('hex').slice(0, 10)}-`;
+}
+
+export function openClawMcpServerName(workingDirectory: string, name: string): string {
+  // Stay below OpenClaw's 30-character server prefix limit. Long slugs used
+  // to truncate the agent suffix, defeating namespace-based isolation.
+  return openClawMcpServerPrefix(workingDirectory) + createHash('sha256').update(name).digest('hex').slice(0, 12);
+}
+
+function writeJsonIfChanged(filePath: string, value: unknown): boolean {
+  const next = `${JSON.stringify(value, null, 2)}\n`;
+  try { if (stableJson(JSON.parse(fs.readFileSync(filePath, 'utf8'))) === stableJson(value)) return false; }
+  catch (error) { if (!(error instanceof SyntaxError) && (error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const temporary = `${filePath}.${randomUUID()}.tmp`;
+  try {
+    fs.writeFileSync(temporary, next, { encoding: 'utf8', mode: 0o600 });
+    fs.renameSync(temporary, filePath);
+  } finally { if (fs.existsSync(temporary)) fs.unlinkSync(temporary); }
+  return true;
+}
 
 interface AgentMcpRow {
   assignment_id: number;
@@ -48,6 +79,9 @@ export interface McpMaterializationResult {
   count: number;
   path: string;
   bundlePath: string;
+  bundlePluginId?: string;
+  bundleRevision?: string;
+  changed?: boolean;
   openClawConfigPath: string;
   serverNames: string[];
   warnings: string[];
@@ -73,6 +107,9 @@ export interface AgentMcpSyncResult {
   warnings: string[];
   path?: string;
   bundlePath?: string;
+  bundlePluginId?: string;
+  bundleRevision?: string;
+  changed?: boolean;
   openClawConfigPath?: string;
   error?: string;
   skipped?: 'agent_not_found' | 'missing_workspace' | 'unsupported_runtime' | 'shared_workspace';
@@ -95,7 +132,7 @@ type OpenClawPluginRegistryRefreshFn = (context: {
   mcpServerId?: number;
   workingDirectory?: string | null;
   materializedCount: number;
-}) => OpenClawPluginRegistryRefreshResult;
+}) => Promise<OpenClawPluginRegistryRefreshResult> | OpenClawPluginRegistryRefreshResult;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -264,59 +301,20 @@ function resolveOpenClawConfigPath(): string {
     ?? path.join(process.env.HOME ?? os.homedir(), '.openclaw', 'openclaw.json');
 }
 
-export function refreshOpenClawPluginRegistry(context: {
+export async function refreshOpenClawPluginRegistry(context: {
   agentId?: number;
   mcpServerId?: number;
   workingDirectory?: string | null;
   materializedCount: number;
-}): OpenClawPluginRegistryRefreshResult {
+}): Promise<OpenClawPluginRegistryRefreshResult> {
   const command = process.env.OPENCLAW_BIN?.trim() || 'openclaw';
   const args = ['plugins', 'registry', '--refresh'];
   if (process.env.AGENT_HQ_DISABLE_OPENCLAW_PLUGIN_REGISTRY_REFRESH === '1') {
     return { ok: true, command, args, skipped: true };
   }
-
-  const result = spawnSync(command, args, {
-    cwd: context.workingDirectory ?? undefined,
-    encoding: 'utf8',
-    timeout: 60_000,
-    env: buildOpenClawEnv(),
-  });
-  const stdout = typeof result.stdout === 'string' ? result.stdout.trim() : undefined;
-  const stderr = typeof result.stderr === 'string' ? result.stderr.trim() : undefined;
-  if (result.error) {
-    return {
-      ok: false,
-      command,
-      args,
-      status: result.status,
-      signal: result.signal,
-      stdout,
-      stderr,
-      error: result.error.message,
-    };
-  }
-  if (result.status !== 0) {
-    return {
-      ok: false,
-      command,
-      args,
-      status: result.status,
-      signal: result.signal,
-      stdout,
-      stderr,
-      error: stderr || stdout || `openclaw plugins registry --refresh exited with status ${result.status}`,
-    };
-  }
-  return {
-    ok: true,
-    command,
-    args,
-    status: result.status,
-    signal: result.signal,
-    stdout,
-    stderr,
-  };
+  return serializeOpenClawMaintenance(resolveOpenClawConfigPath(), () => runMaintenanceCommand({
+    command, args, cwd: context.workingDirectory ?? undefined, timeoutMs: 60_000,
+  }));
 }
 
 function appendRegistryRefreshFailure(
@@ -423,16 +421,20 @@ interface OpenClawConfiguredAgent {
   isDefault: boolean;
 }
 
+function configuredAgentEntries(rawConfig: Record<string, unknown>): Array<{ id: string; entry: Record<string, unknown> }> {
+  const agents = isRecord(rawConfig.agents) ? rawConfig.agents : {};
+  // OpenClaw 2026.9 migrates agents.list to the keyed agents.entries shape.
+  if (isRecord(agents.entries)) return Object.entries(agents.entries).filter(([, entry]) => isRecord(entry))
+    .map(([id, entry]) => ({ id: normalizeOpenClawAgentId(id), entry: entry as Record<string, unknown> }));
+  return (Array.isArray(agents.list) ? agents.list : []).filter(isRecord)
+    .map(entry => ({ id: normalizeOpenClawAgentId(typeof entry.id === 'string' ? entry.id : null), entry }));
+}
+
 function listOpenClawConfiguredAgents(rawConfig: Record<string, unknown>): OpenClawConfiguredAgent[] {
-  const agents: Record<string, unknown> = isRecord(rawConfig.agents) ? rawConfig.agents : {};
-  const list = Array.isArray(agents.list) ? agents.list : [];
-  return list
-    .filter(isRecord)
-    .map((entry) => ({
-      id: normalizeOpenClawAgentId(typeof entry.id === 'string' ? entry.id : null),
-      workspace: typeof entry.workspace === 'string' && entry.workspace.trim() ? entry.workspace.trim() : null,
-      isDefault: entry.default === true,
-    }));
+  return configuredAgentEntries(rawConfig).map(({ id, entry }) => ({
+    id, workspace: typeof entry.workspace === 'string' && entry.workspace.trim() ? entry.workspace.trim() : null,
+    isDefault: entry.default === true,
+  }));
 }
 
 export interface OpenClawWorkspaceResolution {
@@ -543,7 +545,7 @@ function buildOpenClawAgentSlugCandidates(
  * pre-seed an entry OpenClaw flags as stale before any bundle exists.
  * Idempotent: a no-op once enabled.
  */
-export function ensureOpenClawMcpWorkspaceBundleEnabled(configPath = resolveOpenClawConfigPath()): {
+export function ensureOpenClawMcpWorkspaceBundleEnabled(configPath = resolveOpenClawConfigPath(), pluginId = OPENCLAW_MCP_BUNDLE_ID): {
   ok: boolean;
   changed: boolean;
   path: string;
@@ -573,21 +575,45 @@ export function ensureOpenClawMcpWorkspaceBundleEnabled(configPath = resolveOpen
 
   const plugins = isRecord(rawConfig.plugins) ? { ...rawConfig.plugins } : {};
   const entries = isRecord(plugins.entries) ? { ...plugins.entries } : {};
-  const existingEntry = isRecord(entries[OPENCLAW_MCP_BUNDLE_ID])
-    ? entries[OPENCLAW_MCP_BUNDLE_ID] as Record<string, unknown>
+  const existingEntry = isRecord(entries[pluginId])
+    ? entries[pluginId] as Record<string, unknown>
     : {};
 
-  if (existingEntry.enabled === true) {
-    return { ok: true, changed: false, path: configPath };
+  const before = JSON.stringify(rawConfig);
+  // The gateway inventory includes all workspace bundles. A unique plugin ID
+  // needs an agent policy too; workspace location alone is not an access gate.
+  const configuredAgents = listOpenClawConfiguredAgents(rawConfig);
+  const workspaceById = new Map(configuredAgents.map(agent => [agent.id, resolveOpenClawWorkspaceForAgentSlug(agent.id, configPath).workspaceDir]));
+  const policyPath = path.join(path.dirname(configPath), '.agent-hq-mcp-policy.json');
+  const previousPolicy = readJsonRecordFile(policyPath);
+  if (!previousPolicy.ok) return { ok: false, changed: false, path: configPath, error: previousPolicy.error };
+  const nextPolicy: Record<string, string[]> = {};
+  const agentEntries = configuredAgentEntries(rawConfig);
+  const allPrefixes = Array.from(new Set(Array.from(workspaceById.values()).filter((value): value is string => Boolean(value)).map(openClawMcpServerPrefix)));
+  for (const { id, entry } of agentEntries) {
+    const workspace = workspaceById.get(id);
+    const ownPrefix = workspace ? openClawMcpServerPrefix(workspace) : null;
+    const managedDenials = allPrefixes.filter(prefix => prefix !== ownPrefix).map(prefix => `${prefix}*`).sort();
+    const prior = Array.isArray(previousPolicy.value[id]) ? previousPolicy.value[id] as string[] : [];
+    const agentTools = isRecord(entry.tools) ? { ...entry.tools } : {};
+    const existingDenials = Array.isArray(agentTools.deny) ? agentTools.deny.filter((value): value is string => typeof value === 'string') : [];
+    const denials = Array.from(new Set([...existingDenials.filter(value => !prior.includes(value)), ...managedDenials]));
+    if (denials.length) agentTools.deny = denials;
+    else delete agentTools.deny;
+    if (Object.keys(agentTools).length) entry.tools = agentTools;
+    else delete entry.tools;
+    nextPolicy[id] = managedDenials;
   }
 
-  entries[OPENCLAW_MCP_BUNDLE_ID] = { ...existingEntry, enabled: true };
+  entries[pluginId] = { ...existingEntry, enabled: true };
   plugins.entries = entries;
+  if (Array.isArray(plugins.allow) && !plugins.allow.includes(pluginId)) plugins.allow = [...plugins.allow, pluginId];
   rawConfig.plugins = plugins;
 
   try {
-    fs.writeFileSync(configPath, `${JSON.stringify(rawConfig, null, 2)}\n`, 'utf8');
-    return { ok: true, changed: true, path: configPath };
+    const changed = JSON.stringify(rawConfig) !== before && writeJsonIfChanged(configPath, rawConfig);
+    writeJsonIfChanged(policyPath, nextPolicy);
+    return { ok: true, changed, path: configPath };
   } catch (err) {
     return {
       ok: false,
@@ -729,6 +755,7 @@ export function materializeOpenClawGlobalMcpConfig(params: {
   agentSlug: string;
   desiredServers: Record<string, Record<string, unknown>>;
   configPath?: string;
+  managedServerNames?: string[];
 }): {
   ok: boolean;
   changed: boolean;
@@ -756,6 +783,7 @@ export function materializeOpenClawGlobalMcpConfig(params: {
   for (const name of Object.keys(servers)) {
     if (
       isAgentHqManagedOpenClawScopedMcpServerNameForAgent(name, params.agentId)
+      || params.managedServerNames?.includes(name)
       || AGENT_HQ_API_KEY_SERVER_SLUGS.has(name)
     ) {
       delete servers[name];
@@ -786,7 +814,7 @@ export function materializeOpenClawGlobalMcpConfig(params: {
 
   try {
     fs.mkdirSync(path.dirname(configPath), { recursive: true });
-    fs.writeFileSync(configPath, `${JSON.stringify(rawConfig, null, 2)}\n`, 'utf8');
+    writeJsonIfChanged(configPath, rawConfig);
     return {
       ok: true,
       changed: true,
@@ -1222,16 +1250,16 @@ export async function materializeHermesMcpConfig(params: {
 }
 
 
-function writeOpenClawWorkspaceBundleManifest(bundleDirectory: string): void {
+function writeOpenClawWorkspaceBundleManifest(bundleDirectory: string, pluginId: string): boolean {
   const manifestPath = path.join(bundleDirectory, OPENCLAW_MCP_BUNDLE_MANIFEST_PATH);
   const manifest = {
-    name: OPENCLAW_MCP_BUNDLE_ID,
+    name: pluginId,
     description: 'Agent HQ workspace-local MCP server bundle. Generated by Agent HQ; do not edit manually.',
     version: '1.0.0',
     mcpServers: ['.mcp.json'],
   };
   fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
-  fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+  return writeJsonIfChanged(manifestPath, manifest);
 }
 
 export async function materializeAgentMcpConfig(params: {
@@ -1246,6 +1274,8 @@ export async function materializeAgentMcpConfig(params: {
     count: 0,
     path: path.join(params.workingDirectory, '.mcp.json'),
     bundlePath: path.join(params.workingDirectory, OPENCLAW_MCP_BUNDLE_DIR, '.mcp.json'),
+    bundlePluginId: openClawMcpBundleId(params.workingDirectory),
+    changed: false,
     openClawConfigPath: resolveOpenClawConfigPath(),
     serverNames: [],
     warnings: [],
@@ -1286,10 +1316,11 @@ export async function materializeAgentMcpConfig(params: {
   if (isOpenClawRuntime) {
     const existingOpenClaw = readJsonRecordFile(result.openClawConfigPath);
     if (existingOpenClaw.ok) {
-      Object.assign(
-        existingServers,
-        extractOpenClawScopedServersForAgent(existingOpenClaw.value, params.agentId),
-      );
+      // Legacy global entries are only a credential-reuse fallback. They must
+      // never override an already published workspace configuration.
+      for (const [name, server] of Object.entries(extractOpenClawScopedServersForAgent(existingOpenClaw.value, params.agentId))) {
+        if (!existingServers[name]) existingServers[name] = server;
+      }
     } else {
       result.warnings.push(
         `[mcp-materialization] could not parse existing OpenClaw MCP config ${result.openClawConfigPath}; materialized keys may be rotated (${existingOpenClaw.error})`,
@@ -1312,7 +1343,10 @@ export async function materializeAgentMcpConfig(params: {
         .filter((entry): entry is string => typeof entry === 'string')
     : [];
 
-  for (const key of previouslyManagedKeys) {
+  for (const key of new Set([
+    ...previouslyManagedKeys,
+    ...Object.keys(existingServers).filter(name => isAgentHqManagedOpenClawScopedMcpServerNameForAgent(name, params.agentId)),
+  ])) {
     delete existingServers[key];
   }
 
@@ -1328,9 +1362,13 @@ export async function materializeAgentMcpConfig(params: {
       const globalConfig = materializeOpenClawGlobalMcpConfig({
         agentId: params.agentId,
         agentSlug,
-        desiredServers,
+        // Workspace bundles are authoritative. Retire legacy global duplicates
+        // because OpenClaw overlays them over the workspace, even when stale.
+        desiredServers: {},
+        managedServerNames: [...desiredKeys, ...previouslyManagedKeys],
         configPath: result.openClawConfigPath,
       });
+      result.changed = result.changed || globalConfig.changed;
       if (!globalConfig.ok) {
         result.ok = false;
         result.error = globalConfig.error ?? 'OpenClaw MCP config materialization failed';
@@ -1338,11 +1376,11 @@ export async function materializeAgentMcpConfig(params: {
       }
     }
 
-    if (Object.keys(mergedServers).length === 0 && Object.keys(preservedTopLevel).length === 0) {
-      if (fs.existsSync(result.path)) fs.unlinkSync(result.path);
-      if (fs.existsSync(result.bundlePath)) fs.unlinkSync(result.bundlePath);
-      const bundleManifestPath = path.join(path.dirname(result.bundlePath), OPENCLAW_MCP_BUNDLE_MANIFEST_PATH);
-      if (fs.existsSync(bundleManifestPath)) fs.unlinkSync(bundleManifestPath);
+    // Keep an existing empty bundle discoverable so the gateway can apply
+    // last-server removal without a dangling enabled plugin reference.
+    if (Object.keys(mergedServers).length === 0 && Object.keys(preservedTopLevel).length === 0
+      && !fs.existsSync(result.bundlePath)) {
+      if (fs.existsSync(result.path)) { fs.unlinkSync(result.path); result.changed = true; }
       return result;
     }
 
@@ -1352,11 +1390,17 @@ export async function materializeAgentMcpConfig(params: {
     };
     if (desiredKeys.length > 0) nextConfig[MANAGED_KEYS_FIELD] = desiredKeys;
 
-    fs.writeFileSync(result.path, `${JSON.stringify(nextConfig, null, 2)}\n`, 'utf8');
+    result.changed = writeJsonIfChanged(result.path, nextConfig) || result.changed;
     const bundleDirectory = path.dirname(result.bundlePath);
     fs.mkdirSync(bundleDirectory, { recursive: true });
-    fs.writeFileSync(result.bundlePath, `${JSON.stringify(nextConfig, null, 2)}\n`, 'utf8');
-    writeOpenClawWorkspaceBundleManifest(bundleDirectory);
+    const bundleServerNames = Object.fromEntries(Object.keys(mergedServers).map(name => [name, openClawMcpServerName(params.workingDirectory, name)]));
+    const bundleConfig = {
+      ...nextConfig,
+      agentHqServerNames: bundleServerNames,
+      mcpServers: Object.fromEntries(Object.entries(mergedServers).map(([name, server]) => [bundleServerNames[name], server])),
+    };
+    result.changed = writeJsonIfChanged(result.bundlePath, bundleConfig) || result.changed;
+    result.changed = writeOpenClawWorkspaceBundleManifest(bundleDirectory, result.bundlePluginId!) || result.changed;
     result.count = desiredKeys.length;
     return result;
   } catch (err) {
@@ -1366,7 +1410,11 @@ export async function materializeAgentMcpConfig(params: {
   }
 }
 
-export async function syncAssignedMcpForAgent(params: {
+export async function syncAssignedMcpForAgent(params: Parameters<typeof syncAssignedMcpForAgentUnlocked>[0]): Promise<AgentMcpSyncResult> {
+  return serializeOpenClawMaintenance(`${resolveOpenClawConfigPath()}:agent:${params.agentId}`, () => syncAssignedMcpForAgentUnlocked(params));
+}
+
+async function syncAssignedMcpForAgentUnlocked(params: {
   db: Db;
   agentId: number;
   workingDirectory?: string | null;
@@ -1426,9 +1474,9 @@ export async function syncAssignedMcpForAgent(params: {
         );
       }
       if (resolution.sharedWithAgentIds.length > 0) {
-        syncWarnings.push(
-          `[mcp-materialization] OpenClaw config maps additional agent id(s) ${resolution.sharedWithAgentIds.join(', ')} to the same workspace as "${slug}"; sessions for those ids will see agent #${agent.id}'s MCP servers and API key`,
-        );
+        return { agentId: agent.id, runtimeType, workingDirectory: resolution.workspaceDir,
+          ok: false, count: 0, serverNames: [], warnings: syncWarnings, skipped: 'shared_workspace',
+          error: `OpenClaw workspace for "${slug}" is also assigned to ${resolution.sharedWithAgentIds.join(', ')}; MCP credentials require a unique workspace` };
       }
       break;
     }
@@ -1533,11 +1581,12 @@ export async function syncAssignedMcpForAgent(params: {
   const shouldActivateOpenClawWorkspaceBundle = params.activateOpenClawWorkspaceBundle !== false;
   const shouldRefreshRegistry = runtimeType === 'openclaw'
     && result.ok
-    && result.count > 0
+    && Boolean(result.bundlePath && fs.existsSync(result.bundlePath))
     && shouldActivateOpenClawWorkspaceBundle
     && params.refreshPluginRegistry !== false;
-  if (runtimeType === 'openclaw' && result.ok && result.count > 0 && shouldActivateOpenClawWorkspaceBundle) {
-    const configResult = ensureOpenClawMcpWorkspaceBundleEnabled();
+  if (runtimeType === 'openclaw' && result.ok && fs.existsSync(result.bundlePath) && shouldActivateOpenClawWorkspaceBundle) {
+    const configResult = ensureOpenClawMcpWorkspaceBundleEnabled(result.openClawConfigPath, result.bundlePluginId);
+    result.changed = result.changed || configResult.changed;
     if (!configResult.ok) {
       const message = `[mcp-materialization] could not reconcile OpenClaw global MCP config in ${configResult.path}: ${configResult.error ?? 'unknown error'}`;
       result.ok = false;
@@ -1547,9 +1596,10 @@ export async function syncAssignedMcpForAgent(params: {
     }
   }
 
-  if (shouldRefreshRegistry && result.ok) {
+  const onChange = process.env.AGENT_HQ_OPENCLAW_MCP_RECONCILIATION_MODE === 'on-change';
+  if (shouldRefreshRegistry && result.ok && (!onChange || params.refreshOpenClawPluginRegistry)) {
     const refresh = params.refreshOpenClawPluginRegistry ?? refreshOpenClawPluginRegistry;
-    const refreshResult = refresh({
+    const refreshResult = await refresh({
       agentId: agent.id,
       workingDirectory,
       materializedCount: result.count,
@@ -1563,6 +1613,19 @@ export async function syncAssignedMcpForAgent(params: {
     }
   }
 
+  if (shouldRefreshRegistry && result.ok && fs.existsSync(result.bundlePath)
+    && process.env.AGENT_HQ_DISABLE_OPENCLAW_PLUGIN_REGISTRY_REFRESH !== '1') {
+    try {
+      await reconcileOpenClawMcp({
+        db: params.db, agentId: agent.id, bundlePath: result.bundlePath,
+        bundlePluginId: result.bundlePluginId!, configPath: result.openClawConfigPath,
+      });
+    } catch (error) {
+      result.ok = false;
+      result.error = `OpenClaw MCP gateway application failed: ${error instanceof Error ? error.message : String(error)}`;
+    }
+  }
+
   return {
     agentId: agent.id,
     runtimeType,
@@ -1573,6 +1636,9 @@ export async function syncAssignedMcpForAgent(params: {
     warnings: [...syncWarnings, ...result.warnings],
     path: result.path,
     bundlePath: result.bundlePath,
+    bundlePluginId: result.bundlePluginId,
+    bundleRevision: result.bundlePath && fs.existsSync(result.bundlePath) ? openClawBundleRevision(result.bundlePath) : undefined,
+    changed: result.changed,
     openClawConfigPath: result.openClawConfigPath,
     ...(result.error ? { error: result.error } : {}),
   };
@@ -1649,13 +1715,14 @@ export async function syncAssignedMcpForServer(params: {
     result.runtimeType === 'openclaw'
     && params.materializeOpenClawGlobalConfig === true
     && result.ok
-    && result.count > 0
+    && Boolean(result.bundlePath && fs.existsSync(result.bundlePath))
     && !result.skipped
   ));
 
-  if (successfulOpenClawMaterializations.length > 0) {
+  const onChange = process.env.AGENT_HQ_OPENCLAW_MCP_RECONCILIATION_MODE === 'on-change';
+  if (successfulOpenClawMaterializations.length > 0 && (!onChange || params.refreshOpenClawPluginRegistry)) {
     const refresh = params.refreshOpenClawPluginRegistry ?? refreshOpenClawPluginRegistry;
-    const refreshResult = refresh({
+    const refreshResult = await refresh({
       mcpServerId: params.mcpServerId,
       materializedCount: successfulOpenClawMaterializations.reduce((sum, result) => sum + result.count, 0),
     });
@@ -1668,6 +1735,20 @@ export async function syncAssignedMcpForServer(params: {
         );
       }
     }
+  }
+
+  if (process.env.AGENT_HQ_DISABLE_OPENCLAW_PLUGIN_REGISTRY_REFRESH !== '1') {
+    await Promise.all(successfulOpenClawMaterializations.map(async result => {
+      if (!result.ok || !result.bundlePath || !result.bundlePluginId || !fs.existsSync(result.bundlePath)) return;
+      try {
+        await reconcileOpenClawMcp({ db: params.db, agentId: result.agentId, bundlePath: result.bundlePath,
+          bundlePluginId: result.bundlePluginId,
+          configPath: result.openClawConfigPath! });
+      } catch (error) {
+        result.ok = false;
+        result.error = `OpenClaw MCP gateway application failed: ${error instanceof Error ? error.message : String(error)}`;
+      }
+    }));
   }
 
   return results;

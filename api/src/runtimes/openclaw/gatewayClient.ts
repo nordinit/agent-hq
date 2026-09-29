@@ -39,7 +39,11 @@ class GatewayConnectionDropError extends Error {
   }
 }
 
+let gatewayConnectionEpoch = 0;
+
 class GatewayConnectionPool {
+  private epoch = 0;
+  connectionEpoch(): number { return this.authenticated && this.ws?.readyState === WebSocket.OPEN ? this.epoch : 0; }
   constructor(private readonly url = GATEWAY_WS_URL) {}
   private ws: WebSocket | null = null;
   private authenticated = false;
@@ -51,6 +55,7 @@ class GatewayConnectionPool {
     rpcParams?: Record<string, unknown>;
     timeoutMs?: number;
     displayName?: string;
+    retryOnDisconnect?: boolean;
   }): Promise<GatewayResponseFrame> {
     let timedOut = false;
     let timeout: NodeJS.Timeout | null = null;
@@ -61,7 +66,7 @@ class GatewayConnectionPool {
           try {
             return await this.callOnce(params);
           } catch (err) {
-            if (timedOut || attempt > 0 || !(err instanceof GatewayConnectionDropError)) {
+            if (timedOut || params.retryOnDisconnect === false || attempt > 0 || !(err instanceof GatewayConnectionDropError)) {
               throw err;
             }
           }
@@ -206,6 +211,7 @@ class GatewayConnectionPool {
 
           if (this.ws === ws) {
             this.authenticated = true;
+            this.epoch = ++gatewayConnectionEpoch;
             this.authPromise = null;
           }
           resolve();
@@ -341,12 +347,15 @@ export function buildOpenClawGatewayConnectParams(params: {
   };
 }
 
+export function getGatewayConnectionEpoch(): number { return gatewayConnectionPool.connectionEpoch(); }
+
 export function gatewayRpcCall(params: {
   gatewayUrl?: string;
   method: string;
   rpcParams?: Record<string, unknown>;
   timeoutMs?: number;
   displayName?: string;
+  retryOnDisconnect?: boolean;
 }): Promise<GatewayRpcCallResult> {
   return poolForEndpoint(params.gatewayUrl).call(params)
     .then((rpcResult) => {

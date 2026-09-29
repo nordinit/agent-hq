@@ -108,6 +108,9 @@ export interface DispatchParams extends RuntimeEventCallbacks {
     requiredToolsByServerName?: Record<string, string[]>;
     materializedCount: number;
     bundlePath?: string | null;
+    bundleRevision?: string;
+    agentId?: number;
+    configPath?: string;
     workingDirectory?: string | null;
   } | null;
   /**

@@ -1,4 +1,5 @@
 import './config/loadRootEnv';
+import { assertOpenClawMaintenanceOwner, startOpenClawMcpSyncWorker } from './services/openclawMcpSyncWorker';
 
 // Must be set after dotenv loads but before any fetch/TLS calls.
 // dotenv/config is synchronous, so process.env is populated by now.
@@ -581,6 +582,7 @@ async function startServer(): Promise<void> {
   // migration ledger has been verified, otherwise a stale process gets a window to mutate data
   // before the asynchronous verification failure terminates it.
   await verifyStartupSchema();
+  assertOpenClawMaintenanceOwner();
   // Analytics workers never dispatch agents or mutate workflow status. Capture
   // stays active even when operational automation is disabled.
   startTelemetryCaptureWorker(getDb(), { onError: () => console.error('[telemetry] Observation projection failed; pending facts will retry.') });
@@ -621,6 +623,7 @@ async function startServer(): Promise<void> {
   server.listen(Number(PORT), HOST, () => {
     const displayHost = HOST === '0.0.0.0' ? '127.0.0.1' : HOST;
     console.log(`Agent HQ API running on http://${displayHost}:${PORT}`);
+    startOpenClawMcpSyncWorker(getDb());
   });
 }
 
