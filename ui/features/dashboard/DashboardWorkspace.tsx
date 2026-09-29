@@ -157,13 +157,13 @@ export default function DashboardWorkspace() {
     const conflict = telemetryScopeConflict(scope, pageScope);
     return conflict ? telemetryScopeConflictMessage(conflict, catalog) : null;
   };
+  const matches = (text: string) => text.toLowerCase().includes(search.toLowerCase());
   const sources = [
     ...metrics.filter(metric => matches(metric.name)).map(metric => ({ key: `metric-${metric.id}`, label: `Metric · ${metric.name}`, add: () => addMetric(metric), conflict: describeConflict(metric.scope) })),
     ...reports.filter(report => report.definition.presentation === 'view' && matches(report.name)).map(report => ({ key: `view-${report.id}`, label: `Saved view · ${report.name}`, add: () => addView(report),
       conflict: describeConflict({ ...report.scope, ...report.definition.scope, ...report.definition.metrics[0]?.view?.scope }) })),
   ];
   const latest = Object.values(data).flatMap(item => item.result?.as_of ? [item.result.as_of] : []).sort()[0];
-  const matches = (text: string) => text.toLowerCase().includes(search.toLowerCase());
   const operationalAllowed = !scope.workflow_id && !scope.workflow_type && !scope.task_type;
   const metricBudgetFull = page.metrics.length >= 10;
   const viewingOverrides = !editing && (JSON.stringify(viewScope) !== JSON.stringify(page.scope ?? {}) || JSON.stringify(viewWindow) !== JSON.stringify({ from: page.from, to: page.to, timezone: page.timezone }));
