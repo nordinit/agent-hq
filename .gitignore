@@ -30,7 +30,8 @@ docker/keys/*
 # Local Docker Compose overrides — may contain secrets
 docker-compose.override.yml
 cli/.npmrc
-.claude/
+.claude/*
+!.claude/skills/
 .mcp.json
 .openclaw/
 *.log
