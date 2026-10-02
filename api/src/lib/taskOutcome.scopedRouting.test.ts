@@ -1,7 +1,7 @@
 import { setupTestDb, teardownTestDb } from '../db/testDb';
 import type { McpApiIdentity } from './mcpApiAuth';
 import { postTaskOutcome } from '../domains/tasks/release';
-import { cleanupTaskExecutionLinkageForStatus } from './taskLifecycle';
+import { ACTIVE_INSTANCE_END_GRACE_MS, cleanupTaskExecutionLinkage, cleanupImpossibleTaskLifecycleStates, clearEndedActiveInstanceLinkageIfEligible, clearPendingEndedActiveInstanceLinkageCleanupTimers, flushPendingEndedActiveInstanceLinkageCleanups } from './taskLifecycle';
 import { applyTaskOutcome } from './taskOutcome';
 import { WorkflowAllowedValuesError } from './taskStatusValidation';
 import { type Db } from "../db/adapter/types";
@@ -26,7 +26,7 @@ jest.mock('./taskLifecycle', () => {
   const actual = jest.requireActual('./taskLifecycle');
   return {
     ...actual,
-    cleanupTaskExecutionLinkageForStatus: jest.fn(actual.cleanupTaskExecutionLinkageForStatus),
+    cleanupTaskExecutionLinkage: jest.fn(actual.cleanupTaskExecutionLinkage),
   };
 });
 
@@ -74,6 +74,8 @@ describe('applyTaskOutcome scoped routing_config resolution', () => {
   let db: Db;
 
   afterEach(async () => {
+    await flushPendingEndedActiveInstanceLinkageCleanups();
+    clearPendingEndedActiveInstanceLinkageCleanupTimers();
     jest.clearAllMocks();
     await teardownTestDb();
   });
@@ -536,12 +538,12 @@ describe('applyTaskOutcome scoped routing_config resolution', () => {
     expect(task.status).toBe('review');
   });
 
-  it('clears active ownership immediately when a terminal outcome is accepted for the authoritative active run', async () => {
+  it('closes the authoritative run and releases ownership after the final-callback grace period', async () => {
     db = await createDb();
-    (cleanupTaskExecutionLinkageForStatus as jest.Mock).mockClear();
+    (cleanupTaskExecutionLinkage as jest.Mock).mockClear();
     await db.run(`
-      INSERT INTO job_instances (id, task_id, agent_id, status, session_key)
-      VALUES (93, 417, 7, 'running', NULL)
+      INSERT INTO job_instances (id, tenant_id, task_id, agent_id, status, session_key)
+      VALUES (93, 1, 417, 7, 'running', NULL)
     `);
     await db.run(`UPDATE tasks SET status = 'in_progress', active_instance_id = 93, agent_id = 7 WHERE id = 417`);
     await db.run(`
@@ -563,23 +565,54 @@ describe('applyTaskOutcome scoped routing_config resolution', () => {
       nextStatus: 'review',
     });
 
-    expect(cleanupTaskExecutionLinkageForStatus).toHaveBeenCalledWith(
+    expect(cleanupTaskExecutionLinkage).toHaveBeenCalledWith(
       expect.objectContaining({ inTransaction: true }),
       417,
-      'review',
       expect.objectContaining({
-        authoritativeInstanceId: 93,
         changedBy: 'task_outcome',
       }),
     );
-    expect((cleanupTaskExecutionLinkageForStatus as jest.Mock).mock.calls[0][3]).not.toHaveProperty('deferEndedActiveInstanceCleanup');
 
+    expect(await db.get('SELECT active_instance_id FROM tasks WHERE id = 417')).toEqual({ active_instance_id: 93 });
+    expect(await db.get('SELECT status FROM job_instances WHERE id = 93')).toEqual({ status: 'done' });
+    await clearEndedActiveInstanceLinkageIfEligible(db, 417, 93, { nowMs: Date.now() + ACTIVE_INSTANCE_END_GRACE_MS + 1000 });
     const task = await db.get(`SELECT active_instance_id, agent_id FROM tasks WHERE id = 417`) as {
       active_instance_id: number | null;
       agent_id: number | null;
     };
     expect(task.active_instance_id).toBeNull();
     expect(task.agent_id).toBeNull();
+  });
+
+  it.each(['approved', 'awaiting_customer_signature'])('accepts the owner’s outcome after repeated cleanup in %s', async taskStatus => {
+    db = await createDb();
+    await db.run(`INSERT INTO job_instances (id, tenant_id, task_id, agent_id, status)
+      VALUES (93, 1, 417, 7, 'running')`);
+    await db.run('UPDATE tasks SET status = ?, active_instance_id = 93 WHERE id = 417', taskStatus);
+    for (const status of [taskStatus, 'submission_recorded']) {
+      await db.run(`INSERT INTO workflow_task_statuses (workflow_id, status_key, label, terminal) VALUES (10, ?, ?, 0)`, status, status);
+    }
+    await db.run(`INSERT INTO workflow_task_transitions
+      (tenant_id, workflow_id, task_type, from_status, outcome, to_status, enabled)
+      VALUES (1, 10, 'backend', ?, 'confirm_existing_submission', 'submission_recorded', 1)`, taskStatus);
+
+    await cleanupImpossibleTaskLifecycleStates(db);
+    await cleanupTaskExecutionLinkage(db, 417);
+    await cleanupImpossibleTaskLifecycleStates(db);
+    expect(await db.get('SELECT active_instance_id FROM tasks WHERE id = 417')).toEqual({ active_instance_id: 93 });
+
+    await expect(postTaskOutcome(db, 417, {
+      outcome: 'confirm_existing_submission', summary: 'Wrong agent must remain unauthorized',
+    }, 'other-agent', { mcpIdentity: mcpIdentity(8) })).rejects.toThrow();
+    const result = await postTaskOutcome(db, 417, {
+      outcome: 'confirm_existing_submission', summary: 'Reconcile an existing submission; no external action',
+    }, 'owner', { mcpIdentity: mcpIdentity(7) });
+    expect(result).toMatchObject({ applied: true, instance_closed: true, next_status: 'submission_recorded' });
+    expect(await db.get('SELECT status, task_outcome FROM job_instances WHERE id = 93'))
+      .toEqual({ status: 'done', task_outcome: 'confirm_existing_submission' });
+    await clearEndedActiveInstanceLinkageIfEligible(db, 417, 93, { nowMs: Date.now() + ACTIVE_INSTANCE_END_GRACE_MS + 1000 });
+    expect(await db.get('SELECT active_instance_id, agent_id FROM tasks WHERE id = 417'))
+      .toEqual({ active_instance_id: null, agent_id: null });
   });
 
   it('writes accepted lifecycle outcome bookkeeping with the task tenant and closes the active tenant-owned instance', async () => {

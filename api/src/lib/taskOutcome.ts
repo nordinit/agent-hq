@@ -1,4 +1,4 @@
-import { cleanupTaskExecutionLinkageForStatus } from './taskLifecycle';
+import { cleanupTaskExecutionLinkage, cleanupTerminalTaskWorkspaces } from './taskLifecycle';
 import { canonicalOutcomeRoute, requireReleaseGate, resolveWorkflowModelOutcome } from './taskRelease';
 import { notifyTaskStatusChange } from './taskNotifications';
 import { isTerminalOutcome, closeInstance } from '../domains/runs/instanceClose';
@@ -651,11 +651,8 @@ export async function applyTaskOutcome(db: Db, input: ApplyTaskOutcomeInput): Pr
       `, effectiveOutcome, reloadedExisting.active_instance_id);
     }
 
-    // Close the authoritative run before status-driven linkage cleanup. Cleanup may mark a
-    // still-running, sessionless instance as failed when the destination status no longer permits
-    // active execution. Closing afterward would therefore see an already-terminal failed instance
-    // and skip the accepted outcome's successful completion bookkeeping. Keep the accepted outcome
-    // authoritative by closing its run before cleanup mutates any remaining execution linkage.
+    // An accepted outcome ends its authoritative run independently of the destination task status.
+    // Close first, then release ownership after the final-callback grace period.
     let instanceClosed = false;
     const authoritativeInstanceId = input.instanceId ?? reloadedExisting.active_instance_id;
     if (!input.dryRun && authoritativeInstanceId != null && isTerminalOutcome(effectiveOutcome)) {
@@ -677,10 +674,10 @@ export async function applyTaskOutcome(db: Db, input: ApplyTaskOutcomeInput): Pr
       }
     }
 
-    await cleanupTaskExecutionLinkageForStatus(db, input.taskId, nextStatus, {
-          authoritativeInstanceId,
+    await cleanupTaskExecutionLinkage(db, input.taskId, {
           changedBy: 'task_outcome',
         });
+    await cleanupTerminalTaskWorkspaces(db, input.taskId);
     await writeTaskLifecycleOutcomeHistory(db, input.taskId, changedBy, {
           outcome: effectiveOutcome,
           postedAt: lifecyclePostedAt,

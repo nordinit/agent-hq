@@ -3,6 +3,7 @@ import { recordRunCheckIn } from './observability';
 import { isTerminalInstanceOutcome } from '../../lib/outcomeCatalog';
 import { scheduleEndedActiveInstanceLinkageCleanup } from '../../lib/taskLifecycle';
 import { insertRuntimeLog } from '../../lib/runtimeTenantScope';
+import { isLiveInstanceStatus, isTerminalInstanceStatus } from './executionState';
 import { afterCommit, type Db } from "../../db/adapter/types";
 
 /**
@@ -35,8 +36,6 @@ export interface CloseInstanceResult {
   reason?: 'already_done' | 'not_found';
 }
 
-const ACTIVE_INSTANCE_STATUSES = new Set(['queued', 'dispatched', 'running']);
-const TERMINAL_INSTANCE_STATUSES = new Set(['done', 'failed', 'cancelled']);
 
 export interface CloseActiveInstanceAfterSemanticHandoffOptions {
   db: Db;
@@ -121,7 +120,7 @@ export async function closeActiveInstanceAfterSemanticHandoff(
   }
 
   const status = instance.status ?? '';
-  if (TERMINAL_INSTANCE_STATUSES.has(status)) {
+  if (isTerminalInstanceStatus(status)) {
     return { closed: false, reason: 'already_terminal', instanceId: resolvedInstanceId };
   }
 
@@ -129,7 +128,7 @@ export async function closeActiveInstanceAfterSemanticHandoff(
     return { closed: false, reason: 'runtime_already_ended', instanceId: resolvedInstanceId };
   }
 
-  if (!ACTIVE_INSTANCE_STATUSES.has(status)) {
+  if (!isLiveInstanceStatus(status)) {
     return { closed: false, reason: 'inactive_status', instanceId: resolvedInstanceId };
   }
 

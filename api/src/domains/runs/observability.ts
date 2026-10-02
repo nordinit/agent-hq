@@ -1,4 +1,3 @@
-import { cleanupImpossibleTaskLifecycleStates } from '../../lib/taskLifecycle';
 import { tableHasColumn } from '../../lib/durableRunIdentity';
 import { syncTaskActiveAgentFromInstance } from '../tasks/ownership';
 import { writeTaskHistory } from '../tasks/history';
@@ -82,40 +81,6 @@ function parseChangedFiles(value: unknown): string[] {
     .map(item => String(item).trim())
     .filter(Boolean)
     .slice(0, 200);
-}
-
-/** @deprecated Use selectTaskForAgent instead */
-export async function selectTaskForJob(db: Db, jobId: number): Promise<number | null> {
-  return await selectTaskForAgent(db, jobId);
-}
-
-export async function selectTaskForAgent(db: Db, agentId: number): Promise<number | null> {
-  await cleanupImpossibleTaskLifecycleStates(db);
-  const assignmentColumn = await sharedColumnExists(db, 'tasks', 'assigned_agent_id')
-    ? 'assigned_agent_id'
-    : 'agent_id';
-
-  const row = await db.get(`
-    SELECT id
-    FROM tasks
-    WHERE ${assignmentColumn} = ?
-      AND status IN ('in_progress', 'ready', 'review', 'todo', 'stalled')
-    ORDER BY
-      CASE status
-        WHEN 'in_progress' THEN 0
-        WHEN 'ready' THEN 1
-        WHEN 'review' THEN 2
-        WHEN 'todo' THEN 3
-        WHEN 'stalled' THEN 4
-        ELSE 5
-      END,
-      priority DESC,
-      updated_at ASC,
-      created_at ASC
-    LIMIT 1
-  `, agentId) as { id: number } | undefined;
-
-  return row?.id ?? null;
 }
 
 export async function attachInstanceToTask(db: Db, instanceId: number, taskId: number | null): Promise<void> {

@@ -1,6 +1,8 @@
 import { stopInstanceExecution, type StopInstanceExecutionResult } from '../domains/runs/stopInstanceExecution';
 import { writeTaskHistory } from '../domains/tasks/history';
 import { tenantInsertColumns } from './runtimeTenantScope';
+import { taskHasConfiguredTerminalStatus } from './taskLifecycle';
+import { isLiveInstanceStatus } from '../domains/runs/executionState';
 import { type Db } from "../db/adapter/types";
 
 export interface StopTaskActiveInstanceResult {
@@ -30,8 +32,7 @@ export async function stopTaskActiveInstance(
   } | undefined;
   if (!existing) throw new Error('Task not found');
 
-  const terminalStatuses = ['done', 'cancelled', 'failed'];
-  if (terminalStatuses.includes(existing.status) && !existing.active_instance_id) {
+  if (!existing.active_instance_id && await taskHasConfiguredTerminalStatus(db, taskId)) {
     throw new Error(`Cannot stop a task in terminal status '${existing.status}'`);
   }
 
@@ -40,16 +41,16 @@ export async function stopTaskActiveInstance(
 
   if (existing.active_instance_id != null) {
     const instance = await db.get(`
-      SELECT id, status
+      SELECT id, status, task_id
       FROM job_instances
       WHERE id = ? AND tenant_id = ?
-    `, existing.active_instance_id, tenantId) as { id: number; status: string } | undefined;
+    `, existing.active_instance_id, tenantId) as { id: number; status: string; task_id: number | null } | undefined;
 
-    if (instance && !['done', 'failed', 'cancelled'].includes(instance.status)) {
+    if (instance?.task_id === taskId && isLiveInstanceStatus(instance.status)) {
       hadActiveRun = true;
       stopResult = await stopInstanceExecution(db, instance.id, tenantId, 'stop');
     } else {
-      await db.run(`
+      const cleared = await db.run(`
         UPDATE tasks
         SET active_instance_id = NULL,
             agent_id = NULL,
@@ -58,7 +59,9 @@ export async function stopTaskActiveInstance(
       `, taskId, tenantId, existing.active_instance_id);
       // A manual stop is one of the likeliest ways the link disappears, so it is one of the
       // most important to record — otherwise the next refused lifecycle write looks unexplained.
-      await writeTaskHistory(db, taskId, 'task_stop', 'active_instance_id', existing.active_instance_id, null);
+      if (cleared.changes > 0) {
+        await writeTaskHistory(db, taskId, 'task_stop', 'active_instance_id', existing.active_instance_id, null);
+      }
     }
   }
 

@@ -4,7 +4,8 @@ import {
   ACTIVE_INSTANCE_END_GRACE_MS,
   cleanupImpossibleTaskLifecycleStates,
   cleanupTerminalTaskWorkspaces,
-  cleanupTaskExecutionLinkageForStatus,
+  cleanupTaskExecutionLinkage,
+  cancelTaskExecution,
   clearPendingEndedActiveInstanceLinkageCleanupTimers,
   clearEndedActiveInstanceLinkageIfEligible,
   flushPendingEndedActiveInstanceLinkageCleanups,
@@ -113,9 +114,9 @@ describe('task lifecycle worktree cleanup', () => {
   });
 
   it.each(['failed', 'cancelled', 'ready', 'qa_pass'])('keeps the worktree when a task moves to %s', async (status) => {
-    await seedLinkedTask(db, { instanceStatus: 'done' });
+    await seedLinkedTask(db, { taskStatus: status, instanceStatus: 'done' });
 
-    await cleanupTaskExecutionLinkageForStatus(db, 1, status);
+    await cleanupTaskExecutionLinkage(db, 1);
 
     expect(mockedRemoveTaskWorktree).not.toHaveBeenCalled();
   });
@@ -125,9 +126,9 @@ describe('task lifecycle worktree cleanup', () => {
     ['ready_to_merge', 'Release Engineer'],
     ['deployed', 'Release Engineer'],
   ])('keeps the worktree during %s handoff with a live instance', async (status, agentTitle) => {
-    await seedLinkedTask(db, { nextAgentTitle: agentTitle, instanceStatus: 'running' });
+    await seedLinkedTask(db, { taskStatus: status, nextAgentTitle: agentTitle, instanceStatus: 'running' });
 
-    await cleanupTaskExecutionLinkageForStatus(db, 1, status);
+    await cleanupTaskExecutionLinkage(db, 1);
 
     expect(mockedRemoveTaskWorktree).not.toHaveBeenCalled();
   });
@@ -135,7 +136,7 @@ describe('task lifecycle worktree cleanup', () => {
   it.each(['dev_deploy_queued', 'dev_deploying'])('preserves active instance linkage while task is %s', async (status) => {
     await seedLinkedTask(db, { taskStatus: status, instanceStatus: 'running' });
 
-    const cleared = await cleanupTaskExecutionLinkageForStatus(db, 1, status);
+    const cleared = await cleanupTaskExecutionLinkage(db, 1);
 
     const task = await db.get(`SELECT active_instance_id FROM tasks WHERE id = 1`) as { active_instance_id: number | null };
     expect(cleared).toBe(false);
@@ -143,10 +144,61 @@ describe('task lifecycle worktree cleanup', () => {
     expect(mockedAbort).not.toHaveBeenCalled();
   });
 
+  it.each(
+    ['approved', 'awaiting_customer_signature', 'done', 'cancelled', 'review'].flatMap(taskStatus =>
+      ['queued', 'dispatched', 'running'].map(instanceStatus => [taskStatus, instanceStatus])),
+  )('retains ownership in task status %s with a %s run through edits and repeated sweeps', async (taskStatus, instanceStatus) => {
+    await seedLinkedTask(db, { taskStatus, instanceStatus });
+    for (let tick = 0; tick < 2; tick++) {
+      expect(await cleanupTaskExecutionLinkage(db, 1)).toBe(false);
+      expect(await cleanupImpossibleTaskLifecycleStates(db)).toBe(0);
+    }
+    expect(await db.get('SELECT active_instance_id, agent_id FROM tasks WHERE id = 1'))
+      .toEqual({ active_instance_id: 10, agent_id: 1 });
+    expect(mockedAbort).not.toHaveBeenCalled();
+  });
+
+  it('detaches a link to another task without changing or aborting that task’s run', async () => {
+    await seedLinkedTask(db, { taskStatus: 'approved' });
+    await db.run(`INSERT INTO tasks (id, tenant_id, project_id, workflow_id, title, status) VALUES (2, 1, 1, 1, 'Other task', 'approved')`);
+    await db.run('UPDATE job_instances SET task_id = 2 WHERE id = 10');
+    expect(await cleanupImpossibleTaskLifecycleStates(db)).toBe(1);
+    expect(await db.get('SELECT active_instance_id, agent_id FROM tasks WHERE id = 1'))
+      .toEqual({ active_instance_id: null, agent_id: null });
+    expect(await db.get('SELECT status, task_id FROM job_instances WHERE id = 10'))
+      .toEqual({ status: 'running', task_id: 2 });
+    expect(mockedAbort).not.toHaveBeenCalled();
+  });
+
+  it('detaches a cross-tenant link without cancelling the foreign run', async () => {
+    await seedLinkedTask(db, { taskStatus: 'approved' });
+    await db.run(`INSERT INTO tenants (id, name, slug) VALUES (2, 'Other', 'other')`);
+    await db.run('UPDATE job_instances SET tenant_id = 2 WHERE id = 10');
+    expect(await cleanupImpossibleTaskLifecycleStates(db)).toBe(1);
+    expect(await db.get('SELECT status FROM job_instances WHERE id = 10')).toEqual({ status: 'running' });
+    expect(mockedAbort).not.toHaveBeenCalled();
+  });
+
+  it.each(['done', 'failed', 'cancelled'])('clears a %s run without an end timestamp in any task status', async instanceStatus => {
+    await seedLinkedTask(db, { taskStatus: 'awaiting_customer_signature', instanceStatus });
+    expect(await cleanupImpossibleTaskLifecycleStates(db)).toBe(1);
+    expect(await db.get('SELECT active_instance_id FROM tasks WHERE id = 1')).toEqual({ active_instance_id: null });
+  });
+
+  it('does not abort an unrelated run during explicit cancellation of a corrupt link', async () => {
+    await seedLinkedTask(db, { taskStatus: 'approved' });
+    await db.run(`INSERT INTO tasks (id, tenant_id, project_id, workflow_id, title, status) VALUES (2, 1, 1, 1, 'Other', 'approved')`);
+    await db.run('UPDATE job_instances SET task_id = 2 WHERE id = 10');
+    expect(await cancelTaskExecution(db, 1, 'operator')).toBe(true);
+    await flushPromises();
+    expect(await db.get('SELECT status FROM job_instances WHERE id = 10')).toEqual({ status: 'running' });
+    expect(mockedAbort).not.toHaveBeenCalled();
+  });
+
   it('keeps the worktree during qa_pass handoff even when execution linkage is cleared', async () => {
     await seedLinkedTask(db, { instanceStatus: 'done' });
 
-    await cleanupTaskExecutionLinkageForStatus(db, 1, 'qa_pass');
+    await cleanupTaskExecutionLinkage(db, 1);
 
     expect(mockedRemoveTaskWorktree).not.toHaveBeenCalled();
     const task = await db.get(`SELECT active_instance_id FROM tasks WHERE id = 1`) as { active_instance_id: number | null };
@@ -167,7 +219,7 @@ describe('task lifecycle worktree cleanup', () => {
         (14, 1, 1, NULL, 'failed', '/tmp/workspaces/agent-hq-task-1')
     `);
 
-    await cleanupTaskExecutionLinkageForStatus(db, 1, 'done');
+    await cleanupTerminalTaskWorkspaces(db, 1);
 
     expect(mockedRemoveTaskWorktree).toHaveBeenCalledTimes(2);
     expect(mockedRemoveTaskWorktree).toHaveBeenCalledWith({ repoPath: '/repo', worktreePath: '/tmp/workspaces/task-1' });
@@ -181,7 +233,7 @@ describe('task lifecycle worktree cleanup', () => {
     await db.run(`INSERT INTO tasks (id, tenant_id, project_id, workflow_id, title, status, agent_id, active_instance_id) VALUES (77, 1, 1, 1, 'Clone cleanup', 'done', 3, NULL)`);
     await db.run(`INSERT INTO job_instances (id, tenant_id, agent_id, task_id, status, worktree_path) VALUES (77, 1, 3, 77, 'done', '/tmp/task-77')`);
 
-    await cleanupTaskExecutionLinkageForStatus(db, 77, 'done');
+    await cleanupTerminalTaskWorkspaces(db, 77);
 
     expect(mockedRemoveTaskClone).toHaveBeenCalledWith({ workspacePath: '/tmp/task-77' });
   });
@@ -197,7 +249,7 @@ describe('task lifecycle worktree cleanup', () => {
             repoSource: 'worktree:/projects/agent-hq',
           }));
 
-    await cleanupTaskExecutionLinkageForStatus(db, 88, 'done');
+    await cleanupTerminalTaskWorkspaces(db, 88);
 
     expect(mockedRemoveTaskWorktree).toHaveBeenCalledWith({
       repoPath: '/projects/agent-hq',
@@ -208,8 +260,8 @@ describe('task lifecycle worktree cleanup', () => {
   it('keeps repeated done cleanup calls harmless', async () => {
     await seedLinkedTask(db, { taskStatus: 'done', activeInstanceId: null, instanceStatus: 'done' });
 
-    await expect(cleanupTaskExecutionLinkageForStatus(db, 1, 'done')).resolves.toBeDefined();
-    await expect(cleanupTaskExecutionLinkageForStatus(db, 1, 'done')).resolves.toBeDefined();
+    await expect(cleanupTerminalTaskWorkspaces(db, 1)).resolves.toBeDefined();
+    await expect(cleanupTerminalTaskWorkspaces(db, 1)).resolves.toBeDefined();
 
     expect(mockedRemoveTaskWorktree).toHaveBeenCalledTimes(2);
   });
@@ -299,6 +351,8 @@ describe('task lifecycle worktree cleanup', () => {
     let task = await db.get(`SELECT active_instance_id FROM tasks WHERE id = 1`) as { active_instance_id: number | null };
     expect(task.active_instance_id).toBe(10);
 
+    // Simulate a restart losing the scheduled timer; the sweep still performs cleanup.
+    clearPendingEndedActiveInstanceLinkageCleanupTimers();
     jest.advanceTimersByTime(ACTIVE_INSTANCE_END_GRACE_MS + 1);
     await flushPromises();
 
@@ -326,9 +380,7 @@ describe('task lifecycle worktree cleanup', () => {
       WHERE id = 10
     `, new Date().toISOString());
 
-    await cleanupTaskExecutionLinkageForStatus(db, 1, 'review', {
-            deferEndedActiveInstanceCleanup: true,
-            authoritativeInstanceId: 10,
+    await cleanupTaskExecutionLinkage(db, 1, {
             changedBy: 'task_lifecycle',
           });
 
@@ -372,9 +424,7 @@ describe('task lifecycle worktree cleanup', () => {
       WHERE id = 10
     `, new Date().toISOString(), new Date().toISOString());
 
-    await cleanupTaskExecutionLinkageForStatus(db, 1, 'review', {
-            deferEndedActiveInstanceCleanup: true,
-            authoritativeInstanceId: 10,
+    await cleanupTaskExecutionLinkage(db, 1, {
             changedBy: 'task_lifecycle',
           });
 
@@ -394,11 +444,11 @@ describe('task lifecycle worktree cleanup', () => {
     expect(mockedAbort).not.toHaveBeenCalled();
   });
 
-  it('runs cancellation after commit with a usable pool handle', async () => {
+  it('runs explicit cancellation after commit with a usable pool handle', async () => {
     await seedLinkedTask(db, { taskStatus: 'in_progress', instanceStatus: 'running' });
     await db.run("UPDATE job_instances SET session_key = 'run:10:transaction' WHERE id = 10");
     await db.withTransaction(async tx => {
-      await cleanupTaskExecutionLinkageForStatus(tx, 1, 'cancelled');
+      await cancelTaskExecution(tx, 1, 'operator');
       expect(mockedAbort).not.toHaveBeenCalled();
     });
     await flushPromises();
@@ -408,11 +458,11 @@ describe('task lifecycle worktree cleanup', () => {
     expect(await poolDb.get('SELECT status FROM job_instances WHERE id = 10')).toEqual({ status: 'cancelled' });
   });
 
-  it('does not cancel a run when the task transition rolls back', async () => {
+  it('does not cancel a run when explicit cancellation rolls back', async () => {
     await seedLinkedTask(db, { taskStatus: 'in_progress', instanceStatus: 'running' });
     await db.run("UPDATE job_instances SET session_key = 'run:10:rollback' WHERE id = 10");
     await expect(db.withTransaction(async tx => {
-      await cleanupTaskExecutionLinkageForStatus(tx, 1, 'cancelled');
+      await cancelTaskExecution(tx, 1, 'operator');
       throw new Error('rollback');
     })).rejects.toThrow('rollback');
     await flushPromises();
@@ -430,9 +480,7 @@ describe('task lifecycle worktree cleanup', () => {
       WHERE id = 10
     `, new Date().toISOString());
 
-    await cleanupTaskExecutionLinkageForStatus(db, 1, 'review', {
-            deferEndedActiveInstanceCleanup: true,
-            authoritativeInstanceId: 10,
+    await cleanupTaskExecutionLinkage(db, 1, {
             changedBy: 'task_lifecycle',
           });
 

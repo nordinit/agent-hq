@@ -35,7 +35,6 @@ export type DirectGatedTaskStatus = typeof DIRECT_GATED_TASK_STATUSES[number];
  * this constant would override what the user configured.
  */
 export const DEFAULT_TERMINAL_TASK_STATUS_SEEDS = ['done', 'cancelled', 'failed'] as const;
-export const ACTIVE_TASK_STATUSES = ['in_progress', 'review', 'ready_to_merge', 'deployed'] as const;
 
 export function isTaskStatus(value: unknown): value is TaskStatus {
   return typeof value === 'string' && (TASK_STATUSES as readonly string[]).includes(value);

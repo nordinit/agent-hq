@@ -139,6 +139,61 @@ describe('tasks route write-model handoff', () => {
     await teardownTestDb();
   });
 
+  it.each(['approved', 'awaiting_customer_signature'])('preserves a live owner through title and status edits from %s', async taskStatus => {
+    const db = getDb();
+    for (const status of [taskStatus, 'customer_followup']) {
+      await db.run(`INSERT INTO workflow_task_statuses (workflow_id, status_key, label, terminal)
+        VALUES (42, ?, ?, 0)`, status, status);
+    }
+    await db.run(`INSERT INTO job_instances (id, tenant_id, task_id, agent_id, status)
+      VALUES (900, 1, 102, 7, 'running')`);
+    await db.run('UPDATE tasks SET status = ?, active_instance_id = 900 WHERE id = 102', taskStatus);
+
+    const edit = await fetch(`${baseUrl}/api/v1/tasks/102`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'Edited while running', changed_by: 'operator' }),
+    });
+    expect(edit.status).toBe(200);
+    expect(await db.get('SELECT active_instance_id, agent_id FROM tasks WHERE id = 102'))
+      .toEqual({ active_instance_id: 900, agent_id: 7 });
+
+    await updateTaskRecord(db, 102, { status: 'customer_followup' }, {
+      changedBy: 'User', authorityBy: 'User', isManualOverride: true,
+    });
+    expect(await db.get('SELECT status, active_instance_id, agent_id FROM tasks WHERE id = 102'))
+      .toEqual({ status: 'customer_followup', active_instance_id: 900, agent_id: 7 });
+    expect(await db.get('SELECT status FROM job_instances WHERE id = 900')).toEqual({ status: 'running' });
+  });
+
+  it('explicit cancellation detaches and cancels a queued run from a custom task status', async () => {
+    const db = getDb();
+    await db.run(`INSERT INTO job_instances (id, tenant_id, task_id, agent_id, status)
+      VALUES (900, 1, 102, 7, 'queued')`);
+    await db.run("UPDATE tasks SET status = 'awaiting_customer_signature', active_instance_id = 900 WHERE id = 102");
+    const cancel = await fetch(`${baseUrl}/api/v1/tasks/102/cancel`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+    });
+    expect(cancel.status).toBe(200);
+    expect(await db.get('SELECT status, active_instance_id, agent_id FROM tasks WHERE id = 102'))
+      .toEqual({ status: 'cancelled', active_instance_id: null, agent_id: null });
+    expect(await db.get('SELECT status FROM job_instances WHERE id = 900')).toEqual({ status: 'cancelled' });
+  });
+
+  it('uses configured terminality for pause instead of built-in status names', async () => {
+    const db = getDb();
+    await db.run(`INSERT INTO workflow_task_statuses (workflow_id, status_key, label, terminal)
+      VALUES (42, 'failed', 'Recoverable', 0), (42, 'custom_final', 'Final', 1)`);
+    const pause = await fetch(`${baseUrl}/api/v1/tasks/103/pause`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+    });
+    expect(pause.status).toBe(200);
+    await db.run("UPDATE tasks SET status = 'custom_final' WHERE id = 102");
+    const refused = await fetch(`${baseUrl}/api/v1/tasks/102/pause`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+    });
+    expect(refused.status).toBe(400);
+  });
+
   it('creates tasks through the route and preserves skipped blocker reporting', async () => {
     const res = await fetch(`${baseUrl}/api/v1/tasks`, {
       method: 'POST',

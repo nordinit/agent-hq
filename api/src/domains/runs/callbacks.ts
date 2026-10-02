@@ -15,15 +15,10 @@ import { applyConfiguredRuntimeFailedEvent } from './runtimeFailureEvent';
 import { nowTimestamp } from '../../lib/timestamps';
 import { type Db } from "../../db/adapter/types";
 import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../../db/introspection";
-
-const START_EVENT_LIVE_INSTANCE_STATUSES = ['queued', 'dispatched', 'running'] as const;
+import { isLiveInstanceStatus } from './executionState';
 
 async function tableHasColumn(db: Db, table: string, column: string): Promise<boolean> {
     return await sharedColumnExists(db, table, column);
-}
-
-function isStartEventLiveInstanceStatus(status: string | null | undefined): boolean {
-  return Boolean(status && START_EVENT_LIVE_INSTANCE_STATUSES.includes(status as typeof START_EVENT_LIVE_INSTANCE_STATUSES[number]));
 }
 
 async function applyConfiguredStartEvent(db: Db, instanceId: number, changedBy: string): Promise<void> {
@@ -54,7 +49,7 @@ async function applyConfiguredStartEvent(db: Db, instanceId: number, changedBy: 
   if (task.active_instance_id !== null && task.active_instance_id !== instanceId) return;
 
   if (task.active_instance_id === null) {
-    if (!isStartEventLiveInstanceStatus(task.instance_status)) return;
+    if (!isLiveInstanceStatus(task.instance_status)) return;
 
     const result = await db.run(`
       UPDATE tasks

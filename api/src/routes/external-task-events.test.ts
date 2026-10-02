@@ -21,7 +21,7 @@ jest.mock('../lib/taskLifecycle', () => {
   const actual = jest.requireActual('../lib/taskLifecycle') as typeof import('../lib/taskLifecycle');
   return {
     ...actual,
-    cleanupTaskExecutionLinkageForStatus: jest.fn(),
+    cleanupTaskExecutionLinkage: jest.fn(),
   };
 });
 
@@ -35,7 +35,7 @@ import {
 // Requests authenticate as the operator unless they carry an MCP key of their own.
 import { authenticateTestApiRequest, operatorFetch as fetch } from '../lib/testApiAuth';
 import { DEV_ENV_DEPLOY_FAILURE_EVENTS, seedDefaultExternalEventMappings } from '../domains/routing/externalEventMappings';
-import { cleanupTaskExecutionLinkageForStatus } from '../lib/taskLifecycle';
+import { cleanupTaskExecutionLinkage } from '../lib/taskLifecycle';
 
 let tempDir: string;
 
@@ -650,7 +650,7 @@ describe('external task events route', () => {
 
   it('reprocesses a rejected deployed_for_qa receipt after missing configuration evidence is recorded', async () => {
     const db = getDb();
-    (cleanupTaskExecutionLinkageForStatus as jest.Mock).mockClear();
+    (cleanupTaskExecutionLinkage as jest.Mock).mockClear();
     await db.run(`
       INSERT INTO workflow_task_transition_requirements (tenant_id, workflow_id, project_id, workflow_type, task_type, outcome, field_name, message)
       VALUES (1, 10, 1, 'generic', 'backend', 'completed_for_review', 'configuration_resource', 'configuration_resource required')
@@ -704,7 +704,7 @@ describe('external task events route', () => {
       expect(task.active_instance_id).toBe(1784);
       expect(JSON.parse(task.custom_fields_json ?? '{}').review_branch ?? null).toBeNull();
       expect(JSON.parse(task.custom_fields_json ?? '{}').review_commit ?? null).toBeNull();
-      expect(cleanupTaskExecutionLinkageForStatus).not.toHaveBeenCalled();
+      expect(cleanupTaskExecutionLinkage).not.toHaveBeenCalled();
 
       await db.run(`
         UPDATE tasks
@@ -751,20 +751,17 @@ describe('external task events route', () => {
       expect(recoveredCustomFields).toMatchObject({
         configuration_resource: 'dev-environment-lease-manager:lease-config-retry/configuration',
       });
-      expect(cleanupTaskExecutionLinkageForStatus).toHaveBeenCalledTimes(1);
-      const cleanupCall = (cleanupTaskExecutionLinkageForStatus as jest.Mock).mock.calls[0];
+      expect(cleanupTaskExecutionLinkage).toHaveBeenCalledTimes(1);
+      const cleanupCall = (cleanupTaskExecutionLinkage as jest.Mock).mock.calls[0];
       expect(cleanupCall[0]).not.toBe(db);
       expect(cleanupCall[0].inTransaction).toBe(true);
-      expect(cleanupTaskExecutionLinkageForStatus).toHaveBeenCalledWith(
+      expect(cleanupTaskExecutionLinkage).toHaveBeenCalledWith(
         expect.objectContaining({ inTransaction: true }),
         449,
-        'review',
         expect.objectContaining({
-          authoritativeInstanceId: 1784,
           changedBy: 'task_outcome',
         }),
       );
-      expect((cleanupTaskExecutionLinkageForStatus as jest.Mock).mock.calls[0][3]).not.toHaveProperty('deferEndedActiveInstanceCleanup');
 
       const third = await fetch(`${baseUrl}/api/v1/external/task-events`, {
         method: 'POST',
@@ -780,7 +777,7 @@ describe('external task events route', () => {
         duplicate: true,
         processing_state: 'duplicate',
       });
-      expect(cleanupTaskExecutionLinkageForStatus).toHaveBeenCalledTimes(1);
+      expect(cleanupTaskExecutionLinkage).toHaveBeenCalledTimes(1);
 
       const receipts = await db.all(`
         SELECT processing_state, processing_error, mapping_action_target

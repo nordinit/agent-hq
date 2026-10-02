@@ -215,6 +215,8 @@ workflow + task type + current status → agent
 
 Dispatch happens only where an assignment rule matches the task's status. A status with no matching rule never dispatches. (One exception: an `in_progress` task with no live run is resolved with its workflow's `ready` rules.)
 
+Once dispatched, a run keeps its task and agent ownership in any task status, including custom statuses. Editing a task or changing its status does not stop its active run. An accepted outcome or runtime completion ends the run; its active link is released after the final-callback grace period. Explicit Stop and Cancel actions revoke ownership and stop execution. Background cleanup checks the run's identity, tenant, and execution state, without a task-status allowlist.
+
 From the starter Development workflow:
 
 ```text

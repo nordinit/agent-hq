@@ -10,12 +10,8 @@ import { nowTimestamp } from './timestamps';
 import { afterCommit, type Db } from "../db/adapter/types";
 import { abortInstanceExecutionTransport } from '../domains/runs/stopInstanceExecution';
 import { columnExists as sharedColumnExists } from "../db/introspection";
+import { isLiveInstanceStatus, LIVE_INSTANCE_STATUSES } from '../domains/runs/executionState';
 
-const LIVE_TASK_STATUSES = ['in_progress', 'dev_deploy_queued', 'dev_deploying', 'stalled'] as const;
-const LIVE_INSTANCE_STATUSES = ['queued', 'dispatched', 'running'] as const;
-// Dispatch attaches an instance before the visible agent_started mapping moves
-// the task out of ready, so retain live ownership during that handoff window.
-const ACTIVE_LINKAGE_RETAIN_STATUSES = ['ready', 'dispatched', 'in_progress', 'dev_deploy_queued', 'dev_deploying', 'stalled', 'review', 'ready_to_merge', 'deployed', 'blocked'] as const;
 export const ACTIVE_INSTANCE_END_GRACE_MS: number = (() => {
   const v = parseInt(process.env.ACTIVE_INSTANCE_END_GRACE_MS ?? '', 10);
   return Number.isFinite(v) && v >= 0 ? v : 10_000;
@@ -57,52 +53,6 @@ export function clearPendingEndedActiveInstanceLinkageCleanupTimers(): number {
 
 // ── Internal helpers ─────────────────────────────────────────────────────────
 
-async function isQaAgent(db: Db, agentId: number | null | undefined): Promise<boolean> {
-  if (!agentId) return false;
-
-  const row = await db.get(`
-    SELECT name, job_title
-    FROM agents
-    WHERE id = ?
-  `, agentId) as { name: string | null; job_title: string | null } | undefined;
-  const haystack = ((row?.job_title ?? '') + ' ' + (row?.name ?? '')).toLowerCase();
-
-  return /\bqa\b/.test(haystack);
-}
-
-async function taskAllowsReviewExecution(db: Db, task: { agent_id?: number | null; active_instance_id: number | null }): Promise<boolean> {
-  if (!task.active_instance_id || !task.agent_id || !await isQaAgent(db, task.agent_id)) return false;
-
-  const instance = await db.get(`
-    SELECT agent_id, status
-    FROM job_instances
-    WHERE id = ?
-  `, task.active_instance_id) as { agent_id: number; status: string } | undefined;
-
-  if (!instance) return false;
-  if (instance.agent_id !== task.agent_id) return false;
-  return LIVE_INSTANCE_STATUSES.includes(instance.status as typeof LIVE_INSTANCE_STATUSES[number]);
-}
-
-/**
- * Returns true when a deployment-stage instance is still live and owns
- * the task. Outcome posting closes the instance and schedules ended-linkage
- * cleanup; this guard only preserves authority while that live release run is
- * still legitimately in flight.
- */
-async function taskAllowsReleaseExecution(db: Db, task: { agent_id?: number | null; active_instance_id: number | null }): Promise<boolean> {
-  if (!task.active_instance_id) return false;
-
-  const instance = await db.get(`
-    SELECT agent_id, status
-    FROM job_instances
-    WHERE id = ?
-  `, task.active_instance_id) as { agent_id: number; status: string } | undefined;
-
-  if (!instance) return false;
-  return LIVE_INSTANCE_STATUSES.includes(instance.status as typeof LIVE_INSTANCE_STATUSES[number]);
-}
-
 function normalizeTimestamp(raw?: string | null): number | null {
   if (!raw) return null;
   const normalized = raw.includes('T') ? raw : raw.replace(' ', 'T');
@@ -120,32 +70,25 @@ function getEndedLinkageAnchorMs(runtimeEndedAt?: string | null, lifecycleOutcom
   return Math.min(...candidates);
 }
 
-function isWithinEndedLinkageGraceWindow(
-  runtimeEndedAt?: string | null,
-  lifecycleOutcomePostedAt?: string | null,
-  nowMs = Date.now(),
-): boolean {
-  const anchorMs = getEndedLinkageAnchorMs(runtimeEndedAt, lifecycleOutcomePostedAt);
-  if (anchorMs == null) return false;
-  return nowMs - anchorMs < ACTIVE_INSTANCE_END_GRACE_MS;
-}
-
 async function getEndedLinkageCleanupContext(db: Db, taskId: number, instanceId: number): Promise<{
   taskId: number;
   instanceId: number;
+  tenantId: number;
   runtimeEndedAt: string | null;
   lifecycleOutcomePostedAt: string | null;
   anchorMs: number;
 } | null> {
   const row = await db.get(`
-    SELECT t.active_instance_id,
+    SELECT t.active_instance_id, t.tenant_id,
            ji.runtime_ended_at,
            ji.lifecycle_outcome_posted_at
     FROM tasks t
-    LEFT JOIN job_instances ji ON ji.id = t.active_instance_id
+    JOIN job_instances ji ON ji.id = t.active_instance_id
+      AND ji.task_id = t.id AND ji.tenant_id = t.tenant_id
     WHERE t.id = ?
   `, taskId) as {
     active_instance_id: number | null;
+    tenant_id: number;
     runtime_ended_at: string | null;
     lifecycle_outcome_posted_at: string | null;
   } | undefined;
@@ -158,6 +101,7 @@ async function getEndedLinkageCleanupContext(db: Db, taskId: number, instanceId:
   return {
     taskId,
     instanceId,
+    tenantId: row.tenant_id,
     runtimeEndedAt: row.runtime_ended_at,
     lifecycleOutcomePostedAt: row.lifecycle_outcome_posted_at,
     anchorMs,
@@ -187,7 +131,7 @@ async function finalizeTaskTransitionRuntimeEndIfNeeded(
   } | undefined;
 
   if (!row?.status || row.runtime_ended_at) return;
-  if (!LIVE_INSTANCE_STATUSES.includes(row.status as typeof LIVE_INSTANCE_STATUSES[number])) return;
+  if (!isLiveInstanceStatus(row.status)) return;
 
   const hasSemanticOutcome = Boolean(row.lifecycle_outcome_posted_at || row.task_outcome);
   if (!hasSemanticOutcome) return;
@@ -253,9 +197,9 @@ export async function clearEndedActiveInstanceLinkageIfEligible(
     SET active_instance_id = NULL,
         ${await taskTableHasColumn(db, 'agent_id') ? 'agent_id = NULL,' : ''}
         updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
-    WHERE id = ?
+    WHERE id = ? AND tenant_id = ?
       AND active_instance_id = ?
-  `, taskId, instanceId);
+  `, taskId, context.tenantId, instanceId);
 
   if (result.changes > 0) {
     try {
@@ -290,11 +234,13 @@ export async function scheduleEndedActiveInstanceLinkageCleanup(
   const runCleanup = (poolDb: Db) => async () => {
     pendingEndedLinkageCleanupTimers.delete(key);
     try {
-      await finalizeTaskTransitionRuntimeEndIfNeeded(poolDb, taskId, instanceId, options?.changedBy);
-      await clearEndedActiveInstanceLinkageIfEligible(poolDb, taskId, instanceId, {
-                changedBy: options?.changedBy,
-                force: true,
-              });
+      await poolDb.withTransaction(async tx => {
+        const task = await tx.get<{ active_instance_id: number | null }>(
+          'SELECT active_instance_id FROM tasks WHERE id = ? FOR UPDATE', taskId,
+        );
+        if (task?.active_instance_id !== instanceId) return;
+        await cleanupTaskExecutionLinkage(tx, taskId, options);
+      });
     } catch (err) {
       console.warn(
         `[taskLifecycle] Failed delayed active-instance cleanup for task #${taskId} instance #${instanceId}:`,
@@ -304,6 +250,9 @@ export async function scheduleEndedActiveInstanceLinkageCleanup(
   };
 
   afterCommit(db, poolDb => {
+    // Closing and cleanup can both schedule within one transaction, before
+    // either callback has installed its timer.
+    if (pendingEndedLinkageCleanupTimers.has(key)) return;
     if (remainingMs === 0) {
       setImmediate(() => { void trackEndedLinkageCleanup(runCleanup(poolDb)); });
       return;
@@ -315,9 +264,6 @@ export async function scheduleEndedActiveInstanceLinkageCleanup(
   return true;
 }
 
-export function taskAllowsActiveExecution(status: string | null | undefined): boolean {
-  return Boolean(status && LIVE_TASK_STATUSES.includes(status as typeof LIVE_TASK_STATUSES[number]));
-}
 
 function resolveCleanupRepoContext(row: {
   payload_sent?: string | null;
@@ -459,168 +405,111 @@ export function abortOrphanedInstanceAsync(
   });
 }
 
-async function markInstanceFailed(db: Db, instanceId: number, reason: string): Promise<void> {
-  try {
-    await db.run(`
-      UPDATE job_instances
-      SET status = 'failed',
-          stop_requested_at = COALESCE(stop_requested_at, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')),
-          abort_attempted_at = COALESCE(abort_attempted_at, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')),
-          abort_status = 'failed',
-          abort_error = ?,
-          error = ?,
-          completed_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
-      WHERE id = ?
-        AND status NOT IN ('done', 'failed', 'cancelled')
-    `, reason, reason, instanceId);
-  } catch (err) {
-    console.error(`[taskLifecycle] failed to mark instance #${instanceId} as failed:`, err);
-  }
-}
-
-// ── Exported lifecycle functions ─────────────────────────────────────────────
-
-export async function cleanupTaskExecutionLinkageForStatus(
-  db: Db,
-  taskId: number,
-  nextStatus?: string | null,
-  options?: {
-    deferEndedActiveInstanceCleanup?: boolean;
-    authoritativeInstanceId?: number | null;
-    changedBy?: string;
-  },
+/**
+ * Clear only the expected task/run link. The caller holds the task row lock;
+ * the predicate also fences delayed work from a newer replacement run.
+ */
+async function detachTaskInstance(
+  db: Db, taskId: number, tenantId: number, instanceId: number, changedBy: string,
 ): Promise<boolean> {
-  const task = await db.get(`
-    SELECT id, status, agent_id, active_instance_id
-    FROM tasks
-    WHERE id = ?
-  `, taskId) as { id: number; status: string; agent_id: number | null; active_instance_id: number | null } | undefined;
-
-  if (!task) return false;
-
-  const effectiveStatus = nextStatus ?? task.status;
-  if (effectiveStatus === task.status && await taskHasConfiguredTerminalStatus(db, taskId)) {
-    await cleanupTerminalTaskWorkspaces(db, taskId);
-  }
-
-  if (!task.active_instance_id) return false;
-
-  if (taskAllowsActiveExecution(effectiveStatus)) return false;
-  if (effectiveStatus === 'review' && await taskAllowsReviewExecution(db, task)) return false;
-  // Deployment-stage exception: preserve authority while a release run is still
-  // live. Once an outcome closes the instance, ended-linkage cleanup clears it.
-  if ((effectiveStatus === 'ready_to_merge' || effectiveStatus === 'deployed') && await taskAllowsReleaseExecution(db, task)) return false;
-
-  if (options?.deferEndedActiveInstanceCleanup) {
-    const authoritativeInstanceId = options.authoritativeInstanceId ?? task.active_instance_id;
-    if (authoritativeInstanceId != null && authoritativeInstanceId === task.active_instance_id) {
-      const scheduled = await scheduleEndedActiveInstanceLinkageCleanup(db, taskId, authoritativeInstanceId, {
-              changedBy: options.changedBy,
-            });
-      if (scheduled) return false;
-    }
-  }
-
-  // Capture orphaned instance info before clearing linkage
-  const orphanedInstanceId = task.active_instance_id;
-  const orphanedInstance = await db.get(`
-    SELECT id, session_key, status
-    FROM job_instances
-    WHERE id = ?
-  `, orphanedInstanceId) as { id: number; session_key: string | null; status: string } | undefined;
-
   const result = await db.run(`
     UPDATE tasks
-    SET active_instance_id = NULL,
-        ${await taskTableHasColumn(db, 'agent_id') ? 'agent_id = NULL,' : ''}
+    SET active_instance_id = NULL, agent_id = NULL,
         updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
-    WHERE id = ?
-      AND active_instance_id IS NOT NULL
-  `, taskId);
-
+    WHERE id = ? AND tenant_id = ? AND active_instance_id = ?
+  `, taskId, tenantId, instanceId);
   if (result.changes > 0) {
-    // Recorded whether or not the orphaned instance row still exists: the link was removed
-    // either way, and that removal is what a later refused lifecycle write hinges on.
-    await writeTaskHistory(db, taskId, 'task_lifecycle', 'active_instance_id', orphanedInstanceId, null);
+    await writeTaskHistory(db, taskId, changedBy, 'active_instance_id', instanceId, null);
   }
-
-  if (result.changes > 0 && orphanedInstance) {
-    const { session_key: sessionKey, status: instanceStatus } = orphanedInstance;
-
-    // Only abort instances that are still live (dispatched/running).
-    // Queued instances have no active session to abort — just mark failed.
-    const isLive = instanceStatus === 'dispatched' || instanceStatus === 'running';
-
-    if (isLive) {
-      // Fire-and-forget async abort — never blocks the event loop
-      abortOrphanedInstanceAsync(
-        db,
-        orphanedInstanceId,
-        sessionKey ?? '',
-        `task #${taskId} cancelled/stopped (status → ${effectiveStatus})`,
-      );
-    } else if (instanceStatus === 'queued') {
-      // Queued or live-but-sessionless: no session to abort, mark failed immediately
-      await markInstanceFailed(
-                db,
-                orphanedInstanceId,
-                `orphaned by task #${taskId} cancel/stop (status → ${effectiveStatus}); no session key to abort`,
-              );
-    }
-    // Already-terminal instances (done/failed) are left untouched
-  }
-
   return result.changes > 0;
 }
 
+/**
+ * Ownership follows the run, never the task's workflow status. A status edit
+ * cannot stop a live run. Only an ended handoff, invalid link, or explicit
+ * cancellation releases ownership.
+ */
+export async function cleanupTaskExecutionLinkage(
+  db: Db,
+  taskId: number,
+  options: { changedBy?: string } = {},
+): Promise<boolean> {
+  return db.withTransaction(async tx => {
+    const task = await tx.get<{
+      id: number; tenant_id: number; active_instance_id: number | null;
+    }>(`SELECT id, tenant_id, active_instance_id FROM tasks WHERE id = ? FOR UPDATE`, taskId);
+    if (!task?.active_instance_id) return false;
+
+    const instance = await tx.get<{
+      id: number; task_id: number | null; tenant_id: number; status: string;
+      runtime_ended_at: string | null; lifecycle_outcome_posted_at: string | null;
+    }>(`SELECT id, task_id, tenant_id, status, runtime_ended_at, lifecycle_outcome_posted_at
+        FROM job_instances WHERE id = ? FOR UPDATE`, task.active_instance_id);
+    const ownsTask = instance?.task_id === task.id && instance.tenant_id === task.tenant_id;
+
+    if (ownsTask) {
+      // Outcome posting/runtime completion may still have final callbacks in
+      // flight. Preserve the same grace period in synchronous and swept cleanup.
+      const anchorMs = getEndedLinkageAnchorMs(instance.runtime_ended_at, instance.lifecycle_outcome_posted_at);
+      if (anchorMs != null) {
+        if (Date.now() - anchorMs < ACTIVE_INSTANCE_END_GRACE_MS) {
+          await scheduleEndedActiveInstanceLinkageCleanup(tx, taskId, instance.id, options);
+          return false;
+        }
+        await finalizeTaskTransitionRuntimeEndIfNeeded(tx, taskId, instance.id, options.changedBy);
+      } else if (isLiveInstanceStatus(instance.status)) {
+        return false;
+      }
+    }
+
+    // Never cancel or mutate an unrelated instance when repairing a bad link.
+    return detachTaskInstance(tx, taskId, task.tenant_id, task.active_instance_id,
+      options.changedBy ?? 'task_lifecycle');
+  });
+}
+
+/** Explicit cancellation, separate from ordinary task/status edits. */
+export async function cancelTaskExecution(db: Db, taskId: number, changedBy: string): Promise<boolean> {
+  return db.withTransaction(async tx => {
+    const task = await tx.get<{
+      id: number; tenant_id: number; active_instance_id: number | null;
+    }>(`SELECT id, tenant_id, active_instance_id FROM tasks WHERE id = ? FOR UPDATE`, taskId);
+    if (!task?.active_instance_id) return false;
+    const instance = await tx.get<{
+      id: number; task_id: number | null; tenant_id: number; status: string; session_key: string | null;
+    }>(`SELECT id, task_id, tenant_id, status, session_key
+        FROM job_instances WHERE id = ? FOR UPDATE`, task.active_instance_id);
+    const detached = await detachTaskInstance(tx, taskId, task.tenant_id, task.active_instance_id, changedBy);
+    if (!detached || !instance || instance.task_id !== taskId || instance.tenant_id !== task.tenant_id
+      || !isLiveInstanceStatus(instance.status)) return detached;
+
+    // Fence callbacks immediately; remote cancellation runs only after commit.
+    await tx.run(`UPDATE job_instances SET status = 'cancelled',
+      stop_requested_at = COALESCE(stop_requested_at, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')),
+      completed_at = COALESCE(completed_at, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
+      WHERE id = ? AND tenant_id = ?`, instance.id, task.tenant_id);
+    if (instance.status !== 'queued') {
+      abortOrphanedInstanceAsync(tx, instance.id, instance.session_key ?? '', `task #${taskId} explicitly cancelled`);
+    }
+    return detached;
+  });
+}
+
 export async function cleanupImpossibleTaskLifecycleStates(db: Db): Promise<number> {
-  const rows = await db.all(`
-    SELECT t.id, t.status, t.active_instance_id,
-           ji.status AS instance_status,
-           ji.runtime_ended_at,
-           ji.lifecycle_outcome_posted_at
+  // Select only broken or ended links. Healthy live runs in ANY task status
+  // never need per-task cleanup or workflow-name checks.
+  const rows = await db.all<{ id: number }>(`
+    SELECT t.id
     FROM tasks t
     LEFT JOIN job_instances ji ON ji.id = t.active_instance_id
+      AND ji.task_id = t.id AND ji.tenant_id = t.tenant_id
     WHERE t.active_instance_id IS NOT NULL
-  `) as Array<{
-    id: number;
-    status: string;
-    active_instance_id: number;
-    instance_status: string | null;
-    runtime_ended_at: string | null;
-    lifecycle_outcome_posted_at: string | null;
-  }>;
-
+      AND (ji.id IS NULL OR ji.status NOT IN (?, ?, ?)
+        OR ji.runtime_ended_at IS NOT NULL OR ji.lifecycle_outcome_posted_at IS NOT NULL)
+  `, ...LIVE_INSTANCE_STATUSES);
   let cleared = 0;
-  const nowMs = Date.now();
-
   for (const row of rows) {
-    const liveInstance = row.instance_status != null
-      && LIVE_INSTANCE_STATUSES.includes(row.instance_status as typeof LIVE_INSTANCE_STATUSES[number]);
-    const validLiveStatus = ACTIVE_LINKAGE_RETAIN_STATUSES.includes(row.status as typeof ACTIVE_LINKAGE_RETAIN_STATUSES[number]);
-    if (liveInstance && validLiveStatus) {
-      continue;
-    }
-
-    if (isWithinEndedLinkageGraceWindow(row.runtime_ended_at, row.lifecycle_outcome_posted_at, nowMs)) {
-      continue;
-    }
-
-    const result = await db.run(`
-      UPDATE tasks
-      SET active_instance_id = NULL,
-          ${await taskTableHasColumn(db, 'agent_id') ? 'agent_id = NULL,' : ''}
-          updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
-      WHERE id = ?
-        AND active_instance_id = ?
-    `, row.id, row.active_instance_id);
-    if (result.changes > 0) {
-      // This sweep detaches links in bulk from a background pass, which makes it the easiest
-      // place for a link to vanish with nothing to attribute it to.
-      await writeTaskHistory(db, row.id, 'lifecycle_cleanup', 'active_instance_id', row.active_instance_id, null);
-    }
-    cleared += result.changes;
+    if (await cleanupTaskExecutionLinkage(db, row.id, { changedBy: 'lifecycle_cleanup' })) cleared++;
   }
-
   return cleared;
 }

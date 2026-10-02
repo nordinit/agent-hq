@@ -1,5 +1,5 @@
 import fs from 'fs';
-import { cleanupTaskExecutionLinkageForStatus } from '../../lib/taskLifecycle';
+import { cancelTaskExecution, cleanupTaskExecutionLinkage, cleanupTerminalTaskWorkspaces, taskHasConfiguredTerminalStatus } from '../../lib/taskLifecycle';
 import { assertAtlasDirectStatusGate, assertTaskStatusUpdateAllowed } from '../../lib/taskRelease';
 import { notifyTaskStatusChange } from '../../lib/taskNotifications';
 import { createRelationshipFromBlockedBy, createTaskRelationship, deleteTaskRelationshipByTuple } from './relationships';
@@ -558,7 +558,8 @@ export async function updateTaskRecord(
     await replaceTaskBlockers(taskId, blockers);
   }
 
-  await cleanupTaskExecutionLinkageForStatus(db, taskId, String(updated.status));
+  await cleanupTaskExecutionLinkage(db, taskId);
+  await cleanupTerminalTaskWorkspaces(db, taskId);
 
   const isManualStatusChange = status !== undefined
     && String(status) !== String(existing.status)
@@ -596,8 +597,10 @@ export async function cancelTaskRecord(db: Db, taskId: number, changedBy: string
   const existing = await requireExistingTaskRow(db, taskId);
   const oldStatus = String(existing.status);
 
-  await db.run('UPDATE tasks SET status = \'cancelled\', updated_at = to_char(now() AT TIME ZONE \'utc\', \'YYYY-MM-DD HH24:MI:SS\') WHERE id = ?', taskId);
-  await cleanupTaskExecutionLinkageForStatus(db, taskId, 'cancelled');
+  await db.withTransaction(async tx => {
+    await tx.run('UPDATE tasks SET status = \'cancelled\', updated_at = to_char(now() AT TIME ZONE \'utc\', \'YYYY-MM-DD HH24:MI:SS\') WHERE id = ?', taskId);
+    await cancelTaskExecution(tx, taskId, changedBy);
+  });
   await logHistory(taskId, changedBy, 'status', oldStatus, 'cancelled');
   await addTaskNote(taskId, changedBy, 'Task cancelled by user.');
 
@@ -627,7 +630,7 @@ export async function reopenTaskRecord(db: Db, taskId: number, changedBy: string
     WHERE id = ?
   `, restoreStatus, taskId);
 
-  await cleanupTaskExecutionLinkageForStatus(db, taskId, restoreStatus);
+  await cleanupTaskExecutionLinkage(db, taskId);
   await logHistory(taskId, changedBy, 'status', String(existing.status), restoreStatus);
   await addTaskNote(taskId, changedBy, `Task reopened — restored to '${restoreStatus}'${existing.previous_status ? ' (previous position)' : ' (default fallback)'}.`);
 
@@ -647,8 +650,7 @@ export async function reopenTaskRecord(db: Db, taskId: number, changedBy: string
 
 export async function pauseTaskRecord(db: Db, taskId: number, changedBy: string, pauseReason: string | null) {
   const existing = await requireExistingTaskRow(db, taskId);
-  const terminalStatuses = ['done', 'cancelled', 'failed'];
-  if (terminalStatuses.includes(String(existing.status))) {
+  if (await taskHasConfiguredTerminalStatus(db, taskId)) {
     throw Object.assign(new Error(`Cannot pause a task in terminal status '${existing.status}'`), { status: 400 });
   }
   if (existing.paused_at) {

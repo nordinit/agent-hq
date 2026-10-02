@@ -13,7 +13,7 @@ import {
 } from '../services/dispatch/prompt';
 import { injectGitHubCredentials, resolveGitHubIdentity } from '../lib/githubIdentity';
 import { attachInstanceToTask } from '../domains/runs/observability';
-import { cleanupImpossibleTaskLifecycleStates, cleanupTaskExecutionLinkageForStatus } from '../lib/taskLifecycle';
+import { cleanupImpossibleTaskLifecycleStates } from '../lib/taskLifecycle';
 import { runEligibilityPass, type EligibilityResult } from '../services/eligibility';
 import { buildContractInstructions, resolveTransportMode } from '../services/contracts';
 import { backfillInstanceTokensAsync } from '../domains/runs/tokenBackfill';
@@ -548,7 +548,7 @@ export async function reconcileReviewQaRouting(
     } catch (err) {
       console.error(`[reconciler] QA dispatch failed for task #${task.id}:`, err);
       // Mark the newly created instance as failed — do NOT call
-      // cleanupTaskExecutionLinkageForStatus here, because the task may
+      // cleanupTaskExecutionLinkage here, because the task may
       // still have a legitimately running instance from a prior dispatch.
       // Clearing active_instance_id on a transient dispatch error causes
       // running QA/DevOps instances to lose authoritative linkage.

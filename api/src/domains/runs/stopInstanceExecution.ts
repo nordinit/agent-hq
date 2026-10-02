@@ -298,6 +298,11 @@ export async function stopInstanceExecution(
   // Revoke task authority in a committed transaction before any remote I/O.
   // Retain the original instance above as the immutable cancellation target.
   const stopResult = await db.withTransaction(async tx => {
+    // Use the same task-before-instance lock order as outcome and linkage cleanup.
+    // Otherwise a concurrent cleanup can hold the task while stop holds its run.
+    if (instance.task_id != null) {
+      await tx.get('SELECT id FROM tasks WHERE id = ? AND tenant_id = ? FOR UPDATE', instance.task_id, tenantId);
+    }
     await tx.run(`
       UPDATE job_instances SET status = 'failed',
         stop_requested_at = COALESCE(stop_requested_at, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')),
