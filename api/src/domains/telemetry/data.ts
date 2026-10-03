@@ -4,6 +4,7 @@ import { catalogFieldValues, contentHash, parseObject, type TelemetryField } fro
 import type { MetricDefinition, Predicate, TelemetryEntity, TelemetryObservation } from './contracts';
 import { getTelemetryCoverage, type TelemetryObservationRow } from './capture';
 import { validateMetricDefinition } from './evaluator';
+import { captureSources, sourceIdentity, type SourceIdentity } from './sources';
 
 export function isoTimestamp(raw:unknown):string|undefined {
   if(raw instanceof Date) return raw.toISOString();
@@ -123,7 +124,7 @@ export async function loadMetricData(db:Db,access:TelemetryAccess,scope:Telemetr
   const taskSnapshots=new Map<number,Record<string,any>>(taskRows.map(row=>[Number(row.id),{...row.snapshot,workflow_status:row.workflow_status}]));
   // Prerequisites are unresolved according to the blocker workflow's configured
   // terminality. Existence of a dependency alone is never a blockage signal.
-  const dependencyRows=taskIds.length?await db.all<any>(`SELECT d.blocked_id,b.project_id,b.id IS NOT NULL AS visible,
+  const dependencyRows=taskIds.length?await db.all<any>(`SELECT d.blocked_id,b.id AS source_task_id,b.project_id,b.id IS NOT NULL AS visible,
     COALESCE(ws.terminal,ts.terminal,gs.terminal,0) AS terminal
     FROM task_dependencies d LEFT JOIN tasks b ON b.id=d.blocker_id AND b.tenant_id=?
     LEFT JOIN workflows bs ON bs.id=b.workflow_id AND bs.tenant_id=b.tenant_id
@@ -255,5 +256,12 @@ export async function loadMetricData(db:Db,access:TelemetryAccess,scope:Telemetr
   // positive milestones, but cannot prove absence of rework before the boundary.
   const dataRevision=contentHash({entities,observations:observationRows.map(row=>row.id),coverage:baseCoverage});
   const sourceProjects=[...new Set(entities.map(entity=>entity.fields.project_id).filter(value=>value!=null).map(Number).filter(Number.isFinite))];
-  return {entities,observations,history:{...history,required_sources:requiredSources},coverageWindow:baseCoverage,dataRevision,taskIds,sourceProjects,scopePredicate:historical?historicalScopePredicate(scope,grain):undefined};
+  const roots: SourceIdentity[] = [];
+  for (const entity of entities) { const identity=sourceIdentity(entity.kind,entity.id); if(identity)roots.push(identity); }
+  for (const row of observationRows) { const identity=sourceIdentity(row.entity_type,row.entity_id); if(identity)roots.push(identity); }
+  if (references.some(field=>field.includes('unresolved_dependencies'))) for(const row of dependencyRows) {
+    if(row.visible && (access.projectId==null || Number(row.project_id)===access.projectId)) roots.push({source_type:'tasks',source_id:Number(row.source_task_id)});
+  }
+  const sources=await captureSources(db,access.tenantId,roots);
+  return {entities,observations,history:{...history,required_sources:requiredSources},coverageWindow:baseCoverage,dataRevision,taskIds,sourceProjects,sources,scopePredicate:historical?historicalScopePredicate(scope,grain):undefined};
 }

@@ -12,8 +12,9 @@ import type { Contribution, Scalar, TelemetryResult, TelemetryCatalog, Telemetry
 import { ErrorNotice, JsonDetails, Select } from './TelemetryControls';
 import TelemetryVisualization from './TelemetryVisualization';
 import { availableTelemetryDisplays, telemetryDimensionLabel, telemetryGroupLabel } from '@/lib/telemetryViews';
+import { isTelemetryResultUnavailable, type TelemetryRecovery } from '@/lib/telemetryRecovery';
 
-function Contributors({ result, index, group, catalog }: { result: TelemetryResult; index?: number; group?: Scalar[]; catalog?: TelemetryCatalog | null }) {
+function Contributors({ result, index, group, catalog, onRecover }: { result: TelemetryResult; index?: number; group?: Scalar[]; catalog?: TelemetryCatalog | null; onRecover?: TelemetryRecovery }) {
   const [offset, setOffset] = useState(0);
   const [filter, setFilter] = useState(group ? 'included' : 'all');
   const groupKey = group ? JSON.stringify(group) : undefined;
@@ -21,18 +22,33 @@ function Contributors({ result, index, group, catalog }: { result: TelemetryResu
   const [total, setTotal] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [unavailable, setUnavailable] = useState(false);
   useEffect(() => {
     const controller = new AbortController();
-    setBusy(true); setError(null); setRows([]);
+    setBusy(true); setError(null); setRows([]); setUnavailable(false);
     telemetryClient.getTelemetryContributors(result.query_id, { offset, limit: 25, metric_revision_id: result.metric_revision_id, metric_index: index, group: groupKey, ...(filter === 'all' ? {} : { included: filter === 'included' }) }, controller.signal)
       .then(response => { if (!controller.signal.aborted) { setRows(response.contributors); setTotal(response.total); } })
-      .catch(cause => { if (!controller.signal.aborted) setError(telemetryErrorMessage(cause)); })
+      .catch(async cause => {
+        if (controller.signal.aborted) return;
+        if (isTelemetryResultUnavailable(cause)) {
+          setUnavailable(true);
+          if (onRecover) {
+            try { if (await onRecover(result.query_id)) return; }
+            catch (recoveryError) { if (!controller.signal.aborted) setError(telemetryErrorMessage(recoveryError)); return; }
+          }
+          if (!controller.signal.aborted) setError('This calculation is no longer available. Refresh it to load matching totals and records.');
+        } else setError(telemetryErrorMessage(cause));
+      })
       .finally(() => { if (!controller.signal.aborted) setBusy(false); });
     return () => controller.abort();
-  }, [result.query_id, result.metric_revision_id, index, offset, filter, groupKey]);
+  }, [result.query_id, result.metric_revision_id, index, offset, filter, groupKey, onRecover]);
   return <div className="mt-5 space-y-3 border-t border-slate-700/60 pt-4">
     <div className="flex flex-wrap items-end justify-between gap-3"><div><h4 className="text-sm font-medium text-white">Contributing records</h4><p className="text-xs text-slate-500">{group ? `Group: ${telemetryGroupLabel(group, result.definition, catalog)}. ` : ''}Membership and evidence retained with this result.</p></div><Select label="Show" value={filter} onChange={value => { setOffset(0); setFilter(value); }} options={[{ value: 'all', label: 'Included and excluded' }, { value: 'included', label: 'Included only' }, { value: 'excluded', label: 'Excluded only' }]}/></div>
     <ErrorNotice message={error}/>
+    {unavailable && error && onRecover && <Button size="sm" disabled={busy} onClick={() => {
+      setBusy(true); setError(null);
+      void onRecover(result.query_id, true).catch(cause => setError(telemetryErrorMessage(cause))).finally(() => setBusy(false));
+    }}>Refresh calculation</Button>}
     {busy ? <p role="status" className="text-sm text-slate-400">Loading contributing records…</p> : !error && <>
       <div className="overflow-auto"><table className="w-full text-left text-xs"><thead className="text-slate-500"><tr><th className="py-2 pr-3">Record</th><th className="pr-3">Attributed agent</th><th className="pr-3">Included</th><th className="pr-3">Contribution</th><th className="pr-3">Explanation</th><th>Evidence</th></tr></thead><tbody className="divide-y divide-slate-700/40">{rows.map(row => <tr key={row.sample_id} className="align-top"><td className="py-3 pr-3">{row.entity_kind === 'task' ? <Link className="text-amber-300 hover:underline" href={`/tasks/${row.entity_id}`}>{String(row.details?.title ?? `Task #${row.entity_id}`)}</Link> : <span>{row.entity_kind} #{row.entity_id}</span>}{row.started_at && <p className="mt-1 text-slate-500">{new Date(row.started_at).toLocaleString()}</p>}</td><td className="py-3 pr-3">{telemetryDimensionLabel(row.agent_id ?? null, 'agent_id', catalog)}</td><td className="py-3 pr-3"><Badge variant={row.included ? 'done' : 'default'}>{row.included ? 'Yes' : 'No'}</Badge></td><td className="py-3 pr-3 font-mono">{formatTelemetryContribution(row, result.unit)}</td><td className="min-w-48 py-3 pr-3 text-slate-300">{row.reason}{row.resolution && <p className="mt-1 text-slate-500">{row.resolution}</p>}</td><td className="py-3"><JsonDetails label={`${row.observation_ids.length} observations`} value={{ observations: row.observation_ids, ...row.details }}/></td></tr>)}</tbody></table></div>
       {!rows.length && <p className="py-3 text-sm text-slate-400">No records match this inclusion filter.</p>}
@@ -41,8 +57,8 @@ function Contributors({ result, index, group, catalog }: { result: TelemetryResu
   </div>;
 }
 
-export function TelemetryResultCard({result,index,catalog,display:requestedDisplay,sort,compact=false,stale=false,initialGroup,showRecords=false}: {
-  result:TelemetryResult;index?:number;catalog?:TelemetryCatalog|null;display?:TelemetryDisplay;sort?:TelemetryView['sort'];compact?:boolean;stale?:boolean;initialGroup?:Scalar[];showRecords?:boolean;
+export function TelemetryResultCard({result,index,catalog,display:requestedDisplay,sort,compact=false,stale=false,initialGroup,showRecords=false,onRecover}: {
+  result:TelemetryResult;index?:number;catalog?:TelemetryCatalog|null;display?:TelemetryDisplay;sort?:TelemetryView['sort'];compact?:boolean;stale?:boolean;initialGroup?:Scalar[];showRecords?:boolean;onRecover?:TelemetryRecovery;
 }) {
   const [display,setDisplay]=useState<TelemetryDisplay|null>(null);
   const [expanded,setExpanded]=useState(showRecords || Boolean(initialGroup));
@@ -61,7 +77,7 @@ export function TelemetryResultCard({result,index,catalog,display:requestedDispl
     <div className="mt-4 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-400">{Object.entries(coverage).filter(([key,count])=>!['total','eligible'].includes(key)&&(count>0||key==='included')).map(([key,count])=><span key={key}>{count} {key.replace(/_/g,' ')}</span>)}</div>
     <p className="mt-4 border-t border-slate-700/50 pt-3 text-xs text-slate-500">As of {new Date(result.as_of).toLocaleString()}{result.expires_at&&<> · Evidence expires {new Date(result.expires_at).toLocaleString()}</>}</p>
     {!compact&&<div className="mt-3"><JsonDetails label="Definition, scope, and pinned versions" value={{exact_value:result.value,numerator:result.numerator,denominator:result.denominator,definition:result.definition,scope:result.scope,versions:result.versions,query_id:result.query_id}}/></div>}
-    {expanded&&<Contributors key={`${result.query_id}:${JSON.stringify(group)}`} result={result} index={index} group={group} catalog={catalog}/>}
+    {expanded&&<Contributors key={`${result.query_id}:${JSON.stringify(group)}`} result={result} index={index} group={group} catalog={catalog} onRecover={onRecover}/>}
   </Card>;
 }
 

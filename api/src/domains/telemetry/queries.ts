@@ -10,6 +10,7 @@ import { compileSignalPredicates } from './signals';
 import { enforceTelemetryRetention } from './retention';
 import { evaluateMetric, rollupRatios, parseMetricDefinition } from './evaluator';
 import type { MetricDefinition, MetricResult, Predicate, ValueExpression } from './contracts';
+import { publishWithSources, retainSources, verifySources, type SourceReference } from './sources';
 
 export const telemetryQuerySchema=z.object({
   definition:z.unknown().optional(),metric_revision_id:z.string().optional(),report_revision_id:z.string().optional(),family_key:z.string().optional(),
@@ -150,6 +151,7 @@ const publicResult=(result:any):any=>{
 };
 async function evaluatePlans(db:Db,access:TelemetryAccess,planned:Awaited<ReturnType<typeof planQuery>>,input:ReturnType<typeof temporalQuery>,entityLimit:number){
   const results:any[]=[],tasks=new Set<number>(),projects=new Set<number>();
+  const sources=new Map<string,SourceReference>();
   // One snapshot for all cards; the workload is bounded before proof retention.
   await db.withTransaction(async tx=>{
     if(!db.inTransaction)await tx.exec('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
@@ -178,6 +180,7 @@ async function evaluatePlans(db:Db,access:TelemetryAccess,planned:Awaited<Return
         }
       }
       for(const id of data.taskIds)tasks.add(id);for(const id of data.sourceProjects)projects.add(id);
+      for(const source of data.sources)sources.set(`${source.source_type}:${source.source_id}`,source);
       // Preserve source identity alongside engine proofs for reauthorization.
       const entityMap=new Map(data.entities.map(entity=>[`${entity.kind}:${entity.id}`,entity]));
       for(const contribution of result.contributors){const entity=entityMap.get(`${contribution.entity_kind}:${contribution.entity_id}`);contribution.details={...contribution.details,title:entity?.fields.title??null,project_id:entity?.fields.project_id??null,task_id:entity?.kind==='task'?entity.id:entity?.fields.task_id??null};}
@@ -198,7 +201,7 @@ async function evaluatePlans(db:Db,access:TelemetryAccess,planned:Awaited<Return
     rollup=rollupRatios(results.map((result,index)=>({result,definition:planned.plans[index].definition})));
   }
   const result=results.length===1&&!input.report_revision_id&&!input.family_key?results[0]:{results,as_of:input.as_of,unbound:planned.unbound??0,disabled:planned.disabled??0,...(rollup?{rollup}:{})};
-  return {result,taskIds:[...tasks],sourceProjects:[...projects]};
+  return {result,taskIds:[...tasks],sourceProjects:[...projects],sources:[...sources.values()]};
 }
 export async function queryTelemetry(db:Db,access:TelemetryAccess,raw:unknown,options:{preview?:boolean}={}){
   let input=telemetryQuerySchema.parse(raw);
@@ -225,7 +228,10 @@ export async function queryTelemetry(db:Db,access:TelemetryAccess,raw:unknown,op
   const evaluated=await evaluatePlans(db,access,planned,temporal,settings.interactive_entities);
   const result={...evaluated.result,query_id:id,state:'complete',status:'complete',expires_at:expiresAt,query_hash:contentHash({input:temporal,plans:planned.plans.map(({fields,...p})=>p)})};
   if(Buffer.byteLength(JSON.stringify(result),'utf8')>32*1024*1024)throw new TelemetryError('query_limit_exceeded','Contribution evidence exceeds the 32 MB retained result limit. Narrow the query.',413);
-  await db.run(`INSERT INTO telemetry_query_results(id,tenant_id,project_id,scope,request,result,state,actor,task_ids,source_projects,expires_at,report_revision_id) VALUES (?,?,?,?::jsonb,?::jsonb,?::jsonb,'complete',?,?::bigint[],?::bigint[],?::timestamptz,?)`,id,access.tenantId,planned.scope.project_id??null,JSON.stringify(planned.scope),JSON.stringify(temporal),JSON.stringify(result),access.actor,evaluated.taskIds,evaluated.sourceProjects,expiresAt,input.report_revision_id??null);
+  await publishWithSources(db,access.tenantId,evaluated.sources,access.projectId,async tx=>{
+    await tx.run(`INSERT INTO telemetry_query_results(id,tenant_id,project_id,scope,request,result,state,actor,task_ids,source_projects,expires_at,report_revision_id) VALUES (?,?,?,?::jsonb,?::jsonb,?::jsonb,'complete',?,?::bigint[],?::bigint[],?::timestamptz,?)`,id,access.tenantId,planned.scope.project_id??null,JSON.stringify(planned.scope),JSON.stringify(temporal),JSON.stringify(result),access.actor,evaluated.taskIds,evaluated.sourceProjects,expiresAt,input.report_revision_id??null);
+    await retainSources(tx,access.tenantId,id,evaluated.sources);
+  });
   return publicResult(result);
 }
 export async function getQueryRecord(db:Db,access:TelemetryAccess,id:string){
@@ -233,9 +239,11 @@ export async function getQueryRecord(db:Db,access:TelemetryAccess,id:string){
   if(!row)throw new TelemetryError('not_found','Query result not found.',404);
   if(new Date(row.expires_at).getTime()<=Date.now())throw new TelemetryError('result_expired','This result expired. Recalculate it to obtain new evidence.',410);
   if(access.projectId!=null&&(Number(row.project_id)!==access.projectId||(row.source_projects??[]).some((p:any)=>Number(p)!==access.projectId)))throw new TelemetryError('not_found','Query result not found in this project.',404);
-  if(row.task_ids.length){
-    const live=await db.all<{id:number;project_id:number}>('SELECT id,project_id FROM tasks WHERE tenant_id=? AND id=ANY(?::bigint[])',access.tenantId,row.task_ids);
-    if(live.length!==row.task_ids.length||(access.projectId!=null&&live.some(task=>Number(task.project_id)!==access.projectId)))throw new TelemetryError('result_unavailable','Source access changed. Recalculate this result.',409);
+  if(row.state==='complete'){
+    if(!row.sources_complete)throw new TelemetryError('result_unavailable','This older result needs recalculation to verify its source access.',409);
+    const sources=await db.all<SourceReference>('SELECT source_type,source_id,project_id FROM telemetry_query_sources WHERE tenant_id=? AND query_id=?',access.tenantId,id);
+    if(sources.length!==Number(row.source_count))throw new TelemetryError('result_unavailable','Source access changed. Recalculate this result.',409);
+    await verifySources(db,access.tenantId,sources.map(source=>({...source,source_id:Number(source.source_id),project_id:source.project_id==null?null:Number(source.project_id)})),access.projectId);
   }
   return row;
 }
@@ -303,7 +311,10 @@ export async function runTelemetryQueryJobs(db:Db){
     const evaluated=await evaluatePlans(db,access,planned,input,settings.background_entities);
     const result={...evaluated.result,query_id:row.id,state:'complete',status:'complete',expires_at:isoTimestamp(row.expires_at)};
     if(Buffer.byteLength(JSON.stringify(result),'utf8')>32*1024*1024)throw new TelemetryError('query_limit_exceeded','Contribution evidence exceeds 32 MB. Narrow the query.');
-    await db.run("UPDATE telemetry_query_results SET result=?::jsonb,state='complete',task_ids=?::bigint[],source_projects=?::bigint[],lease_until=NULL WHERE tenant_id=? AND id=? AND state='running' AND claim_key=?",JSON.stringify(result),evaluated.taskIds,evaluated.sourceProjects,row.tenant_id,row.id,claim);
+    await publishWithSources(db,access.tenantId,evaluated.sources,access.projectId,async tx=>{
+      const updated=await tx.run("UPDATE telemetry_query_results SET result=?::jsonb,state='complete',task_ids=?::bigint[],source_projects=?::bigint[],lease_until=NULL WHERE tenant_id=? AND id=? AND state='running' AND claim_key=?",JSON.stringify(result),evaluated.taskIds,evaluated.sourceProjects,row.tenant_id,row.id,claim);
+      if(updated.changes)await retainSources(tx,access.tenantId,row.id,evaluated.sources);
+    });
   }catch(error){
     const safe={code:(error as any).code??'query_failed',message:error instanceof TelemetryError?error.message:'Query failed. Narrow the scope or inspect operator logs.'};
     await db.run("UPDATE telemetry_query_results SET state='failed',error=?::jsonb,lease_until=NULL WHERE tenant_id=? AND id=? AND state='running' AND claim_key=?",JSON.stringify(safe),row.tenant_id,row.id,claim);

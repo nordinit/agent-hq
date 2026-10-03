@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { Activity, Bot, Search, Users, Target, CheckCircle2, Coins, FileText, Layers, Clock, X, ArrowUpRight } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
@@ -90,15 +90,18 @@ export function DashboardBlockContent(props: Props) {
   if (block.type === 'link') return <a className={`${styles.panel} ${styles.link}`} href={block.url} rel="noopener noreferrer">{block.title || block.url} ↗</a>;
   return <div className={`${styles.panel} ${block.surface === 'plain' ? styles.plain : ''} ${block.type === 'callout' ? styles.callout : ''}`}>{block.title && <h3 className={styles.blockTitle}>{block.title}</h3>}<div className={styles.prose}><ReactMarkdown>{block.text || 'Add a note in block settings.'}</ReactMarkdown></div></div>;
 }
-export function DashboardDetails({ selected, data, page, catalog, close, resource }: { selected: DashboardInspection | null; data: Record<string, DashboardMetricState>; page: DashboardDocument; catalog: TelemetryCatalog | null; close: () => void; resource?: { dashboardId: string } }) {
+export function DashboardDetails({ selected, data, page, catalog, close, resource, recover }: { selected: DashboardInspection | null; data: Record<string, DashboardMetricState>; page: DashboardDocument; catalog: TelemetryCatalog | null; close: () => void; resource?: { dashboardId: string }; recover: (bindingId: string, queryId: string, manual?: boolean) => Promise<boolean> }) {
   const ref = useRef<HTMLDialogElement>(null);
   useEffect(() => { if (selected) ref.current?.showModal(); else ref.current?.close(); }, [selected]);
   const state = selected?.bindingId ? data[selected.bindingId] : undefined;
   const binding = page.metrics.find(metric => metric.id === selected?.bindingId);
+  const bindingId = selected?.bindingId;
+  const onRecover = useCallback((queryId: string, manual?: boolean) => bindingId ? recover(bindingId, queryId, manual) : Promise.resolve(false), [recover, bindingId]);
   return <dialog ref={ref} className={`${styles.dialog} ${styles.drawer}`} onClose={close} aria-labelledby="dashboard-detail-title"><div className={styles.drawerHeader}><h2 id="dashboard-detail-title">{selected?.title}</h2><button autoFocus type="button" className={styles.button} onClick={close} aria-label="Close details"><X/></button></div>
     {selected?.operation ? <><p className={styles.description}>Operational statistics use the existing project-scoped run and task records. Run totals cover runs created in the last 24 hours; completed tasks use their recorded completion time.</p><div className={styles.filters}><Link className={styles.button} href={['agents', 'templates'].includes(selected.operation) ? '/agents' : '/settings/logs'}>Open {['agents', 'templates'].includes(selected.operation) ? 'agents' : 'execution logs'} <ArrowUpRight/></Link></div></> : state?.result ? <>
       <div className={styles.filters}><span>Exact value: {telemetryExactValue(state.result.value)}</span>{binding && resource && <Link className={styles.button} href={`/telemetry?tab=analyze&dashboard_id=${encodeURIComponent(resource.dashboardId)}&widget_id=${encodeURIComponent(binding.id)}${page.scope?.project_id ? `&project_id=${page.scope.project_id}` : ''}`}>Open in Analyze <ArrowUpRight/></Link>}</div>
-      <TelemetryResultCard key={`${state.result.query_id}:${JSON.stringify(selected?.group)}`} result={{ ...state.result, title: selected?.title }} catalog={catalog} display="table" initialGroup={selected?.group} showRecords/>
+      {state.busy ? <p role="status">Refreshing calculation and contributing records…</p> : state.error ? <div><p className={styles.error}>{state.error}</p><button type="button" className={styles.button} onClick={() => void onRecover(state.result!.query_id, true).catch(() => {})}>Refresh calculation</button></div> :
+        <TelemetryResultCard key={`${state.result.query_id}:${JSON.stringify(selected?.group)}`} result={{ ...state.result, title: selected?.title }} catalog={catalog} display="table" initialGroup={selected?.group} showRecords onRecover={onRecover}/>}
     </> : <p className={styles.error}>{state?.error || 'This result is loading or no longer available. Refresh the dashboard to try again.'}</p>}
   </dialog>;
 }

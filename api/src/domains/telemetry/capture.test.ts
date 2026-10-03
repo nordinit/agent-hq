@@ -2,6 +2,7 @@ import type { Db } from '../../db/adapter/types';
 import { setupTestDb, teardownTestDb } from '../../db/testDb';
 import { backfillTelemetry, drainTelemetryOutbox, drainTelemetryCaptureBudget, getTelemetryCoverage, purgeTelemetryTask,
   withTelemetryCausation } from './capture';
+import { captureSources, retainSources } from './sources';
 
 let db:Db;
 beforeEach(async()=>{
@@ -327,6 +328,7 @@ it.each(['project','agent','run'])('captures taskless execution scope and purges
   for(const row of rows)expect(row).toMatchObject({project_id:1,task_id:null,payload:{context:{project_id:1,agent_id:1}}});
   await db.run(`INSERT INTO telemetry_query_results(id,tenant_id,scope,request,state,actor,expires_at)
     VALUES('taskless-proof',1,'{}','{}','complete','test',clock_timestamp()+interval '1 hour')`);
+  await retainSources(db,1,'taskless-proof',await captureSources(db,1,[{source_type:'job_instances',source_id:1}]));
   if(target==='project')await db.run('DELETE FROM projects WHERE id=1');
   else if(target==='agent')await db.run('DELETE FROM agents WHERE id=1');
   else await db.run('DELETE FROM job_instances WHERE id=1');
@@ -338,12 +340,16 @@ it.each(['project','agent','run'])('captures taskless execution scope and purges
 
 it.each(['agent','workflow','run','runtime'])('revokes retained taskless proofs when %s source ownership changes',async(target)=>{
   await db.run(`INSERT INTO projects(id,tenant_id,name) VALUES(3,1,'New project')`);
-  await db.run(`INSERT INTO agents(id,tenant_id,name,session_key,model) VALUES(3,1,'Other agent','other','model')`);
+  await db.run('UPDATE agents SET project_id=1 WHERE id=1');
+  await db.run(`INSERT INTO agents(id,tenant_id,project_id,name,session_key,model) VALUES(3,1,3,'Other agent','other','model')`);
   await db.run(`INSERT INTO job_instances(id,tenant_id,agent_id,status) VALUES(1,1,1,'running'),(2,1,3,'running')`);
   await db.run(`INSERT INTO runtime_executions(tenant_id,instance_id,boundary_json,boundary_fingerprint,runtime_type,driver,backend,execution_target_id,state)
     VALUES(1,1,'{}'::jsonb,'fingerprint','runtime','driver','backend','target','running')`);
   await db.run(`INSERT INTO telemetry_query_results(id,tenant_id,scope,request,state,actor,expires_at)
     VALUES('proof',1,'{}','{}','complete','test',clock_timestamp()+interval '1 hour')`);
+  const source_type=target==='workflow'?'workflows':target==='runtime'?'runtime_executions':'job_instances';
+  const source_id=target==='runtime'?Number(await db.value('SELECT id FROM runtime_executions WHERE instance_id=1')):1;
+  await retainSources(db,1,'proof',await captureSources(db,1,[{source_type,source_id}]));
   if(target==='agent')await db.run('UPDATE agents SET project_id=3 WHERE id=1');
   else if(target==='workflow')await db.run('UPDATE workflows SET project_id=3 WHERE id=1');
   else if(target==='run')await db.run('UPDATE job_instances SET agent_id=3 WHERE id=1');

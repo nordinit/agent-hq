@@ -233,7 +233,8 @@ test('scoped access cannot widen catalog query resources or stored proofs',async
   const result=await request('/queries',{definition:await amount(),scope:{project_id:11}},{project:11});expect(result.status).toBe(200);
   expect((await request(`/queries/${result.body.query_id}/contributors`,undefined,{project:12})).status).toBe(404);
   await db.run('UPDATE tasks SET project_id=12,workflow_id=112 WHERE id=1001');
-  expect((await request(`/queries/${result.body.query_id}`,undefined,{project:11})).status).toBe(409);
+  // A real source move now revokes this specific retained proof immediately.
+  expect((await request(`/queries/${result.body.query_id}`,undefined,{project:11})).status).toBe(404);
 });
 test('unsafe unknown fields and unbounded formulas fail without SQL execution',async()=>{
   const result=await request('/queries/preview',{definition:numericRecipe({key:'unsafe',name:'Unsafe',field:"x'); SELECT pg_sleep(10); --"}),scope:{project_id:11}});

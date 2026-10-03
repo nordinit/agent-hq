@@ -316,11 +316,8 @@ export async function purgeTelemetryTask(db:Db,tenantId:number,taskId:number):Pr
   await db.withTransaction(async tx=>{
     await tx.run(`DELETE FROM telemetry_outbox WHERE tenant_id=? AND task_id=?`,tenantId,taskId);
     await tx.run(`DELETE FROM telemetry_observations WHERE tenant_id=? AND task_id=?`,tenantId,taskId);
-    // Frozen proofs can mention several tasks. Invalidate tenant results rather
-    // than attempting to retain a partly deleted explanation under its old token.
-    if(await tx.value(`SELECT to_regclass('public.telemetry_query_results') IS NOT NULL`)) {
-      await tx.run(`DELETE FROM telemetry_query_results WHERE tenant_id=?`,tenantId);
-    }
+    // Revoke the whole affected proof, keeping unrelated calculations intact.
+    await tx.get('SELECT telemetry_invalidate_source(?,?,?,true)',tenantId,'tasks',taskId);
   });
 }
 

@@ -1,17 +1,20 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, type CompletedRecentTask, type DashboardStats } from '@/lib/api';
 import { telemetryClient } from '@/lib/api/telemetry';
 import { dashboardBlocks } from '@/lib/dashboardLayout';
 import { telemetryResponseResults, telemetryWidgetQuery } from '@/lib/telemetryViews';
 import type { DashboardDocument } from '@/lib/dashboardTypes';
 import type { MetricDefinition, TelemetryMetric, TelemetryQuery, TelemetryResult, TelemetryScope } from '@/lib/telemetryTypes';
+import { createTelemetryRecoveryGate } from '@/lib/telemetryRecovery';
 
 export interface DashboardMetricState { definition?: MetricDefinition; result?: TelemetryResult; query?: TelemetryQuery; error?: string; busy: boolean }
 export interface DashboardOperations { stats?: DashboardStats; tasks?: CompletedRecentTask[]; statsError?: string; tasksError?: string; busy: boolean }
 export function useDashboardData(page: DashboardDocument, metrics: TelemetryMetric[], scope: TelemetryScope, window: { from?: string; to?: string; timezone: string }, refresh: number) {
   const [data, setData] = useState<Record<string, DashboardMetricState>>({});
   const [operations, setOperations] = useState<DashboardOperations>({ busy: false });
+  const recoverRef = useRef<(bindingId: string, queryId: string, manual?: boolean) => Promise<boolean>>(async () => false);
+  const recover = useCallback((bindingId: string, queryId: string, manual?: boolean) => recoverRef.current(bindingId, queryId, manual), []);
   // Layout, labels and formatting never trigger recalculation. Duplicate blocks
   // share a binding; identical bindings share both the result and retained proof.
   const requestKey = JSON.stringify({ bindings: page.metrics.map(({ id, metric_id, metric_revision_id, view }) => ({ id, metric_id, metric_revision_id, view: view ? { ...view, sort: undefined } : undefined })), scope, window });
@@ -21,6 +24,37 @@ export function useDashboardData(page: DashboardDocument, metrics: TelemetryMetr
     setData(Object.fromEntries(input.bindings.map(binding => [binding.id, { busy: true }])));
     const definitions = new Map<string, Promise<MetricDefinition>>();
     const queries = new Map<string, Promise<TelemetryResult>>();
+    const loaded = new Map<string, DashboardMetricState>();
+    const recovery = createTelemetryRecoveryGate();
+    recoverRef.current = async (bindingId, queryId, manual = false) => {
+      const state = loaded.get(bindingId);
+      if (controller.signal.aborted || !state?.query) return false;
+      if (state.result?.query_id !== queryId) return true;
+      const query = state.query, key = JSON.stringify(query);
+      return recovery.run(key, async () => {
+        const affected = [...loaded].filter(([, value]) => JSON.stringify(value.query) === key).map(([id]) => id);
+        setData(current => ({ ...current, ...Object.fromEntries(affected.map(id => [id, { ...current[id], busy: true, error: undefined }])) }));
+        try {
+          const pending = telemetryClient.queryTelemetry(query, controller.signal).then(response => {
+            const result = telemetryResponseResults(response)[0];
+            if (!result) throw new Error('No result returned. Try a narrower scope in Analyze.');
+            return result;
+          });
+          queries.set(key, pending);
+          const result = await pending;
+          if (controller.signal.aborted) return;
+          for (const id of affected) loaded.set(id, { ...loaded.get(id)!, result, busy: false, error: undefined });
+          setData(current => ({ ...current, ...Object.fromEntries(affected.map(id => [id, loaded.get(id)!])) }));
+        } catch (cause) {
+          if (!controller.signal.aborted) {
+            const error = cause instanceof Error ? cause.message : 'Could not refresh this calculation.';
+            for (const id of affected) loaded.set(id, { ...loaded.get(id)!, busy: false, error });
+            setData(current => ({ ...current, ...Object.fromEntries(affected.map(id => [id, loaded.get(id)!])) }));
+          }
+          throw cause;
+        }
+      }, manual);
+    };
     const definitionFor = (binding: DashboardDocument['metrics'][number]) => {
       const existing = definitions.get(binding.metric_revision_id); if (existing) return existing;
       const promise = (async () => {
@@ -50,7 +84,11 @@ export function useDashboardData(page: DashboardDocument, metrics: TelemetryMetr
             }); queries.set(key, pending);
           }
           const result = await pending;
-          if (!controller.signal.aborted) setData(current => ({ ...current, [binding.id]: { definition, result, query, busy: false } }));
+          if (!controller.signal.aborted) {
+            const state = { definition, result, query, busy: false };
+            loaded.set(binding.id, state);
+            setData(current => ({ ...current, [binding.id]: state }));
+          }
         } catch (cause) {
           if (!controller.signal.aborted) setData(current => ({ ...current, [binding.id]: { definition, error: cause instanceof Error ? cause.message : 'Could not load this metric.', busy: false } }));
         }
@@ -73,5 +111,5 @@ export function useDashboardData(page: DashboardDocument, metrics: TelemetryMetr
     });
     return () => { active = false; };
   }, [needsOperations, project, invalidOperationalScope, refresh]);
-  return { data, operations };
+  return { data, operations, recover };
 }
