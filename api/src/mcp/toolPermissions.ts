@@ -37,6 +37,7 @@ declare(['start_task_run', 'check_in_task_run', 'report_task_blocker'], any('tas
 declare(['list_project_files', 'get_project_file', 'download_project_file', 'upload_project_file', 'replace_project_file',
   'delete_project_file', 'list_project_file_versions', 'list_workflow_files', 'get_workflow_file', 'download_workflow_file',
   'upload_workflow_file', 'replace_workflow_file', 'delete_workflow_file', 'list_workflow_file_versions'], any('projects.manage_active_files'));
+declare(['analyze_agent_capabilities'], [['agents.manage_project_agents', 'mcp_capability_policies.read'], ['agents.manage_project_agents', 'mcp_capability_policies.write']]);
 declare(['create_agent', 'delete_agent', 'get_agent', 'get_agent_docs', 'list_agents', 'update_agent'], any('agents.manage_project_agents'));
 declare(['get_agent_mcp_capability_policy'], any('mcp_capability_policies.read', 'mcp_capability_policies.write'));
 declare(['create_agent_mcp_capability_policy', 'update_agent_mcp_capability_policy', 'delete_agent_mcp_capability_policy'],

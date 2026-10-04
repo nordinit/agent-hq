@@ -1288,6 +1288,10 @@ export class AgentHqApiClient {
     return this.request<unknown[]>('GET', `/api/v1/agents${q ? `?${q}` : ''}`);
   }
 
+  getAgentResolution(id: number, workflowId?: number) {
+    return this.request<unknown>('GET', `/api/v1/agents/${id}/resolution${workflowId ? `?workflow_id=${workflowId}` : ''}`);
+  }
+
   getAgent(id: number) {
     return this.request<unknown>('GET', `/api/v1/agents/${id}`);
   }

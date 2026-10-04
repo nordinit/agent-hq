@@ -80,7 +80,7 @@ function mergeByPrecedence(
  * `overrides`, `assignment_enabled`, `agent_tenant_id` and all of `tools.*` — plus provenance,
  * so callers can keep their existing types.
  */
-export async function fetchEffectiveAgentToolRows(db: Db, agentId: number): Promise<Row[]> {
+export async function fetchAgentToolCandidates(db: Db, agentId: number): Promise<{ teamRows: Row[]; agentRows: Row[] }> {
   const agentRows = await db.all(`
     SELECT 'agent' AS source,
            NULL::bigint AS source_team_id,
@@ -118,6 +118,14 @@ export async function fetchEffectiveAgentToolRows(db: Db, agentId: number): Prom
     ORDER BY te.id ASC, t.name ASC
   `, agentId) as Row[];
 
+  return { teamRows, agentRows };
+}
+
+export async function fetchEffectiveAgentToolRows(db: Db, agentId: number): Promise<Row[]> {
+  return resolveAgentToolCandidates(await fetchAgentToolCandidates(db, agentId));
+}
+
+export function resolveAgentToolCandidates({ teamRows, agentRows }: { teamRows: Row[]; agentRows: Row[] }): Row[] {
   return mergeByPrecedence(teamRows, agentRows, (row) => row.id)
     // The tool itself being disabled removes it regardless of who granted it.
     .filter((row) => Number(row.enabled ?? 0) === 1)
@@ -136,7 +144,7 @@ export async function fetchEffectiveAgentToolRows(db: Db, agentId: number): Prom
  * Row shape matches the pre-team `fetchAssignedMcpServers` query: `assignment_id`, `slug`,
  * `command`, `args`, `env`, `cwd`, `overrides`.
  */
-export async function fetchEffectiveAgentMcpRows(db: Db, agentId: number): Promise<Row[]> {
+export async function fetchAgentMcpCandidates(db: Db, agentId: number): Promise<{ teamRows: Row[]; agentRows: Row[] }> {
   const agentRows = await db.all(`
     SELECT 'agent' AS source,
            NULL::bigint AS source_team_id,
@@ -180,6 +188,14 @@ export async function fetchEffectiveAgentMcpRows(db: Db, agentId: number): Promi
     ORDER BY te.id ASC, s.slug ASC
   `, agentId) as Row[];
 
+  return { teamRows, agentRows };
+}
+
+export async function fetchEffectiveAgentMcpRows(db: Db, agentId: number): Promise<Row[]> {
+  return resolveAgentMcpCandidates(await fetchAgentMcpCandidates(db, agentId));
+}
+
+export function resolveAgentMcpCandidates({ teamRows, agentRows }: { teamRows: Row[]; agentRows: Row[] }): Row[] {
   return mergeByPrecedence(teamRows, agentRows, (row) => row.mcp_server_id)
     .filter((row) => Number(row.server_enabled ?? 0) === 1)
     .sort((left, right) => String(left.slug ?? '').localeCompare(String(right.slug ?? '')));

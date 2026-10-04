@@ -6,6 +6,15 @@ export function registerAgentsTools(ctx: McpDomainContext) {
   const taskTypeSchema = z.string().min(1);
 
   registerTool(
+    ['agent_hq_analyze_agent_capabilities'],
+    'Explain an agent’s effective tools, MCP servers, skills and permission policy, including team inheritance, overrides, opt-outs and context findings. Configuration describes grants, not proof that a runtime can execute them. Optionally select a workflow in the agent’s project for team context resolution.',
+    { agent_id: z.number().int().positive(), workflow_id: z.number().int().positive().optional() },
+    ({ agent_id, workflow_id }) => wrap(() => api.getAgentResolution(agent_id, workflow_id))(),
+    { domain: 'agents', rest_paths: ['/api/v1/agents/:id/resolution'] },
+  );
+
+
+  registerTool(
     ['agent_hq_list_agents'],
     'List registered agents in Agent HQ. Optionally filter by project.',
     { project_id: z.number().int().positive().optional().describe('Filter by project ID') },

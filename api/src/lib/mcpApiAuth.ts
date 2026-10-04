@@ -453,6 +453,7 @@ export const AGENT_MCP_CAPABILITY_CATALOG = [
       'PUT /api/v1/agents/:id',
       'DELETE /api/v1/agents/:id',
       'GET /api/v1/agents/:id/docs',
+      'GET /api/v1/agents/:id/resolution',
     ],
     defaultEnabled: {
       scoped_runtime: false,
@@ -1058,10 +1059,16 @@ export async function getAgentMcpPermissionPolicy(db: Db, agentId: number, keyRo
   return await buildAgentMcpPermissionPolicySnapshot(db, context);
 }
 
+export function agentMcpPolicyRevision(policy: AgentMcpPermissionPolicySnapshot): string {
+  return crypto.createHash('sha256').update(JSON.stringify({ mode: policy.policy_mode, default: policy.default_policy,
+    capabilities: policy.capabilities.map(c => [c.key, c.enabled, c.explicit_enabled]) })).digest('hex');
+}
+
 export async function replaceAgentMcpPermissionPolicy(
   db: Db,
   agentId: number,
   enabledCapabilityKeys: readonly string[],
+  expectedRevision?: string,
 ): Promise<AgentMcpPermissionPolicySnapshot> {
   const context = await loadAgentPermissionContext(db, agentId);
   const normalized = new Set<AgentMcpCapabilityKey>();
@@ -1076,7 +1083,12 @@ export async function replaceAgentMcpPermissionPolicy(
     normalized.add(rawKey as AgentMcpCapabilityKey);
   }
 
-  await db.withTransaction(async (db) => {
+  return await db.withTransaction(async (db) => {
+    await db.get(`SELECT id FROM agents WHERE id = ? FOR UPDATE`, agentId);
+    const current = await getAgentMcpPermissionPolicy(db, agentId);
+    if (expectedRevision !== undefined && agentMcpPolicyRevision(current) !== expectedRevision) {
+      throw Object.assign(new Error('Permission policy changed. Refresh and preview your changes again.'), { status: 409 });
+    }
     await db.run(`DELETE FROM agent_mcp_capability_policies WHERE agent_id = ?`, agentId);
     for (const capability of AGENT_MCP_CAPABILITY_CATALOG) {
       await db.run(`
@@ -1084,15 +1096,17 @@ export async function replaceAgentMcpPermissionPolicy(
         VALUES (?, ?, ?)
       `, agentId, capability.key, normalized.has(capability.key) ? 1 : 0);
     }
+    return await buildAgentMcpPermissionPolicySnapshot(db, context);
   });
-
-  return await buildAgentMcpPermissionPolicySnapshot(db, context);
 }
 
 export async function resetAgentMcpPermissionPolicy(db: Db, agentId: number): Promise<AgentMcpPermissionPolicySnapshot> {
   const context = await loadAgentPermissionContext(db, agentId);
-  await db.run(`DELETE FROM agent_mcp_capability_policies WHERE agent_id = ?`, agentId);
-  return await buildAgentMcpPermissionPolicySnapshot(db, context);
+  return db.withTransaction(async tx => {
+    await tx.get(`SELECT id FROM agents WHERE id = ? FOR UPDATE`, agentId);
+    await tx.run(`DELETE FROM agent_mcp_capability_policies WHERE agent_id = ?`, agentId);
+    return buildAgentMcpPermissionPolicySnapshot(tx, context);
+  });
 }
 
 export async function resolveEffectiveAgentMcpPermissionState(db: Db, identity: McpApiIdentity): Promise<{
@@ -2365,17 +2379,22 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
   // credentials; /mcp-permissions and /mcp-tool-allowlists, which decide what an agent may do
   // over MCP and have their own capability below. This grant edits what an agent is told to do,
   // not what it is allowed to do.
+  const agentResolutionMatch = requestPath.match(/^\/agents\/(\d+)\/resolution$/);
   const agentDocsMatch = requestPath.match(/^\/agents\/(\d+)\/docs$/);
   const agentRecordMatch = requestPath.match(/^\/agents\/(\d+)$/);
   const agentCollection = requestPath === '/agents' && (method === 'GET' || method === 'POST');
   if (agentCollection
     || (agentRecordMatch && ['GET', 'PUT', 'DELETE'].includes(method))
-    || (agentDocsMatch && method === 'GET')) {
+    || ((agentDocsMatch || agentResolutionMatch) && method === 'GET')) {
     const requiredCapability: AgentMcpCapabilityKey = 'agents.manage_project_agents';
     if (!await requireCapability(
       requiredCapability,
       `Project agent management is disabled for ${identity.agentSlug}.`,
     )) return;
+
+    if (agentResolutionMatch && !permissionState.enabledCapabilities.has('mcp_capability_policies.read') && !permissionState.enabledCapabilities.has('mcp_capability_policies.write')) {
+      return deny({ reason: 'Agent resolution includes permission policy information.', requiredCapability: 'mcp_capability_policies.read' });
+    }
 
     if (canonicalAgentProjectId == null) {
       return deny({
@@ -2440,7 +2459,7 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
       });
     }
 
-    const targetAgentId = Number((agentRecordMatch ?? agentDocsMatch)![1]);
+    const targetAgentId = Number((agentRecordMatch ?? agentDocsMatch ?? agentResolutionMatch)![1]);
     if (await agentBelongsToProject(db, identity, targetAgentId, canonicalAgentProjectId)) return next();
     return deny({
       reason: `Normal Agent HQ MCP keys can only manage agents inside their assigned project.`,

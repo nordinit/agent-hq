@@ -85,6 +85,16 @@ describe('scoped MCP keys and host execution', () => {
     return { status: res.status, body: await res.json() as Record<string, any> };
   };
 
+  it('requires policy-read access and project scope for agent resolution', async () => {
+    expect((await call('GET', '/api/v1/agents/9/resolution')).status).toBe(200);
+    await replaceAgentMcpPermissionPolicy(getDb(), 7, ['agents.manage_project_agents']);
+    expect((await call('GET', '/api/v1/agents/9/resolution')).status).toBe(403);
+    await replaceAgentMcpPermissionPolicy(getDb(), 7, ['agents.manage_project_agents', 'mcp_capability_policies.read']);
+    expect((await call('GET', '/api/v1/agents/9/resolution')).status).toBe(200);
+    await getDb().run(`UPDATE agents SET project_id = NULL WHERE id = 9`);
+    expect((await call('GET', '/api/v1/agents/9/resolution')).status).toBe(403);
+  });
+
   it('keeps host-executing administration routes behind admin.full_access', async () => {
     const routes: Array<[string, string, unknown?]> = [
       ['POST', '/api/v1/tools', { name: 'Shell', slug: 'shell', implementation_type: 'bash', implementation_body: 'id' }],

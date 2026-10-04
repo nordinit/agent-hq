@@ -1,3 +1,4 @@
+import { getTeamResolution, previewTeamSkills } from '../domains/teams/resolution';
 /**
  * Team CRUD, membership, capability defaults, routing templates, and workflow ownership.
  *
@@ -109,6 +110,26 @@ router.get('/', async (req: Request, res: Response) => {
   }
 });
 
+router.get('/:id/resolution', async (req: Request, res: Response) => {
+  try {
+    const db = getDb();
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json(await getTeamResolution(db, Number(req.params.id), tenantId));
+  } catch (err) { return fail(res, err); }
+});
+
+router.post('/:id/resolution/preview', async (req: Request, res: Response) => {
+  try {
+    const skills = req.body?.skill_names;
+    if (!Array.isArray(skills) || skills.length > 200 || skills.some(s => typeof s !== 'string' || !s.trim() || s.length > 200)) return res.status(400).json({ error: 'skill_names must contain at most 200 nonempty skill names' });
+    const db = getDb();
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json(await previewTeamSkills(db, Number(req.params.id), tenantId, skills.map(s => s.trim())));
+  } catch (err) { return fail(res, err); }
+});
+
 router.get('/:id', async (req: Request, res: Response) => {
   try {
     const tenantId = await resolveTenantIdFromRequest(getDb(), req);
@@ -159,6 +180,8 @@ router.patch('/:id', async (req: Request, res: Response) => {
     const existing = await requireTeam(req.params.id, tenantId);
     const body = req.body as Record<string, unknown>;
 
+    const expectedVersion = body.expected_context_version;
+    if (expectedVersion !== undefined && (!Number.isSafeInteger(expectedVersion) || Number(expectedVersion) < 1)) return res.status(400).json({ error: 'Invalid expected_context_version' });
     const next = {
       name: typeof body.name === 'string' && body.name.trim() ? body.name.trim() : existing.name,
       slug: typeof body.slug === 'string' && body.slug.trim() ? slugify(body.slug) : existing.slug,
@@ -174,17 +197,17 @@ router.patch('/:id', async (req: Request, res: Response) => {
       enabled: body.enabled === undefined ? existing.enabled : (body.enabled ? 1 : 0),
     };
 
-    await db.run(`
+    const updated = await db.run(`
       UPDATE teams
       SET name = ?, slug = ?, description = ?, goal = ?, charter = ?, project_id = ?,
-          skill_names = ?, enabled = ?,
+          skill_names = ?, enabled = ?, context_version = context_version + 1,
           updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
-      WHERE id = ? AND tenant_id = ?
+      WHERE id = ? AND tenant_id = ? AND (?::integer IS NULL OR context_version = ?)
     `,
       next.name, next.slug, next.description, next.goal, next.charter, next.project_id,
-      next.skill_names, next.enabled, req.params.id, tenantId,
+      next.skill_names, next.enabled, req.params.id, tenantId, expectedVersion ?? null, expectedVersion ?? null,
     );
-    await bumpContextVersion(Number(req.params.id));
+    if (!updated.changes) return res.status(409).json({ error: 'Team changed. Refresh and preview again.' });
 
     return res.json(await db.get('SELECT * FROM teams WHERE id = ?', req.params.id));
   } catch (err) {

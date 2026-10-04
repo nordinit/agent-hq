@@ -25,6 +25,8 @@ export default function RoutingPage() {
   const searchParams = useSearchParams();
   // ?trace_task=<id> opens the graph replaying that task's path. The task modal
   // deep-links here rather than embedding a second canvas of its own.
+  const linkedWorkflowId = Number(searchParams?.get('workflow_id') ?? '');
+  const [appliedWorkflowLink, setAppliedWorkflowLink] = useState<number | null>(null);
   const traceTaskId = Number(searchParams?.get('trace_task') ?? '');
   const [historicalTrace, setHistoricalTrace] = useState<HistoricalTrace | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -107,6 +109,18 @@ export default function RoutingPage() {
   }, [availableWorkflowTypeKeys]);
 
   useEffect(() => {
+    if (traceTaskId > 0 || !(linkedWorkflowId > 0) || appliedWorkflowLink === linkedWorkflowId) return;
+    const linked = workflows.find(w => w.id === linkedWorkflowId);
+    if (!linked) return;
+    setSelectedProjectId(linked.project_id);
+    setSelectedWorkflowType(linked.workflow_type ?? null);
+    setSelectedWorkflowId(linked.id);
+    setActiveTab('graph');
+    setAppliedWorkflowLink(linkedWorkflowId);
+  }, [linkedWorkflowId, appliedWorkflowLink, workflows, traceTaskId, setSelectedProjectId]);
+
+  useEffect(() => {
+    if (linkedWorkflowId > 0 && appliedWorkflowLink !== linkedWorkflowId && workflows.some(w => w.id === linkedWorkflowId)) return;
     // A replay pins the scope to the traced task's own workflow. Without this guard
     // the reset below races the trace load: projectScopedWorkflows is still empty on
     // mount, so the workflow the trace just selected gets cleared and the graph falls
@@ -117,7 +131,7 @@ export default function RoutingPage() {
       if (current && projectScopedWorkflows.some(workflow => workflow.id === current && workflow.workflow_type === selectedWorkflowType)) return current;
       return null;
     });
-  }, [projectScopedWorkflows, selectedWorkflowType, historicalTrace]);
+  }, [projectScopedWorkflows, selectedWorkflowType, historicalTrace, linkedWorkflowId, appliedWorkflowLink, workflows]);
 
   if (loading) return (
     <div className="flex items-center justify-center h-64">

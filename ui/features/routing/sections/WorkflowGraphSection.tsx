@@ -1132,6 +1132,7 @@ function NodeInspector({
                 >
                   {assignment.agent_name ?? `agent ${assignment.agent_id ?? '?'}`}
                 </button>
+                {assignment.agent_id && <Link href={`/agents/${assignment.agent_id}/resolution`} className="text-amber-300 hover:underline ml-2" title="Inspect agent context and capabilities">Capabilities ↗</Link>}
                 <span className="flex items-center gap-1.5 text-[11px] text-slate-500">
                   {assignment.task_type ? getTaskTypeLabel(assignment.task_type) : 'all types'}
                   <span className="text-slate-600">·</span>

@@ -1,3 +1,4 @@
+import { getAgentResolution } from '../domains/agents/resolution';
 import { describeToolAccess } from '../mcp/accessView';
 import { Router, Request, Response } from 'express';
 import * as fs from 'fs';
@@ -1300,13 +1301,15 @@ async function replaceAgentMcpPermissionsHandler(req: Request, res: Response) {
     }
     if (!await requireAgentVisibleForTenant(db, agentId, tenantId)) return res.status(404).json({ error: 'Agent not found' });
 
-    const body = req.body as { enabled_capabilities?: unknown };
+    const body = req.body as { enabled_capabilities?: unknown; expected_revision?: unknown };
     if (!Array.isArray(body.enabled_capabilities) || !body.enabled_capabilities.every((value) => typeof value === 'string')) {
       return res.status(400).json({ error: 'enabled_capabilities must be an array of capability keys' });
     }
 
-    return res.json(await replaceAgentMcpPermissionPolicy(db, agentId, body.enabled_capabilities));
+    if (body.expected_revision !== undefined && typeof body.expected_revision !== 'string') return res.status(400).json({ error: 'expected_revision must be a string' });
+    return res.json(await replaceAgentMcpPermissionPolicy(db, agentId, body.enabled_capabilities, body.expected_revision));
   } catch (err) {
+    if ((err as { status?: number }).status === 409) return res.status(409).json({ error: (err as Error).message });
     const message = err instanceof Error ? err.message : String(err);
     if (message.includes('not found')) return res.status(404).json({ error: message });
     if (message.includes('Unknown Agent HQ MCP capability')) return res.status(400).json({ error: message });
@@ -1387,6 +1390,20 @@ router.delete('/:id/mcp-permissions', async (req: Request, res: Response) => {
 
 // GET /api/v1/agents/:id
 // Phase 4 (T#459): agents table has job-template columns; enrich with project_name + job_template_id
+router.get('/:id/resolution', async (req: Request, res: Response) => {
+  try {
+    const db = getDb();
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    const agentId = Number(req.params.id);
+    const workflowId = req.query.workflow_id === undefined ? null : Number(req.query.workflow_id);
+    if (!Number.isSafeInteger(agentId) || agentId <= 0 || (workflowId !== null && (!Number.isSafeInteger(workflowId) || workflowId <= 0))) return res.status(400).json({ error: 'Invalid agent or workflow id' });
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json(await getAgentResolution(db, agentId, tenantId, workflowId));
+  } catch (err) {
+    return res.status((err as Error & { status?: number }).status ?? 500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
 router.get('/:id', async (req: Request, res: Response) => {
   try {
     const db = getDb();

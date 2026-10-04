@@ -60,6 +60,21 @@ describe('agent MCP permissions routes', () => {
     if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
+  it('serves safe resolution snapshots, validates scope and rejects stale edits', async () => {
+    const { server, baseUrl } = await startTestServer();
+    try {
+      const response = await fetch(`${baseUrl}/api/v1/agents/7/resolution`);
+      expect(response.status).toBe(200);
+      const resolution = await response.json() as { policy_revision: string; agent: { id: number } };
+      expect(resolution.agent.id).toBe(7);
+      expect((await fetch(`${baseUrl}/api/v1/agents/7/resolution?workflow_id=nope`)).status).toBe(400);
+      expect((await fetch(`${baseUrl}/api/v1/agents/999/resolution`)).status).toBe(404);
+      const save = () => fetch(`${baseUrl}/api/v1/agents/7/mcp-permissions`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ enabled_capabilities: [], expected_revision: resolution.policy_revision }) });
+      expect((await save()).status).toBe(200);
+      expect((await save()).status).toBe(409);
+    } finally { await stopTestServer(server); }
+  });
+
   it('returns the rollout-safe default snapshot for a normal agent', async () => {
     const { server, baseUrl } = await startTestServer();
     try {

@@ -64,6 +64,21 @@ describe('teams API', () => {
     await teardownTestDb();
   });
 
+  it('previews shared skills without saving and rejects a stale team version', async () => {
+    const created = await fetch(`${baseUrl}/api/v1/teams`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Preview team' }) });
+    const team = await created.json() as { id: number; context_version: number };
+    const preview = await fetch(`${baseUrl}/api/v1/teams/${team.id}/resolution/preview`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ skill_names: ['review'] }) });
+    expect(preview.status).toBe(200);
+    expect((await preview.json() as { after: { skill_names: string[] } }).after.skill_names).toEqual(['review']);
+    const unchanged = await fetch(`${baseUrl}/api/v1/teams/${team.id}/resolution`);
+    expect((await unchanged.json() as { skill_names: string[] }).skill_names).toEqual([]);
+    const save = () => fetch(`${baseUrl}/api/v1/teams/${team.id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ skill_names: ['review'], expected_context_version: team.context_version }) });
+    expect((await save()).status).toBe(200);
+    expect((await save()).status).toBe(409);
+    expect((await fetch(`${baseUrl}/api/v1/teams/${team.id}/resolution/preview`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ skill_names: [42] }) })).status).toBe(400);
+  });
+
+
   const post = (path: string, body: unknown) => fetch(`${baseUrl}${path}`, {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
   });

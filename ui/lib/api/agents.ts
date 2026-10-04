@@ -32,10 +32,10 @@ previewAgentMcpPermissions: (id: number, enabledCapabilities?: string[], keyRole
   apiFetch<import('./types').AgentMcpToolAccessPreview>(`/api/v1/agents/${id}/mcp-permissions/preview`, {
     method: 'POST', body: JSON.stringify({ enabled_capabilities: enabledCapabilities, key_role: keyRole }),
   }),
-updateAgentMcpPermissions: (id: number, enabledCapabilities: string[]) =>
+updateAgentMcpPermissions: (id: number, enabledCapabilities: string[], expectedRevision?: string) =>
   apiFetch<AgentMcpPermissionPolicy>(`/api/v1/agents/${id}/mcp-permissions`, {
     method: 'PUT',
-    body: JSON.stringify({ enabled_capabilities: enabledCapabilities }),
+    body: JSON.stringify({ enabled_capabilities: enabledCapabilities, expected_revision: expectedRevision }),
   }),
 resetAgentMcpPermissions: (id: number) =>
   apiFetch<AgentMcpPermissionPolicy>(`/api/v1/agents/${id}/mcp-permissions`, { method: 'DELETE' }),

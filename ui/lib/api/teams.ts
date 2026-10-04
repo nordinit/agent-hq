@@ -16,7 +16,7 @@ export const teamsClient = {
   getTeam: (id: number) => apiFetch<Team>(`/api/v1/teams/${id}`),
   createTeam: (data: Partial<Team>) =>
     apiFetch<Team>('/api/v1/teams', { method: 'POST', body: JSON.stringify(data) }),
-  updateTeam: (id: number, data: Partial<Team>) =>
+  updateTeam: (id: number, data: Partial<Team> & { expected_context_version?: number }) =>
     apiFetch<Team>(`/api/v1/teams/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   deleteTeam: (id: number) =>
     apiFetch<{ ok: boolean; id: number }>(`/api/v1/teams/${id}`, { method: 'DELETE' }),

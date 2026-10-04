@@ -1463,6 +1463,7 @@ export default function AgentDetailPage() {
           <Badge variant={agent.status}>{agent.status}</Badge>
         </div>
         <div className="flex items-center gap-2">
+          <Link href={`/agents/${id}/resolution`} className="rounded-lg border border-slate-700 px-3 py-2 text-sm text-amber-300">Capability map</Link>
           <Button variant="secondary" size="sm" onClick={handleRuntimeDiagnostic} loading={runtimeDiagnosticLoading}>
             <Activity className="w-3.5 h-3.5" /> Test Runtime
           </Button>

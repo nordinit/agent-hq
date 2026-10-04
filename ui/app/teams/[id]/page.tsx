@@ -1,5 +1,6 @@
 'use client';
 
+import { TeamCapabilityMap } from '@/components/agents/TeamCapabilityMap';
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
@@ -20,10 +21,11 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ArrowLeft, Eye, Plus, Save, Trash2, Users } from 'lucide-react';
 
-type Tab = 'overview' | 'members' | 'capabilities' | 'routing' | 'context';
+type Tab = 'map' | 'overview' | 'members' | 'capabilities' | 'routing' | 'context';
 
 const TABS: Array<{ key: Tab; label: string }> = [
   { key: 'overview', label: 'Overview' },
+  { key: 'map', label: 'Capability map' },
   { key: 'members', label: 'Members' },
   { key: 'capabilities', label: 'Capabilities' },
   { key: 'routing', label: 'Routing defaults' },
@@ -84,6 +86,7 @@ export default function TeamDetailPage() {
         ))}
       </div>
 
+      {tab === 'map' && <TeamCapabilityMap teamId={teamId} onSaved={setTeam} />}
       {tab === 'overview' && <OverviewTab team={team} onSaved={setTeam} />}
       {tab === 'members' && <MembersTab teamId={teamId} members={members} onChanged={loadTeam} />}
       {tab === 'capabilities' && <CapabilitiesTab teamId={teamId} team={team} onTeamSaved={setTeam} />}
