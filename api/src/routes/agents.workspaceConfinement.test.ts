@@ -141,4 +141,11 @@ describe('agent workspace confinement', () => {
       expect({ route, status: res.status }).toEqual({ route, status: 400 });
     }
   });
+  it('requires a boolean for an explicit uncertain-reconciliation retry', async () => {
+    const created = await createClaudeAgent('Recovery flag target');
+    const result = await send('POST', `/api/v1/agents/${created.body.id}/mcp/sync`, { force_reconcile: 'true' });
+    expect(result.status).toBe(400);
+    expect(result.body.error).toBe('force_reconcile must be a boolean');
+  });
+
 });

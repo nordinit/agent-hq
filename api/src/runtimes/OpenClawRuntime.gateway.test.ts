@@ -10,6 +10,7 @@ type SentRequest = {
 
 const mockSentRequests: SentRequest[] = [];
 let mockPatchShouldFail = false;
+let mockPluginFailure: Record<string, unknown> | null = null;
 let mockChatSendShouldFail = false;
 const mockSocketInstances: Array<{ close: () => void; emitClose: () => void }> = [];
 const mockDropBeforeResponseCounts = new Map<string, number>();
@@ -63,7 +64,9 @@ jest.mock('ws', () => {
         payload: {},
       };
 
-      if (frame.method === 'sessions.patch' && mockPatchShouldFail) {
+      if (frame.method === 'plugins.reload' && mockPluginFailure) {
+        delete response.payload; response.error = mockPluginFailure;
+      } else if (frame.method === 'sessions.patch' && mockPatchShouldFail) {
         delete response.payload;
         response.error = { code: 'INVALID_REQUEST', message: 'bad runtime config' };
       } else if (frame.method === 'chat.send') {
@@ -175,6 +178,7 @@ describe('OpenClawRuntime gateway dispatch', () => {
     mockSentRequests.length = 0;
     mockSocketInstances.length = 0;
     mockPatchShouldFail = false;
+    mockPluginFailure = null;
     mockChatSendShouldFail = false;
     mockDropBeforeResponseCounts.clear();
     mockNeverRespondMethods.clear();
@@ -558,6 +562,15 @@ describe('OpenClawRuntime gateway dispatch', () => {
       'connect',
       'chat.send',
     ]);
+  });
+
+  it('preserves lifecycle publication and retry information from the gateway', async () => {
+    mockPluginFailure = { code: 'UNAVAILABLE', message: 'drain timeout', retryable: true, retryAfterMs: 1000,
+      details: { runtime: { generation: 3, committed: false } } };
+    const result = await gatewayRpcCall({ method: 'plugins.reload', retryOnDisconnect: false });
+    expect(result).toEqual({ ok: false, error: expect.stringContaining('drain timeout'),
+      failure: { code: 'UNAVAILABLE', retryable: true, retryAfterMs: 1000,
+        details: { runtime: { generation: 3, committed: false } } } });
   });
 
   it('never replays plugin mutations after the connection drops', async () => {

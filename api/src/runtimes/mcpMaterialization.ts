@@ -1430,6 +1430,8 @@ async function syncAssignedMcpForAgentUnlocked(params: {
   // Dispatch can pre-materialize workspace files without mutating global plugin state.
   activateOpenClawWorkspaceBundle?: boolean;
   refreshPluginRegistry?: boolean;
+  /** Explicit operator retry after inspecting an uncertain gateway update. Never set by dispatch. */
+  forceReconciliation?: boolean;
   refreshOpenClawPluginRegistry?: OpenClawPluginRegistryRefreshFn;
 }): Promise<AgentMcpSyncResult> {
   const agent = await params.db.get(`
@@ -1618,7 +1620,7 @@ async function syncAssignedMcpForAgentUnlocked(params: {
     try {
       await reconcileOpenClawMcp({
         db: params.db, agentId: agent.id, bundlePath: result.bundlePath,
-        bundlePluginId: result.bundlePluginId!, configPath: result.openClawConfigPath,
+        bundlePluginId: result.bundlePluginId!, configPath: result.openClawConfigPath, force: params.forceReconciliation,
       });
     } catch (error) {
       result.ok = false;

@@ -2819,11 +2819,16 @@ router.post('/:id/mcp/sync', async (req: Request, res: Response) => {
     if (workDirCheck && !workDirCheck.ok) return res.status(400).json({ error: workDirCheck.error });
     const runtimeType = (agent.runtime_type as string | null) ?? 'openclaw';
 
+    const forceReconcile = (req.body as Record<string, unknown>)?.force_reconcile;
+    if (forceReconcile !== undefined && typeof forceReconcile !== 'boolean') {
+      return res.status(400).json({ error: 'force_reconcile must be a boolean' });
+    }
     const result = await syncAssignedMcpForAgent({
           db,
           agentId: Number(req.params.id),
           workingDirectory: (workDirCheck?.ok ? workDirCheck.path : null) ?? (agent.workspace_path as string | null) ?? null,
           materializeOpenClawGlobalConfig: true,
+          forceReconciliation: forceReconcile === true,
         });
 
     if (result.skipped === 'agent_not_found') {

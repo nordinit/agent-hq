@@ -20,6 +20,8 @@ export interface GatewayRpcCallResult {
   payload?: unknown;
   result?: unknown;
   error?: string;
+  /** Preserve lifecycle refusal/publication facts; callers must not infer them from error text. */
+  failure?: { code?: string; retryable?: boolean; retryAfterMs?: number; details?: Record<string, unknown> };
 }
 
 type GatewayResponseFrame = Record<string, unknown>;
@@ -310,7 +312,7 @@ export function buildOpenClawGatewayConnectParams(params: {
   const scopes = ['operator.read', 'operator.write', 'operator.admin'];
   const signedAtMs = Date.now();
   const gatewayAuthToken = getGatewayAuthToken();
-  const deviceIdentity = loadDeviceIdentity();
+  const deviceIdentity = loadDeviceIdentity(process.env.OPENCLAW_STATE_DIR || path.dirname(OPENCLAW_CONFIG_PATH));
 
   let device: Record<string, unknown> | undefined;
   if (deviceIdentity) {
@@ -360,7 +362,14 @@ export function gatewayRpcCall(params: {
   return poolForEndpoint(params.gatewayUrl).call(params)
     .then((rpcResult) => {
       if (rpcResult.error) {
-        return { ok: false, error: `${params.method} failed: ${formatGatewayRpcError(rpcResult.error)}` };
+        const error = rpcResult.error as Record<string, unknown>;
+        return { ok: false, error: `${params.method} failed: ${formatGatewayRpcError(rpcResult.error)}`,
+          failure: {
+            ...(typeof error.code === 'string' ? { code: error.code } : {}),
+            ...(typeof error.retryable === 'boolean' ? { retryable: error.retryable } : {}),
+            ...(typeof error.retryAfterMs === 'number' ? { retryAfterMs: error.retryAfterMs } : {}),
+            ...(error.details && typeof error.details === 'object' ? { details: error.details as Record<string, unknown> } : {}),
+          } };
       }
       return {
         ok: true,
