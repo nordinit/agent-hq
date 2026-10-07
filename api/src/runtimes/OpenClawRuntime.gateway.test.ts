@@ -10,6 +10,7 @@ type SentRequest = {
 
 const mockSentRequests: SentRequest[] = [];
 let mockPatchShouldFail = false;
+const mockPatchFailures: Array<Record<string, unknown>> = [];
 let mockPluginFailure: Record<string, unknown> | null = null;
 let mockChatSendShouldFail = false;
 const mockSocketInstances: Array<{ close: () => void; emitClose: () => void }> = [];
@@ -66,6 +67,9 @@ jest.mock('ws', () => {
 
       if (frame.method === 'plugins.reload' && mockPluginFailure) {
         delete response.payload; response.error = mockPluginFailure;
+      } else if (frame.method === 'sessions.patch' && mockPatchFailures.length) {
+        delete response.payload;
+        response.error = mockPatchFailures.shift();
       } else if (frame.method === 'sessions.patch' && mockPatchShouldFail) {
         delete response.payload;
         response.error = { code: 'INVALID_REQUEST', message: 'bad runtime config' };
@@ -178,6 +182,7 @@ describe('OpenClawRuntime gateway dispatch', () => {
     mockSentRequests.length = 0;
     mockSocketInstances.length = 0;
     mockPatchShouldFail = false;
+    mockPatchFailures.length = 0;
     mockPluginFailure = null;
     mockChatSendShouldFail = false;
     mockDropBeforeResponseCounts.clear();
@@ -433,6 +438,56 @@ describe('OpenClawRuntime gateway dispatch', () => {
       ok: false,
       error: 'sessions.patch failed: {"code":"INVALID_REQUEST","message":"bad runtime config"}',
     });
+    expect(mockSentRequests.filter(request => request.method === 'sessions.patch')).toHaveLength(1);
+  });
+
+  it('waits for slow cold session preparation without sending a duplicate patch', async () => {
+    jest.useFakeTimers();
+    mockResponseDelays.set('sessions.patch', 125_000);
+    const result = gatewayWsPatchSession({ sessionKey: 'agent:fixture:run:1', model: 'openai/gpt-5.5' });
+    await jest.advanceTimersByTimeAsync(125_010);
+    await expect(result).resolves.toEqual({ ok: true });
+    expect(mockSentRequests.filter(request => request.method === 'sessions.patch')).toHaveLength(1);
+  });
+
+  it('retries an explicit transient session refusal before sending the agent turn once', async () => {
+    jest.useFakeTimers();
+    mockPatchFailures.push({ code: 'UNAVAILABLE', message: 'Runtime publication superseded', retryable: true });
+    const result = new OpenClawRuntime().dispatch(dispatchParams({ model: 'openai/gpt-5.5' }));
+    await jest.advanceTimersByTimeAsync(1100);
+    await expect(result).resolves.toEqual({ runId: 'run-123' });
+    const patches = mockSentRequests.filter(request => request.method === 'sessions.patch');
+    expect(patches).toHaveLength(2);
+    expect(patches[1].params).toEqual(patches[0].params);
+    expect(mockSentRequests.filter(request => request.method === 'chat.send')).toHaveLength(1);
+  });
+
+  it('bounds transient session refusals and never starts a turn without acknowledgement', async () => {
+    jest.useFakeTimers();
+    for (let i = 0; i < 3; i += 1) mockPatchFailures.push({ code: 'UNAVAILABLE', message: 'busy', retryable: true });
+    const assertion = expect(new OpenClawRuntime().dispatch(dispatchParams({ model: 'openai/gpt-5.5' })))
+      .rejects.toThrow('Failed to apply runtime routing overrides');
+    await jest.advanceTimersByTimeAsync(2100);
+    await assertion;
+    expect(mockSentRequests.filter(request => request.method === 'sessions.patch')).toHaveLength(3);
+    expect(mockSentRequests.some(request => request.method === 'chat.send')).toBe(false);
+  });
+
+  it('keeps one deadline across session refusals and does not replay a timed-out mutation', async () => {
+    jest.useFakeTimers();
+    mockPatchFailures.push({ code: 'UNAVAILABLE', message: 'busy', retryable: true });
+    mockResponseDelays.set('sessions.patch', 800);
+    const result = gatewayWsPatchSession({ sessionKey: 'agent:fixture:run:1', model: 'openai/gpt-5.5', timeoutMs: 2000 });
+    await jest.advanceTimersByTimeAsync(2001);
+    await expect(result).resolves.toEqual({ ok: false, error: 'Gateway WebSocket timeout' });
+    expect(mockSentRequests.filter(request => request.method === 'sessions.patch')).toHaveLength(2);
+  });
+
+  it('does not replay a session patch after disconnect', async () => {
+    mockDropBeforeResponseCounts.set('sessions.patch', 1);
+    const result = await gatewayWsPatchSession({ sessionKey: 'agent:fixture:run:1', model: 'openai/gpt-5.5' });
+    expect(result.ok).toBe(false);
+    expect(mockSentRequests.filter(request => request.method === 'sessions.patch')).toHaveLength(1);
   });
 
   it('normalizes tools.effective payloads through the extracted gateway client', async () => {

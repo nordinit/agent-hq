@@ -433,22 +433,32 @@ export async function gatewayWsPatchSession(params: {
     return { ok: true, skipped: true };
   }
 
-  const result = await gatewayRpcCall({
-    method: 'sessions.patch',
-    rpcParams: {
-      key: params.sessionKey,
-      ...(model ? { model } : {}),
-      ...(thinkingLevel ? { thinkingLevel } : {}),
-      ...(fastMode !== null ? { fastMode } : {}),
-    },
-    timeoutMs: params.timeoutMs ?? 30_000,
-    displayName: 'Agent HQ Runtime Config',
-  });
-
-  if (!result.ok) {
-    return { ok: false, error: result.error ?? 'sessions.patch failed' };
+  // Cold model-runtime preparation can take over two minutes after a plugin
+  // reload. Keep one deadline across bounded retries, before any chat.send.
+  const deadline = Date.now() + (params.timeoutMs ?? 150_000);
+  const rpcParams = {
+    key: params.sessionKey,
+    ...(model ? { model } : {}),
+    ...(thinkingLevel ? { thinkingLevel } : {}),
+    ...(fastMode !== null ? { fastMode } : {}),
+  };
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) return { ok: false, error: 'Session configuration deadline exceeded' };
+    const result = await gatewayRpcCall({
+      method: 'sessions.patch', rpcParams, timeoutMs: remainingMs,
+      displayName: 'Agent HQ Runtime Config', retryOnDisconnect: false,
+    });
+    if (result.ok) return { ok: true };
+    // Reapplying the same overrides is safe only when the gateway explicitly
+    // asks us to retry. A lost response or timeout is not such an acknowledgement.
+    const delayMs = Math.min(5000, Math.max(1000, result.failure?.retryAfterMs ?? 0));
+    if (result.failure?.retryable !== true || attempt === 2 || Date.now() + delayMs >= deadline) {
+      return { ok: false, error: result.error ?? 'sessions.patch failed' };
+    }
+    await new Promise(resolve => setTimeout(resolve, delayMs));
   }
-  return { ok: true };
+  return { ok: false, error: 'Session configuration retry limit reached' };
 }
 
 function collectEffectiveToolNames(payload: unknown): string[] {
