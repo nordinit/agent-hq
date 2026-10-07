@@ -774,10 +774,29 @@ describe('runDispatcher thinking-level routing', () => {
     expect(mockedTaskNotifications.notifyTaskStatusChange).not.toHaveBeenCalled();
     expect(mockedResolveRuntime).not.toHaveBeenCalled();
 
+    // Failures before instance creation obey the same budget, even when the
+    // workflow explicitly ignores the startup-failure status event.
+    for (let attempt = 2; attempt <= 3; attempt += 1) {
+      await db.run("UPDATE tasks SET dispatched_at = '2000-01-01 00:00:00' WHERE id = 932");
+      await runDispatcher(db, 86);
+    }
+    const exhausted = await db.get<{ retry_count: number; paused_at: string | null; status: string }>(
+      'SELECT retry_count, paused_at, status FROM tasks WHERE id = 932',
+    );
+    expect(exhausted).toMatchObject({ retry_count: 3, status: 'ready', paused_at: expect.any(String) });
+    await db.run("UPDATE tasks SET dispatched_at = '2000-01-01 00:00:00' WHERE id = 932");
+    expect((await runDispatcher(db, 86)).dispatched).toBe(0);
+    expect((await db.get('SELECT count(*) AS n FROM task_notes WHERE task_id = 932') as { n: number }).n).toBe(3);
+
     await teardownTestDb();
   });
 
-  it('preserves runtime dispatch retries but surfaces the failure on the task', async () => {
+  it.each([
+    { attemptsBefore: 0, mapping: 'absent' },
+    { attemptsBefore: 2, mapping: 'absent' },
+    { attemptsBefore: 2, mapping: 'ignore' },
+    { attemptsBefore: 2, mapping: 'status' },
+  ])('enforces dispatch retry budget with $mapping mapping after $attemptsBefore failures', async ({ attemptsBefore, mapping }) => {
     jest.clearAllMocks();
 
     const db = await setupTestDb();
@@ -792,6 +811,16 @@ describe('runDispatcher thinking-level routing', () => {
       VALUES (444, 1, 'Surface dispatcher failure', 'Task', 'ready', 'high', 86, 'backend', 10, '2026-05-06T18:00:00.000Z', '2026-05-06T18:00:00.000Z')
     `);
     await db.run(`INSERT INTO workflow_task_routing_rules (tenant_id, workflow_id, project_id, workflow_type, task_type, status, agent_id, priority) VALUES (1, 10, 86, 'generic', 'backend', 'ready', 1, 10)`);
+
+    await db.run('UPDATE tasks SET retry_count = ? WHERE id = 444', attemptsBefore);
+    if (mapping !== 'absent') {
+      await db.run(`INSERT INTO external_event_mappings
+        (tenant_id, project_id, workflow_id, workflow_type, source, event_name, task_type, action_kind, action_target, apply_failure_detail, enabled, priority)
+        VALUES (1, 86, 10, 'generic', 'agent_hq_dispatcher', 'dispatch_startup_failed', 'backend', ?, ?, 1, 1, 100)`,
+      mapping, mapping === 'status' ? 'ready' : null);
+    }
+    const expectedAttempts = attemptsBefore + 1;
+    const exhausted = expectedAttempts >= 3;
 
     const { createTaskWorktree } = jest.requireMock('./worktreeManager') as { createTaskWorktree: jest.Mock };
     createTaskWorktree.mockReturnValue({
@@ -825,7 +854,7 @@ describe('runDispatcher thinking-level routing', () => {
         instance_status: string | null;
         instance_error: string | null;
       };
-      return row.retry_count === 1
+      return row.retry_count === expectedAttempts
         && row.active_instance_id === null
         && Number(row.note_count) === 1
         && Number(row.notification_count) === 1
@@ -838,12 +867,14 @@ describe('runDispatcher thinking-level routing', () => {
     // before teardown truncates the shared PostgreSQL fixture tables.
     await new Promise<void>(resolve => setImmediate(resolve));
 
-    const task = await db.get(`SELECT status, agent_id, assigned_agent_id, routing_reason, retry_count, failure_detail, previous_status, active_instance_id FROM tasks WHERE id = 444`) as Record<string, unknown>;
+    const task = await db.get(`SELECT status, agent_id, assigned_agent_id, routing_reason, retry_count, failure_detail, previous_status, active_instance_id, paused_at, pause_reason FROM tasks WHERE id = 444`) as Record<string, unknown>;
     expect(task.status).toBe('ready');
     expect(task.agent_id).toBeNull();
     expect(task.assigned_agent_id).toBe(1);
     expect(task.active_instance_id).toBeNull();
-    expect(task.retry_count).toBe(1);
+    expect(task.retry_count).toBe(expectedAttempts);
+    expect(Boolean(task.paused_at)).toBe(exhausted);
+    if (exhausted) expect(task.pause_reason).toContain('Dispatch startup retry limit reached (3/3)');
     expect(String(task.failure_detail)).toContain('Dispatcher startup failure workflow event');
     expect(String(task.failure_detail)).toContain('Matched agent: Cinder (#1)');
     expect(String(task.failure_detail)).toContain('runtime infrastructure');
@@ -854,7 +885,7 @@ describe('runDispatcher thinking-level routing', () => {
     }));
 
     const note = await db.get(`SELECT content FROM task_notes WHERE task_id = 444 ORDER BY id DESC LIMIT 1`) as { content: string };
-    expect(note.content).toContain('Summary: Dispatch startup failed after routing matched Cinder (attempt 1/3)');
+    expect(note.content).toContain(`Summary: Dispatch startup failed after routing matched Cinder (attempt ${expectedAttempts}/3)`);
     expect(note.content).toContain('Result: partial');
     expect(note.content).toContain('Evidence: workflow_event=dispatch_startup_failed');
     expect(note.content).toContain('legacy_outcome=infra_failed');
@@ -864,6 +895,12 @@ describe('runDispatcher thinking-level routing', () => {
     expect(instance.status).toBe('failed');
     expect(instance.error).toBe('Gateway connect timeout');
 
+    if (exhausted) {
+      await db.run("UPDATE tasks SET dispatched_at = '2000-01-01 00:00:00' WHERE id = 444");
+      expect((await runDispatcher(db, 86)).dispatched).toBe(0);
+      expect(dispatchMock).toHaveBeenCalledTimes(1);
+      expect((await db.get('SELECT count(*) AS n FROM job_instances WHERE task_id = 444') as { n: number }).n).toBe(1);
+    }
     await teardownTestDb();
   });
 

@@ -1,4 +1,5 @@
 import fs from 'fs';
+import { DISPATCH_RETRY_PAUSE_PREFIX } from '../../lib/dispatchRetryPause';
 import { cancelTaskExecution, cleanupTaskExecutionLinkage, cleanupTerminalTaskWorkspaces, taskHasConfiguredTerminalStatus } from '../../lib/taskLifecycle';
 import { assertAtlasDirectStatusGate, assertTaskStatusUpdateAllowed } from '../../lib/taskRelease';
 import { notifyTaskStatusChange } from '../../lib/taskNotifications';
@@ -673,9 +674,16 @@ export async function unpauseTaskRecord(db: Db, taskId: number, changedBy: strin
     throw Object.assign(new Error('Task is not paused'), { status: 400 });
   }
 
+  const renewDispatchRetries = typeof existing.pause_reason === 'string'
+    && existing.pause_reason.startsWith(DISPATCH_RETRY_PAUSE_PREFIX);
   await db.run(`
-    UPDATE tasks SET paused_at = NULL, pause_reason = NULL, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS') WHERE id = ?
+    UPDATE tasks SET paused_at = NULL, pause_reason = NULL,
+      ${renewDispatchRetries ? 'retry_count = 0,' : ''}
+      updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS') WHERE id = ?
   `, taskId);
+  if (renewDispatchRetries) {
+    await logHistory(taskId, changedBy, 'retry_count', String(existing.retry_count), '0');
+  }
 
   await logHistory(taskId, changedBy, 'paused_at', existing.paused_at as string, null);
   await addTaskNote(taskId, changedBy, 'Task unpaused — routing and dispatch eligibility restored.');

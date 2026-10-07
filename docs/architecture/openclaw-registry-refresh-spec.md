@@ -2,6 +2,12 @@
 
 Status: recovery implementation `9ec03c3c` deployed to production and both development APIs on October 5, 2026; all three databases are through migration 39. `async-every-dispatch` remains active. Enabling change-only maintenance and adding cross-process ownership remain deferred. The original September 28–29 investigation and September 29–30 Stage A rollout are retained below.
 
+## Dispatch recovery follow-up — October 7
+
+The rollout checks below established API and schema health, not successful business-run startup. Four agents retained pre-upgrade plugin reload failures (`Worker environment inventory has closed`) as durable recovery holds. Restarting OpenClaw did not clear these holds. After inspecting the recorded non-publication errors and confirming the newer gateway process was healthy, explicit MCP reconciliation succeeded for all four agents. The next scheduled attempts advanced to credential preparation and failed with OpenAI `refresh_token_reused`; all configured OpenClaw OAuth copies were expired. Reconnecting the provider and confirming a real agent start remain necessary before claiming dispatch is restored.
+
+The investigation also found that workflow mappings could preserve an eligible task status after retry exhaustion. The dispatcher repeatedly logged an exhausted budget but still admitted the same task. Startup failures now pause automatic dispatch once the configured retry budget is exhausted, independently of workflow status mappings. Failures during repository preparation count toward the same budget. The pause reason and task history explain recovery; explicitly resuming a dispatcher-paused task resets its retry budget, while resuming an ordinary manual pause preserves that budget. This requires no schema or OpenClaw configuration changes.
+
 ## Change-only recovery implementation — October 4
 
 The follow-up implements the remaining single-instance maintenance and recovery paths. Cross-process ownership and enabling the change-only mode are intentionally excluded from this change. The existing `AGENT_HQ_OPENCLAW_MCP_MAINTENANCE_OWNER` startup guard remains unchanged; setting it does not establish ownership.

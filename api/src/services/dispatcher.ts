@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { notifyTaskStatusChange } from '../lib/taskNotifications';
 import { recordDispatchStartupFailureNotification } from '../lib/dispatchStartupFailureNotifications';
+import { DISPATCH_RETRY_PAUSE_PREFIX } from '../lib/dispatchRetryPause';
 import { recordSkillMaterializationIssues } from '../lib/skillMaterializationNotifications';
 import { resolveRepoConfig } from '../lib/repoConfig';
 import { writeTaskHistory, writeTaskStatusChange } from '../domains/tasks/history';
@@ -416,6 +417,14 @@ async function persistDispatchStartupFailure(
     tenantId?: number | null;
   },
 ): Promise<string> {
+  // Repository preparation can fail before a job instance exists. Count those
+  // failures too, otherwise they can loop forever while workflow status stays put.
+  if (params.retryCount == null && await tableHasColumn(db, 'tasks', 'retry_count')) {
+    const retryState = await db.get<{ retry_count: number; max_retries: number }>(
+      'SELECT retry_count, max_retries FROM tasks WHERE id = ?', params.taskId,
+    );
+    params = { ...params, retryCount: (retryState?.retry_count ?? 0) + 1, maxRetries: retryState?.max_retries ?? 3 };
+  }
   const classification = classifyDispatchStartupFailure(params.reason);
   const fallbackStatus = deriveDispatchFailureFallbackStatus(params.priorStatus);
   const terminalFailureStatus = classification.failureOutcome === 'env_blocked' ? 'stalled' : 'failed';
@@ -438,6 +447,11 @@ async function persistDispatchStartupFailure(
   const nextStatus = mapping?.action_kind === 'status' && mapping.action_target
     ? mapping.action_target
     : (hasWorkflowEventMappings ? params.priorStatus : legacySafeStatus);
+  // Workflow mappings own the visible status; they must not override the runtime retry budget.
+  // A pause also covers mappings that ignore the event or route failures back to an eligible status.
+  const retryLimitReached = params.retryCount != null && params.maxRetries != null
+    && params.retryCount >= params.maxRetries;
+  const retryPauseReason = `${DISPATCH_RETRY_PAUSE_PREFIX} (${params.retryCount}/${params.maxRetries}). Fix the runtime startup failure, then resume this task to retry.`;
 
   const failureDetail = [
     'Dispatcher startup failure workflow event',
@@ -494,12 +508,20 @@ async function persistDispatchStartupFailure(
     assignments.push('retry_count = ?');
     values.push(params.retryCount);
   }
+  if (retryLimitReached) {
+    assignments.push("paused_at = COALESCE(paused_at, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))");
+    assignments.push('pause_reason = CASE WHEN paused_at IS NULL THEN ? ELSE pause_reason END');
+    values.push(retryPauseReason);
+  }
 
   await db.run(`
     UPDATE tasks
     SET ${assignments.join(',\n        ')}
     WHERE id = ?
   `, ...values, params.taskId);
+  if (retryLimitReached) {
+    await writeTaskHistory(db, params.taskId, 'dispatcher', 'dispatch_retry_limit', null, retryPauseReason, false);
+  }
 
   const attemptSuffix = params.retryCount != null && params.maxRetries != null
     ? ` (attempt ${params.retryCount}/${params.maxRetries})`
@@ -520,7 +542,7 @@ async function persistDispatchStartupFailure(
           `Failure or issue observed: ${params.reason}`,
           `Root cause assessment: ${classification.rootCauseAssessment}`,
           `Evidence: workflow_event=${DISPATCH_STARTUP_FAILED_EVENT}; source=${AGENT_HQ_DISPATCHER_SOURCE}; mapping=${mapping ? `#${mapping.id}` : 'none'}; action=${mapping?.action_kind ?? 'legacy_safe_default'}${mapping?.action_target ? `→${mapping.action_target}` : ''}; legacy_outcome=${classification.failureOutcome}; status=${nextStatus}; routing_reason=${params.routingReason}`,
-          `Next action: ${classification.nextAction}`,
+          `Next action: ${retryLimitReached ? retryPauseReason : classification.nextAction}`,
           `Next owner: ${classification.nextOwner}`,
         ].join('\n'));
 
@@ -535,7 +557,7 @@ async function persistDispatchStartupFailure(
         mappingId: mapping?.id ?? null,
         mappingActionKind: mapping?.action_kind ?? (hasWorkflowEventMappings ? null : 'legacy_safe_default'),
         mappingActionTarget: mapping?.action_target ?? (hasWorkflowEventMappings ? null : nextStatus),
-        nextAction: classification.nextAction,
+        nextAction: retryLimitReached ? retryPauseReason : classification.nextAction,
         nextOwner: classification.nextOwner,
         priorStatus: params.priorStatus,
         resolvedStatus: nextStatus,
@@ -1784,7 +1806,7 @@ async function fireAgentRun(
     //
     // Strategy (Option 1 from task #355):
     //  - Increment retry_count on each dispatch failure.
-    //  - If retry_count >= max_retries → mark task failed (stop flooding the DB).
+    //  - If retry_count >= max_retries → pause dispatch, independently of workflow status.
     //  - Otherwise → reset to fallback status AND set dispatched_at = now so the
     //    dispatcher's eligibility gate (dispatched_at + backoff check) prevents
     //    immediate re-dispatch on the next reconciler tick.
@@ -1801,10 +1823,10 @@ async function fireAgentRun(
     const maxRetries = taskRow?.max_retries ?? 3;
 
     if (newRetryCount >= maxRetries) {
-      // Too many dispatch failures — mark the task failed to stop the spin-loop.
+      // Too many dispatch failures — pause dispatch even if the mapping retains an eligible status.
       console.error(
         `[dispatcher] Task (active_instance_id=${instanceId}) exhausted dispatch retries` +
-        ` (retry_count=${newRetryCount}, max_retries=${maxRetries}) — marking failed.`
+        ` (retry_count=${newRetryCount}, max_retries=${maxRetries}) — pausing automatic dispatch.`
       );
       if (taskRow?.id != null) {
         await persistDispatchStartupFailure(db, {

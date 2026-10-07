@@ -5,6 +5,7 @@ import { setupTestDb, teardownTestDb } from '../db/testDb';
 import * as dispatchTrigger from '../services/dispatchTrigger';
 import tasksRouter from './tasks';
 import { createTaskRecord, updateTaskRecord } from '../domains/tasks/writeModel';
+import { DISPATCH_RETRY_PAUSE_PREFIX } from '../lib/dispatchRetryPause';
 
 async function startServer(): Promise<{ server: Server; baseUrl: string }> {
   const app = express();
@@ -137,6 +138,19 @@ describe('tasks route write-model handoff', () => {
     triggerDispatchSpy.mockRestore();
     await stopServer(server);
     await teardownTestDb();
+  });
+
+  it.each([
+    { reason: `${DISPATCH_RETRY_PAUSE_PREFIX} (3/3). Fix the runtime, then resume.`, expectedRetries: 0 },
+    { reason: 'Waiting on review', expectedRetries: 3 },
+  ])('resumes a paused task with the appropriate retry budget: $reason', async ({ reason, expectedRetries }) => {
+    await getDb().run(`UPDATE tasks SET paused_at = '2026-10-07 00:00:00', pause_reason = ?, retry_count = 3 WHERE id = 102`, reason);
+    const response = await fetch(`${baseUrl}/api/v1/tasks/102/unpause`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ changed_by: 'Operator' }),
+    });
+    expect(response.status).toBe(200);
+    const task = await getDb().get('SELECT paused_at, pause_reason, retry_count FROM tasks WHERE id = 102');
+    expect(task).toEqual({ paused_at: null, pause_reason: null, retry_count: expectedRetries });
   });
 
   it.each(['approved', 'awaiting_customer_signature'])('preserves a live owner through title and status edits from %s', async taskStatus => {
