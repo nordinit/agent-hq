@@ -33,6 +33,9 @@ type PendingGatewayCall = {
 };
 
 const GATEWAY_SOCKET_DISCONNECTED_ERROR = 'Gateway WebSocket disconnected before response';
+const GATEWAY_AUTH_TIMEOUT_MS = 30_000;
+
+type GatewayCallDeadline = { expired: boolean; requestId?: string };
 
 class GatewayConnectionDropError extends Error {
   constructor(message = GATEWAY_SOCKET_DISCONNECTED_ERROR) {
@@ -59,16 +62,18 @@ class GatewayConnectionPool {
     displayName?: string;
     retryOnDisconnect?: boolean;
   }): Promise<GatewayResponseFrame> {
-    let timedOut = false;
+    const deadline: GatewayCallDeadline = { expired: false };
+    const timeoutMs = params.timeoutMs ?? 30_000;
+    const timeoutError = new Error('Gateway WebSocket timeout');
     let timeout: NodeJS.Timeout | null = null;
 
     const callPromise = (async () => {
       try {
         for (let attempt = 0; attempt < 2; attempt += 1) {
           try {
-            return await this.callOnce(params);
+            return await this.callOnce(params, deadline);
           } catch (err) {
-            if (timedOut || params.retryOnDisconnect === false || attempt > 0 || !(err instanceof GatewayConnectionDropError)) {
+            if (deadline.expired || params.retryOnDisconnect === false || attempt > 0 || !(err instanceof GatewayConnectionDropError)) {
               throw err;
             }
           }
@@ -81,10 +86,17 @@ class GatewayConnectionPool {
 
     const timeoutPromise = new Promise<GatewayResponseFrame>((_, reject) => {
       timeout = setTimeout(() => {
-        timedOut = true;
-        reject(new Error('Gateway WebSocket timeout'));
-        this.reset();
-      }, params.timeoutMs ?? 30_000);
+        deadline.expired = true;
+        // Expiring one observer must not disconnect other requests or replay a
+        // mutation whose outcome is unknown. A late reply has no pending owner.
+        if (deadline.requestId) {
+          const pending = this.pending.get(deadline.requestId);
+          this.pending.delete(deadline.requestId);
+          pending?.reject(timeoutError);
+        }
+        console.warn(`[openclaw-gateway] Request timed out: method=${params.method} requestId=${deadline.requestId ?? 'not-sent'} timeoutMs=${timeoutMs} connectionEpoch=${this.connectionEpoch()}`);
+        reject(timeoutError);
+      }, timeoutMs);
     });
 
     return Promise.race([callPromise, timeoutPromise]);
@@ -105,22 +117,26 @@ class GatewayConnectionPool {
     method: string;
     rpcParams?: Record<string, unknown>;
     displayName?: string;
-  }): Promise<GatewayResponseFrame> {
+  }, deadline: GatewayCallDeadline): Promise<GatewayResponseFrame> {
     await this.ensureAuthenticated(params.displayName);
+    // Authentication is shared and may finish after this caller's deadline.
+    // Never send an expired request when that handshake eventually completes.
+    if (deadline.expired) throw new Error('Gateway WebSocket timeout');
     const ws = this.ws;
     if (!ws || ws.readyState !== WebSocket.OPEN) {
       throw new GatewayConnectionDropError();
     }
-    return this.sendRpc(ws, params.method, params.rpcParams ?? {});
+    deadline.requestId = crypto.randomUUID();
+    return this.sendRpc(ws, params.method, params.rpcParams ?? {}, deadline.requestId);
   }
 
   private sendRpc(
     ws: WebSocket,
     method: string,
     rpcParams: Record<string, unknown>,
+    id: string = crypto.randomUUID(),
   ): Promise<GatewayResponseFrame> {
     return new Promise((resolve, reject) => {
-      const id = crypto.randomUUID();
       this.pending.set(id, { method, resolve, reject });
       try {
         ws.send(JSON.stringify({
@@ -147,8 +163,15 @@ class GatewayConnectionPool {
     this.ws = ws;
 
     this.authPromise = new Promise((resolve, reject) => {
+      // The connection handshake has its own deadline; individual callers may
+      // stop waiting sooner without aborting authentication for other callers.
+      const authTimeout = setTimeout(() => rejectAuth(
+        new GatewayConnectionDropError('Gateway WebSocket authentication timeout'),
+      ), GATEWAY_AUTH_TIMEOUT_MS);
       const rejectAuth = (err: Error) => {
+        clearTimeout(authTimeout);
         if (this.ws === ws) {
+          this.failPending(err);
           this.authenticated = false;
           this.authPromise = null;
           this.ws = null;
@@ -167,15 +190,18 @@ class GatewayConnectionPool {
       });
 
       ws.on('close', () => {
-        if (this.ws !== ws) return;
-        this.authenticated = false;
-        this.authPromise = null;
-        this.ws = null;
-        this.failPending(new GatewayConnectionDropError());
+        clearTimeout(authTimeout);
+        if (this.ws === ws) {
+          this.authenticated = false;
+          this.authPromise = null;
+          this.ws = null;
+          this.failPending(new GatewayConnectionDropError());
+        }
         reject(new GatewayConnectionDropError());
       });
 
       ws.on('message', async (raw) => {
+        if (this.ws !== ws) return;
         let frame: GatewayResponseFrame;
         try {
           frame = JSON.parse(raw.toString()) as GatewayResponseFrame;
@@ -212,6 +238,7 @@ class GatewayConnectionPool {
           }
 
           if (this.ws === ws) {
+            clearTimeout(authTimeout);
             this.authenticated = true;
             this.epoch = ++gatewayConnectionEpoch;
             this.authPromise = null;

@@ -1,9 +1,10 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { gatewayRpcCall } from './openclaw/gatewayClient';
+import { gatewayRpcCall, getGatewayConnectionEpoch } from './openclaw/gatewayClient';
 import { openClawBundleRevision } from './openclaw/mcpAdmission';
 type SentRequest = {
+  id: string;
   method: string;
   params: Record<string, unknown>;
 };
@@ -13,7 +14,7 @@ let mockPatchShouldFail = false;
 const mockPatchFailures: Array<Record<string, unknown>> = [];
 let mockPluginFailure: Record<string, unknown> | null = null;
 let mockChatSendShouldFail = false;
-const mockSocketInstances: Array<{ close: () => void; emitClose: () => void }> = [];
+const mockSocketInstances: Array<{ readyState: number; close: () => void; emitClose: () => void }> = [];
 const mockDropBeforeResponseCounts = new Map<string, number>();
 const mockNeverRespondMethods = new Set<string>();
 const mockResponseDelays = new Map<string, number>();
@@ -57,7 +58,7 @@ jest.mock('ws', () => {
         method: string;
         params: Record<string, unknown>;
       };
-      mockSentRequests.push({ method: frame.method, params: frame.params });
+      mockSentRequests.push({ id: frame.id, method: frame.method, params: frame.params });
 
       const response: Record<string, unknown> = {
         type: 'res',
@@ -176,6 +177,7 @@ async function waitForSentRequestCount(count: number): Promise<void> {
 
 describe('OpenClawRuntime gateway dispatch', () => {
   let logSpy: jest.SpyInstance;
+  let warnSpy: jest.SpyInstance;
 
   beforeEach(() => {
     __resetGatewayConnectionPoolForTests();
@@ -200,6 +202,7 @@ describe('OpenClawRuntime gateway dispatch', () => {
       updatedPaths: [],
     });
     logSpy = jest.spyOn(console, 'log').mockImplementation(() => undefined);
+    warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
   });
 
   afterEach(() => {
@@ -315,6 +318,51 @@ describe('OpenClawRuntime gateway dispatch', () => {
       workingDirectory: '/workspace', bundlePath: '/workspace/bundle/.mcp.json',
     });
     expect(mockSentRequests.map(request => request.method)).toEqual(['connect', 'sessions.patch', 'tools.effective', 'chat.send']);
+  });
+
+  it.each([undefined, 'invalid', '0'])('allows a slow readiness reply within the default 30-second budget (%s)', async (setting) => {
+    jest.useFakeTimers();
+    if (setting === undefined) delete process.env.AGENT_HQ_OPENCLAW_MCP_READINESS_TIMEOUT_MS;
+    else process.env.AGENT_HQ_OPENCLAW_MCP_READINESS_TIMEOUT_MS = setting;
+    mockResponseDelays.set('tools.effective', 25_000);
+    const result = new OpenClawRuntime().dispatch(dispatchParams({ openClawMcpReadiness: {
+      serverNames: ['fixture'], requiredToolNames: ['exec_command'], materializedCount: 1,
+      bundlePath: '/workspace/bundle/.mcp.json',
+    } }));
+    await jest.advanceTimersByTimeAsync(25_100);
+    await expect(result).resolves.toEqual({ runId: 'run-123' });
+    expect(mockSentRequests.filter(request => request.method === 'tools.effective')).toHaveLength(1);
+    expect(mockSocketInstances).toHaveLength(1);
+  });
+
+  it('uses the configured readiness budget for a single request without a hard-coded cap', async () => {
+    jest.useFakeTimers();
+    process.env.AGENT_HQ_OPENCLAW_MCP_READINESS_TIMEOUT_MS = '45000';
+    mockResponseDelays.set('tools.effective', 35_000);
+    const result = new OpenClawRuntime().dispatch(dispatchParams({ openClawMcpReadiness: {
+      serverNames: ['fixture'], requiredToolNames: ['exec_command'], materializedCount: 1,
+      bundlePath: '/workspace/bundle/.mcp.json',
+    } }));
+    await jest.advanceTimersByTimeAsync(35_100);
+    await expect(result).resolves.toEqual({ runId: 'run-123' });
+    expect(mockSentRequests.filter(request => request.method === 'tools.effective')).toHaveLength(1);
+  });
+
+  it('shares one readiness deadline across polls and rejects a late ready response', async () => {
+    jest.useFakeTimers();
+    process.env.AGENT_HQ_OPENCLAW_MCP_READINESS_TIMEOUT_MS = '30000';
+    mockResponseDelays.set('tools.effective', 20_000);
+    mockToolsEffectivePayloads.push({ groups: [], notices: [{ id: 'mcp-stale-catalog' }] });
+    const assertion = expect(new OpenClawRuntime().dispatch(dispatchParams({ openClawMcpReadiness: {
+      serverNames: ['fixture'], requiredToolNames: ['exec_command'], materializedCount: 1,
+      bundlePath: '/workspace/bundle/.mcp.json',
+    } }))).rejects.toThrow('OpenClaw MCP readiness timed out before dispatch');
+    await jest.advanceTimersByTimeAsync(30_100);
+    await assertion;
+    expect(mockSentRequests.filter(request => request.method === 'tools.effective')).toHaveLength(2);
+    await jest.advanceTimersByTimeAsync(15_000);
+    expect(mockSentRequests.some(request => request.method === 'chat.send')).toBe(false);
+    expect(mockSocketInstances[0].readyState).toBe(1);
   });
 
   it.each(['server unavailable', 'missing required tool', 'configuration changed during startup checks'])('blocks launch after a bundle probe fails: %s', async (message) => {
@@ -689,6 +737,70 @@ describe('OpenClawRuntime gateway dispatch', () => {
       messages: [],
       error: 'Gateway WebSocket timeout',
     });
+  });
+
+  it('keeps a pending reload and the connection alive when another request times out', async () => {
+    await gatewayRpcCall({ method: 'health' });
+    const epoch = getGatewayConnectionEpoch();
+    jest.useFakeTimers();
+    mockResponseDelays.set('plugins.reload', 16_000);
+    mockResponseDelays.set('tools.effective', 16_315);
+    const reload = gatewayRpcCall({ method: 'plugins.reload', timeoutMs: 90_000, retryOnDisconnect: false });
+    const readiness = gatewayWsGetEffectiveTools({ sessionKey: 'agent:fixture:run:1', timeoutMs: 10_000 });
+    await jest.advanceTimersByTimeAsync(10_001);
+    await expect(readiness).resolves.toEqual(expect.objectContaining({ ok: false, error: 'Gateway WebSocket timeout' }));
+    const timedOutRequest = mockSentRequests.find(request => request.method === 'tools.effective')!;
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining(`method=tools.effective requestId=${timedOutRequest.id} timeoutMs=10000`));
+    expect(getGatewayConnectionEpoch()).toBe(epoch);
+    expect(mockSocketInstances[0].readyState).toBe(1);
+    await jest.advanceTimersByTimeAsync(7_000);
+    await expect(reload).resolves.toEqual(expect.objectContaining({ ok: true }));
+    const later = gatewayRpcCall({ method: 'health' });
+    await jest.advanceTimersByTimeAsync(1);
+    await expect(later).resolves.toEqual(expect.objectContaining({ ok: true }));
+    expect(mockSocketInstances).toHaveLength(1);
+    expect(mockSentRequests.filter(request => request.method === 'plugins.reload')).toHaveLength(1);
+    expect(mockSentRequests.filter(request => request.method === 'tools.effective')).toHaveLength(1);
+  });
+
+  it('does not replay a timed-out mutation or turn its late response into success', async () => {
+    jest.useFakeTimers();
+    mockResponseDelays.set('plugins.reload', 200);
+    const reload = gatewayRpcCall({ method: 'plugins.reload', timeoutMs: 50, retryOnDisconnect: false });
+    await jest.advanceTimersByTimeAsync(51);
+    await expect(reload).resolves.toEqual({ ok: false, error: 'Gateway WebSocket timeout' });
+    await jest.advanceTimersByTimeAsync(200);
+    await expect(reload).resolves.toEqual({ ok: false, error: 'Gateway WebSocket timeout' });
+    expect(mockSentRequests.filter(request => request.method === 'plugins.reload')).toHaveLength(1);
+    expect(mockSocketInstances[0].readyState).toBe(1);
+  });
+
+  it('never sends an expired mutation after shared authentication finishes', async () => {
+    jest.useFakeTimers();
+    mockResponseDelays.set('connect', 100);
+    const expired = gatewayRpcCall({ method: 'plugins.reload', timeoutMs: 25, retryOnDisconnect: false });
+    const waiting = gatewayRpcCall({ method: 'health', timeoutMs: 200 });
+    await jest.advanceTimersByTimeAsync(26);
+    await expect(expired).resolves.toEqual({ ok: false, error: 'Gateway WebSocket timeout' });
+    await jest.advanceTimersByTimeAsync(100);
+    await expect(waiting).resolves.toEqual(expect.objectContaining({ ok: true }));
+    expect(mockSentRequests.map(request => request.method)).toEqual(['connect', 'health']);
+    expect(mockSocketInstances).toHaveLength(1);
+  });
+
+  it('expires a stuck shared handshake and permits a fresh connection later', async () => {
+    jest.useFakeTimers();
+    mockNeverRespondMethods.add('connect');
+    const expired = gatewayRpcCall({ method: 'plugins.reload', timeoutMs: 25, retryOnDisconnect: false });
+    await jest.advanceTimersByTimeAsync(26);
+    await expect(expired).resolves.toEqual({ ok: false, error: 'Gateway WebSocket timeout' });
+    await jest.advanceTimersByTimeAsync(30_000);
+    expect(mockSocketInstances[0].readyState).toBe(3);
+    mockNeverRespondMethods.delete('connect');
+    const fresh = gatewayRpcCall({ method: 'health' });
+    await jest.advanceTimersByTimeAsync(5);
+    await expect(fresh).resolves.toEqual(expect.objectContaining({ ok: true }));
+    expect(mockSentRequests.map(request => request.method)).toEqual(['connect', 'connect', 'health']);
   });
 
   it('resets the singleton gateway pool for test isolation', async () => {

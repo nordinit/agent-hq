@@ -117,11 +117,11 @@ async function waitForOpenClawMcpReadiness(params: {
   const requiredToolNames = Array.from(new Set(params.readiness.requiredToolNames)).sort();
   if (params.readiness.materializedCount <= 0) return;
 
-  const configuredTimeoutMs = Number(process.env.AGENT_HQ_OPENCLAW_MCP_READINESS_TIMEOUT_MS ?? 15_000);
+  const configuredTimeoutMs = Number(process.env.AGENT_HQ_OPENCLAW_MCP_READINESS_TIMEOUT_MS ?? 30_000);
   const configuredPollMs = Number(process.env.AGENT_HQ_OPENCLAW_MCP_READINESS_POLL_MS ?? 500);
   const timeoutMs = Number.isFinite(configuredTimeoutMs) && configuredTimeoutMs > 0
     ? configuredTimeoutMs
-    : 15_000;
+    : 30_000;
   const pollMs = Number.isFinite(configuredPollMs) && configuredPollMs > 0
     ? configuredPollMs
     : 500;
@@ -137,16 +137,16 @@ async function waitForOpenClawMcpReadiness(params: {
     });
   }
 
-  const startedAt = Date.now();
+  const deadline = Date.now() + timeoutMs;
   let lastError: string | null = null;
   let lastToolNames: string[] = [];
   let lastNoticeIds: string[] = [];
 
-  while (Date.now() - startedAt <= timeoutMs) {
+  while (Date.now() < deadline) {
     const effective = await gatewayWsGetEffectiveTools({
       sessionKey: params.sessionKey,
       agentId: params.agentSlug,
-      timeoutMs: Math.min(10_000, timeoutMs),
+      timeoutMs: Math.max(1, deadline - Date.now()),
     });
     if (!effective.ok) {
       lastError = effective.error ?? 'tools.effective failed';
@@ -170,7 +170,9 @@ async function waitForOpenClawMcpReadiness(params: {
         return;
       }
     }
-    await sleep(pollMs);
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) break;
+    await sleep(Math.min(pollMs, remainingMs));
   }
 
   const missing = missingRequiredTools(lastToolNames, requiredToolNames);
