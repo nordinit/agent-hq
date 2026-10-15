@@ -137,6 +137,37 @@ it('previews payload-only proof without changing task, history, notes or run', a
   expect(await auditSnapshot()).toEqual(before);
 });
 
+it('omits run-closure flags from a recovery preview while a real outcome closes the reviewer run', async () => {
+  await db.run(`INSERT INTO workflow_task_statuses (workflow_id, status_key, label, terminal, stage_order)
+    VALUES (10, 'blocked', 'Blocked', 0, 2), (10, 'in_progress', 'In Progress', 0, 3)`);
+  await db.run(`INSERT INTO agents (id, tenant_id, name, session_key) VALUES (8, 1, 'Producer', 'producer')`);
+  await db.run(`INSERT INTO workflow_task_transitions (tenant_id, workflow_id, task_type, from_status, outcome, to_status, enabled)
+    VALUES (1, 10, 'lead_search', 'blocked', 'blocker_resolved', 'in_progress', 1)`);
+  await db.run(`INSERT INTO workflow_task_routing_rules (tenant_id, project_id, workflow_id, task_type, status, agent_id, priority, enabled)
+    VALUES (1, 1, 10, 'lead_search', 'in_progress', 8, 200, 1)`);
+  await db.run(`INSERT INTO job_instances (id, tenant_id, task_id, agent_id, status) VALUES (93, 1, 417, 7, 'running')`);
+  await db.run(`UPDATE tasks SET status = 'blocked', task_type = 'lead_search', active_instance_id = 93,
+    assigned_agent_id = 7 WHERE id = 417`);
+  const body = { outcome: 'blocker_resolved', instance_id: 93 };
+  const before = await auditSnapshot();
+
+  const preview = await postTaskOutcome(db, 417, { ...body, dry_run: true }, 'reviewer');
+  expect(preview).toMatchObject({
+    ok: true, dry_run: true, applied: true, prior_status: 'blocked', next_status: 'in_progress',
+    validation_errors: [], proposed_changes: { instance: { instance_id: 93 } },
+  });
+  expect(preview).not.toHaveProperty('instance_closed');
+  expect(preview).not.toHaveProperty('proposed_changes.instance.would_close');
+  expect(await auditSnapshot()).toEqual(before);
+
+  const applied = await postTaskOutcome(db, 417, body, 'reviewer');
+  expect(applied).toMatchObject({ applied: true, next_status: 'in_progress', instance_closed: true });
+  expect(await db.get(`SELECT status, assigned_agent_id FROM tasks WHERE id = 417`))
+    .toEqual({ status: 'in_progress', assigned_agent_id: 8 });
+  expect(await db.get(`SELECT status, task_outcome FROM job_instances WHERE id = 93`))
+    .toEqual({ status: 'done', task_outcome: 'blocker_resolved' });
+});
+
 it('does not save evidence on an ignored terminal outcome', async () => {
   await db.run(`UPDATE tasks SET status = 'done' WHERE id = 417`);
   const before = await auditSnapshot();

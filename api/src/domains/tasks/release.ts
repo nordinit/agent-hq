@@ -427,7 +427,6 @@ async function applyPostedTaskOutcome(
         prior_status: result.priorStatus,
         next_status: result.nextStatus,
         outcome: result.outcome,
-        instance_closed: result.instanceClosed ?? false,
         evidence_written: false,
         evidence_would_write: hasInline && result.applied,
         auto_recovered: result.autoRecovered ?? false,
@@ -441,7 +440,6 @@ async function applyPostedTaskOutcome(
           evidence: inlineEvidence,
           instance: {
             instance_id: authoritativeInstanceId,
-            would_close: result.instanceClosed ?? false,
           },
         },
       };
