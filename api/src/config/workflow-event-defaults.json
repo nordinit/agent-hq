@@ -1,0 +1,343 @@
+[
+  {
+    "source": "agent_hq_runtime",
+    "event_name": "agent_started",
+    "status_includes": [],
+    "status_excludes": [
+      "in_progress",
+      "blocked",
+      "review",
+      "qa_pass",
+      "ready_to_merge",
+      "deployed",
+      "done",
+      "cancelled",
+      "failed"
+    ],
+    "action_kind": "status",
+    "action_target": "in_progress",
+    "apply_review_evidence": 0,
+    "apply_failure_detail": 0,
+    "enabled": 1,
+    "priority": 100
+  },
+  {
+    "source": "agent_hq_runtime",
+    "event_name": "runtime_failed",
+    "status_includes": [],
+    "status_excludes": [],
+    "action_kind": "outcome",
+    "action_target": "runtime_failed",
+    "apply_review_evidence": 0,
+    "apply_failure_detail": 1,
+    "enabled": 1,
+    "priority": 100
+  },
+  {
+    "source": "agent_hq_runtime",
+    "event_name": "no_semantic_handoff_posted",
+    "status_includes": [],
+    "status_excludes": [],
+    "action_kind": "ignore",
+    "action_target": null,
+    "apply_review_evidence": 0,
+    "apply_failure_detail": 0,
+    "enabled": 1,
+    "priority": 100
+  },
+  {
+    "source": "agent_hq_runtime",
+    "event_name": "missing_outcome",
+    "status_includes": [],
+    "status_excludes": [],
+    "action_kind": "ignore",
+    "action_target": null,
+    "apply_review_evidence": 0,
+    "apply_failure_detail": 0,
+    "enabled": 1,
+    "priority": 100
+  },
+  {
+    "source": "agent_hq_runtime",
+    "event_name": "unknown_outcome",
+    "status_includes": [],
+    "status_excludes": [],
+    "action_kind": "ignore",
+    "action_target": null,
+    "apply_review_evidence": 0,
+    "apply_failure_detail": 0,
+    "enabled": 1,
+    "priority": 100
+  },
+  {
+    "source": "agent_hq_dispatcher",
+    "event_name": "dispatch_startup_failed",
+    "status_includes": [],
+    "status_excludes": [
+      "stalled",
+      "failed",
+      "done",
+      "cancelled"
+    ],
+    "action_kind": "status",
+    "action_target": "stalled",
+    "apply_review_evidence": 0,
+    "apply_failure_detail": 1,
+    "enabled": 1,
+    "priority": 100
+  },
+  {
+    "source": "dev_environment_lease_manager",
+    "event_name": "dev_deploy_queued",
+    "status_includes": [],
+    "status_excludes": [
+      "review",
+      "qa_pass",
+      "ready_to_merge",
+      "deployed",
+      "done",
+      "cancelled",
+      "failed"
+    ],
+    "action_kind": "status",
+    "action_target": "dev_deploy_queued",
+    "apply_review_evidence": 0,
+    "apply_failure_detail": 0,
+    "enabled": 1,
+    "priority": 100
+  },
+  {
+    "source": "dev_environment_lease_manager",
+    "event_name": "dev_deploying",
+    "status_includes": [],
+    "status_excludes": [
+      "review",
+      "qa_pass",
+      "ready_to_merge",
+      "deployed",
+      "done",
+      "cancelled",
+      "failed"
+    ],
+    "action_kind": "status",
+    "action_target": "dev_deploying",
+    "apply_review_evidence": 0,
+    "apply_failure_detail": 0,
+    "enabled": 1,
+    "priority": 100
+  },
+  {
+    "source": "dev_environment_lease_manager",
+    "event_name": "deployed_for_qa",
+    "status_includes": [],
+    "status_excludes": [
+      "review",
+      "qa_pass",
+      "ready_to_merge",
+      "deployed",
+      "done",
+      "cancelled",
+      "failed"
+    ],
+    "action_kind": "outcome",
+    "action_target": "completed_for_review",
+    "apply_review_evidence": 1,
+    "apply_failure_detail": 0,
+    "enabled": 1,
+    "priority": 100
+  },
+  {
+    "source": "dev_environment_lease_manager",
+    "event_name": "deploy_failed",
+    "status_includes": [],
+    "status_excludes": [
+      "stalled",
+      "failed",
+      "done",
+      "cancelled"
+    ],
+    "action_kind": "outcome",
+    "action_target": "env_blocked",
+    "apply_review_evidence": 0,
+    "apply_failure_detail": 1,
+    "enabled": 1,
+    "priority": 100
+  },
+  {
+    "source": "dev_environment_lease_manager",
+    "event_name": "database_backup_failed",
+    "status_includes": [],
+    "status_excludes": [
+      "stalled",
+      "failed",
+      "done",
+      "cancelled"
+    ],
+    "action_kind": "outcome",
+    "action_target": "env_blocked",
+    "apply_review_evidence": 0,
+    "apply_failure_detail": 1,
+    "enabled": 1,
+    "priority": 110
+  },
+  {
+    "source": "dev_environment_lease_manager",
+    "event_name": "database_migration_failed",
+    "status_includes": [],
+    "status_excludes": [
+      "stalled",
+      "failed",
+      "done",
+      "cancelled"
+    ],
+    "action_kind": "outcome",
+    "action_target": "env_blocked",
+    "apply_review_evidence": 0,
+    "apply_failure_detail": 1,
+    "enabled": 1,
+    "priority": 110
+  },
+  {
+    "source": "dev_environment_lease_manager",
+    "event_name": "database_integrity_failed",
+    "status_includes": [],
+    "status_excludes": [
+      "stalled",
+      "failed",
+      "done",
+      "cancelled"
+    ],
+    "action_kind": "outcome",
+    "action_target": "env_blocked",
+    "apply_review_evidence": 0,
+    "apply_failure_detail": 1,
+    "enabled": 1,
+    "priority": 110
+  },
+  {
+    "source": "dev_environment_lease_manager",
+    "event_name": "api_boot_failed",
+    "status_includes": [],
+    "status_excludes": [
+      "stalled",
+      "failed",
+      "done",
+      "cancelled"
+    ],
+    "action_kind": "outcome",
+    "action_target": "env_blocked",
+    "apply_review_evidence": 0,
+    "apply_failure_detail": 1,
+    "enabled": 1,
+    "priority": 110
+  },
+  {
+    "source": "dev_environment_lease_manager",
+    "event_name": "api_health_failed",
+    "status_includes": [],
+    "status_excludes": [
+      "stalled",
+      "failed",
+      "done",
+      "cancelled"
+    ],
+    "action_kind": "outcome",
+    "action_target": "env_blocked",
+    "apply_review_evidence": 0,
+    "apply_failure_detail": 1,
+    "enabled": 1,
+    "priority": 110
+  },
+  {
+    "source": "dev_environment_lease_manager",
+    "event_name": "ui_health_failed",
+    "status_includes": [],
+    "status_excludes": [
+      "stalled",
+      "failed",
+      "done",
+      "cancelled"
+    ],
+    "action_kind": "outcome",
+    "action_target": "env_blocked",
+    "apply_review_evidence": 0,
+    "apply_failure_detail": 1,
+    "enabled": 1,
+    "priority": 110
+  },
+  {
+    "source": "dev_environment_lease_manager",
+    "event_name": "process_restart_failed",
+    "status_includes": [],
+    "status_excludes": [
+      "stalled",
+      "failed",
+      "done",
+      "cancelled"
+    ],
+    "action_kind": "outcome",
+    "action_target": "env_blocked",
+    "apply_review_evidence": 0,
+    "apply_failure_detail": 1,
+    "enabled": 1,
+    "priority": 110
+  },
+  {
+    "source": "dev_environment_lease_manager",
+    "event_name": "checkout_failed",
+    "status_includes": [],
+    "status_excludes": [
+      "stalled",
+      "failed",
+      "done",
+      "cancelled"
+    ],
+    "action_kind": "outcome",
+    "action_target": "env_blocked",
+    "apply_review_evidence": 0,
+    "apply_failure_detail": 1,
+    "enabled": 1,
+    "priority": 110
+  },
+  {
+    "source": "dev_environment_lease_manager",
+    "event_name": "build_failed",
+    "status_includes": [],
+    "status_excludes": [
+      "stalled",
+      "failed",
+      "done",
+      "cancelled"
+    ],
+    "action_kind": "outcome",
+    "action_target": "env_blocked",
+    "apply_review_evidence": 0,
+    "apply_failure_detail": 1,
+    "enabled": 1,
+    "priority": 110
+  },
+  {
+    "source": "dev_environment_lease_manager",
+    "event_name": "cancelled",
+    "status_includes": [],
+    "status_excludes": [],
+    "action_kind": "ignore",
+    "action_target": null,
+    "apply_review_evidence": 0,
+    "apply_failure_detail": 0,
+    "enabled": 1,
+    "priority": 100
+  },
+  {
+    "source": "dev_environment_lease_manager",
+    "event_name": "superseded",
+    "status_includes": [],
+    "status_excludes": [],
+    "action_kind": "ignore",
+    "action_target": null,
+    "apply_review_evidence": 0,
+    "apply_failure_detail": 0,
+    "enabled": 1,
+    "priority": 100
+  }
+]

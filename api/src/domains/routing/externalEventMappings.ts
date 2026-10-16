@@ -1,6 +1,8 @@
 import { STARTER_WORKFLOW_OUTCOME_SEEDS } from '../../lib/starterCatalog';
 import { isValidTaskType } from '../../lib/taskTypes';
 import { RUNTIME_FAILED_OUTCOME } from '../../lib/outcomeCatalog';
+import { z } from 'zod';
+import workflowEventDefaults from '../../config/workflow-event-defaults.json';
 import { WORKFLOW_EVENT_ACTION_KINDS } from '../../lib/workflowVocabulary';
 import { listWorkflowTaskStatuses, listWorkflowTypeTaskStatuses } from './policy';
 import { type Db } from "../../db/adapter/types";
@@ -94,142 +96,22 @@ export type WorkflowEventContext = {
 
 export type ExternalEventContext = WorkflowEventContext;
 
-const DEFAULT_DEPLOY_FAILURE_EVENT_MAPPINGS = DEV_ENV_DEPLOY_FAILURE_EVENTS.map((eventName) => ({
-  source: DEV_ENV_LEASE_MANAGER_SOURCE,
-  event_name: eventName,
-  status_includes: [],
-  status_excludes: ['stalled', 'failed', 'done', 'cancelled'],
-  action_kind: 'outcome',
-  action_target: 'env_blocked',
-  apply_review_evidence: 0,
-  apply_failure_detail: 1,
-  enabled: 1,
-  priority: 110,
-}));
+// Starter configuration is installed explicitly. Runtime routing reads only the
+// persisted rules, so status names and operator edits never acquire code-level guards.
+const workflowEventDefaultSchema = z.object({
+  source: z.string(),
+  event_name: z.string(),
+  status_includes: z.array(z.string()),
+  status_excludes: z.array(z.string()),
+  action_kind: z.enum(WORKFLOW_EVENT_ACTION_KINDS),
+  action_target: z.string().nullable(),
+  apply_review_evidence: z.number().int().min(0).max(1),
+  apply_failure_detail: z.number().int().min(0).max(1),
+  enabled: z.number().int().min(0).max(1),
+  priority: z.number().int(),
+});
 
-export const DEFAULT_WORKFLOW_EVENT_MAPPINGS = [
-  {
-    source: AGENT_HQ_RUNTIME_SOURCE,
-    event_name: 'agent_started',
-    status_includes: [],
-    status_excludes: ['in_progress', 'blocked', 'review', 'qa_pass', 'ready_to_merge', 'deployed', 'done', 'cancelled', 'failed'],
-    action_kind: 'status',
-    action_target: 'in_progress',
-    apply_review_evidence: 0,
-    apply_failure_detail: 0,
-    enabled: 1,
-    priority: 100,
-  },
-  {
-    source: AGENT_HQ_RUNTIME_SOURCE,
-    event_name: RUNTIME_FAILED_EVENT,
-    status_includes: [],
-    status_excludes: ['failed', 'done', 'cancelled'],
-    action_kind: 'outcome',
-    action_target: RUNTIME_FAILED_OUTCOME,
-    apply_review_evidence: 0,
-    apply_failure_detail: 1,
-    enabled: 1,
-    priority: 100,
-  },
-  ...MISSING_OUTCOME_WORKFLOW_EVENTS.map((eventName) => ({
-    source: AGENT_HQ_RUNTIME_SOURCE,
-    event_name: eventName,
-    status_includes: [],
-    status_excludes: [],
-    action_kind: 'ignore',
-    action_target: null,
-    apply_review_evidence: 0,
-    apply_failure_detail: 0,
-    enabled: 1,
-    priority: 100,
-  })),
-  {
-    source: AGENT_HQ_DISPATCHER_SOURCE,
-    event_name: DISPATCH_STARTUP_FAILED_EVENT,
-    status_includes: [],
-    status_excludes: ['stalled', 'failed', 'done', 'cancelled'],
-    action_kind: 'status',
-    action_target: 'stalled',
-    apply_review_evidence: 0,
-    apply_failure_detail: 1,
-    enabled: 1,
-    priority: 100,
-  },
-  {
-    source: DEV_ENV_LEASE_MANAGER_SOURCE,
-    event_name: 'dev_deploy_queued',
-    status_includes: [],
-    status_excludes: ['review', 'qa_pass', 'ready_to_merge', 'deployed', 'done', 'cancelled', 'failed'],
-    action_kind: 'status',
-    action_target: 'dev_deploy_queued',
-    apply_review_evidence: 0,
-    apply_failure_detail: 0,
-    enabled: 1,
-    priority: 100,
-  },
-  {
-    source: DEV_ENV_LEASE_MANAGER_SOURCE,
-    event_name: 'dev_deploying',
-    status_includes: [],
-    status_excludes: ['review', 'qa_pass', 'ready_to_merge', 'deployed', 'done', 'cancelled', 'failed'],
-    action_kind: 'status',
-    action_target: 'dev_deploying',
-    apply_review_evidence: 0,
-    apply_failure_detail: 0,
-    enabled: 1,
-    priority: 100,
-  },
-  {
-    source: DEV_ENV_LEASE_MANAGER_SOURCE,
-    event_name: 'deployed_for_qa',
-    status_includes: [],
-    status_excludes: ['review', 'qa_pass', 'ready_to_merge', 'deployed', 'done', 'cancelled', 'failed'],
-    action_kind: 'outcome',
-    action_target: 'completed_for_review',
-    apply_review_evidence: 1,
-    apply_failure_detail: 0,
-    enabled: 1,
-    priority: 100,
-  },
-  {
-    source: DEV_ENV_LEASE_MANAGER_SOURCE,
-    event_name: 'deploy_failed',
-    status_includes: [],
-    status_excludes: ['stalled', 'failed', 'done', 'cancelled'],
-    action_kind: 'outcome',
-    action_target: 'env_blocked',
-    apply_review_evidence: 0,
-    apply_failure_detail: 1,
-    enabled: 1,
-    priority: 100,
-  },
-  ...DEFAULT_DEPLOY_FAILURE_EVENT_MAPPINGS,
-  {
-    source: DEV_ENV_LEASE_MANAGER_SOURCE,
-    event_name: 'cancelled',
-    status_includes: [],
-    status_excludes: [],
-    action_kind: 'ignore',
-    action_target: null,
-    apply_review_evidence: 0,
-    apply_failure_detail: 0,
-    enabled: 1,
-    priority: 100,
-  },
-  {
-    source: DEV_ENV_LEASE_MANAGER_SOURCE,
-    event_name: 'superseded',
-    status_includes: [],
-    status_excludes: [],
-    action_kind: 'ignore',
-    action_target: null,
-    apply_review_evidence: 0,
-    apply_failure_detail: 0,
-    enabled: 1,
-    priority: 100,
-  },
-] as const;
+export const DEFAULT_WORKFLOW_EVENT_MAPPINGS = z.array(workflowEventDefaultSchema).parse(workflowEventDefaults);
 
 export const DEFAULT_TENANT_WORKFLOW_EVENT_SOURCES = [
   AGENT_HQ_RUNTIME_SOURCE,
@@ -252,69 +134,6 @@ async function tableHasColumn(db: Db, tableName: string, columnName: string): Pr
  */
 async function tableExists(db: Db, tableName: string): Promise<boolean> {
     return await sharedTableExists(db, tableName);
-}
-
-function parseJsonStringList(value: string | null | undefined): string[] {
-  if (!value) return [];
-  try {
-    const parsed = JSON.parse(value);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.map(item => String(item).trim()).filter(Boolean);
-  } catch {
-    return [];
-  }
-}
-
-async function migrateAgentStartedWorkflowEventSource(db: Db): Promise<void> {
-  const wildcardRows = await db.all(`
-    SELECT id
-    FROM external_event_mappings
-    WHERE event_name = 'agent_started'
-      AND source IS NULL
-      AND action_kind = 'status'
-      AND action_target = 'in_progress'
-  `) as Array<{ id: number }>;
-  if (wildcardRows.length === 0) return;
-
-  const explicit = await db.get(`
-    SELECT id
-    FROM external_event_mappings
-    WHERE event_name = 'agent_started'
-      AND source = ?
-      AND action_kind = 'status'
-      AND action_target = 'in_progress'
-    LIMIT 1
-  `, AGENT_HQ_RUNTIME_SOURCE) as { id: number } | undefined;
-  if (explicit) return;
-
-  await db.run(`
-    UPDATE external_event_mappings
-    SET source = ?, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
-    WHERE id = ?
-  `, AGENT_HQ_RUNTIME_SOURCE, wildcardRows[0].id);
-}
-
-async function ensureAgentStartedBlockedGuard(db: Db): Promise<void> {
-  const rows = await db.all(`
-    SELECT id, status_excludes_json
-    FROM external_event_mappings
-    WHERE event_name = 'agent_started'
-      AND action_kind = 'status'
-      AND action_target = 'in_progress'
-      AND enabled = 1
-  `) as Array<{ id: number; status_excludes_json: string | null }>;
-
-  const updateSql = `
-    UPDATE external_event_mappings
-    SET status_excludes_json = ?, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
-    WHERE id = ?
-  `;
-
-  for (const row of rows) {
-    const excludes = parseJsonStringList(row.status_excludes_json);
-    if (excludes.includes('blocked')) continue;
-    await db.run(updateSql, JSON.stringify([...excludes, 'blocked']), row.id);
-  }
 }
 
 function withStatus(message: string, status: number): StatusError {
@@ -850,6 +669,8 @@ export async function repairDuplicateWorkflowEventMappings(db: Db): Promise<{ de
 }
 async function insertDefaultWorkflowEventMappings(db: Db, mappings: readonly typeof DEFAULT_WORKFLOW_EVENT_MAPPINGS[number][], tenantId: number | null): Promise<void> {
   const hasTenantId = await tableHasColumn(db, 'external_event_mappings', 'tenant_id');
+  const hasWorkflowScope = await tableHasColumn(db, 'external_event_mappings', 'workflow_id')
+    && await tableHasColumn(db, 'external_event_mappings', 'workflow_type');
   const defaultTenantId = hasTenantId && tenantId == null ? await getDefaultTenantIdIfAvailable(db) : null;
   const effectiveTenantId = tenantId ?? defaultTenantId;
   const tenantScoped = hasTenantId && effectiveTenantId != null;
@@ -878,22 +699,17 @@ async function insertDefaultWorkflowEventMappings(db: Db, mappings: readonly typ
       updated_at
     ) VALUES (${hasTenantId ? '?,' : ''} ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')) ON CONFLICT DO NOTHING`;
 
+  // Reinstall fills missing event defaults; it must not insert a competing rule
+  // when an operator has edited or disabled the existing default for that event.
   const existsSql = `
     SELECT id
     FROM external_event_mappings
     WHERE ${tenantPredicate}
-      AND COALESCE(project_id, 0) = 0
+      AND project_id IS NULL
+      ${hasWorkflowScope ? 'AND workflow_id IS NULL AND workflow_type IS NULL' : ''}
       AND COALESCE(source, '') = COALESCE(?, '')
       AND event_name = ?
-      AND COALESCE(task_type, '') = ''
-      AND status_includes_json = ?
-      AND status_excludes_json = ?
-      AND action_kind = ?
-      AND COALESCE(action_target, '') = COALESCE(?, '')
-      AND apply_review_evidence = ?
-      AND apply_failure_detail = ?
-      AND enabled = ?
-      AND priority = ?
+      AND task_type IS NULL
     LIMIT 1
   `;
 
@@ -903,14 +719,6 @@ async function insertDefaultWorkflowEventMappings(db: Db, mappings: readonly typ
       ...(tenantScoped ? [effectiveTenantId] : []),
       mapping.source,
       mapping.event_name,
-      JSON.stringify(mapping.status_includes),
-      JSON.stringify(mapping.status_excludes),
-      mapping.action_kind,
-      mapping.action_target,
-      mapping.apply_review_evidence,
-      mapping.apply_failure_detail,
-      mapping.enabled,
-      mapping.priority,
     ) as { id: number } | undefined;
     if (exists) continue;
 
@@ -935,8 +743,6 @@ async function insertDefaultWorkflowEventMappings(db: Db, mappings: readonly typ
 
 export async function seedDefaultWorkflowEventMappings(db: Db): Promise<void> {
   await db.withTransaction(async (db) => {
-    await migrateAgentStartedWorkflowEventSource(db);
-    await ensureAgentStartedBlockedGuard(db);
     await repairDuplicateWorkflowEventMappings(db);
     await insertDefaultWorkflowEventMappings(db, DEFAULT_WORKFLOW_EVENT_MAPPINGS, null);
   });
