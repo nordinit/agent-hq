@@ -7,7 +7,8 @@ const escapeHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;')
 
 function telegramLinks(metadata: string): string {
   try {
-    const origin = new URL(process.env.AGENT_HQ_PUBLIC_URL ?? '');
+    // The MCP/OAuth public origin may deliberately expose no dashboard routes.
+    const origin = new URL(process.env.AGENT_HQ_UI_PUBLIC_URL ?? '');
     if (!['http:', 'https:'].includes(origin.protocol) || origin.username || origin.password) return '';
     const links: unknown = JSON.parse(metadata).links;
     if (!Array.isArray(links)) return '';

@@ -5,6 +5,8 @@ const mockSend = jest.fn();
 jest.mock('../integrations/telegram', () => ({ sendTelegramNotification: (...args: unknown[]) => mockSend(...args) }));
 
 describe('recovery alert outbox', () => {
+  const publicUrl = process.env.AGENT_HQ_PUBLIC_URL;
+  const uiPublicUrl = process.env.AGENT_HQ_UI_PUBLIC_URL;
   beforeEach(async () => {
     await setupTestDb();
     await getDb().run("INSERT INTO tenants (id,name,slug,is_default) VALUES (1,'Test','test',1)");
@@ -13,7 +15,29 @@ describe('recovery alert outbox', () => {
     await getDb().run("INSERT INTO notification_deliveries (notification_id,outlet) VALUES (1,'telegram')");
     mockSend.mockReset();
   });
-  afterEach(teardownTestDb);
+  afterEach(async () => {
+    if (publicUrl === undefined) delete process.env.AGENT_HQ_PUBLIC_URL;
+    else process.env.AGENT_HQ_PUBLIC_URL = publicUrl;
+    if (uiPublicUrl === undefined) delete process.env.AGENT_HQ_UI_PUBLIC_URL;
+    else process.env.AGENT_HQ_UI_PUBLIC_URL = uiPublicUrl;
+    await teardownTestDb();
+  });
+  it('uses only an explicitly configured dashboard origin for external links', async () => {
+    const db = getDb();
+    process.env.AGENT_HQ_PUBLIC_URL = 'https://mcp.example.test';
+    delete process.env.AGENT_HQ_UI_PUBLIC_URL;
+    await db.run('UPDATE notification_records SET metadata_json = ?', JSON.stringify({
+      links: [{ label: 'Agent', href: '/agents/1' }],
+    }));
+    mockSend.mockResolvedValue({ ok: true });
+    await deliverPendingNotifications(db);
+    expect(mockSend.mock.calls[0][0]).not.toContain('<a href=');
+    await db.run("UPDATE notification_deliveries SET state='pending'");
+    process.env.AGENT_HQ_UI_PUBLIC_URL = 'https://dashboard.example.test';
+    await deliverPendingNotifications(db);
+    expect(mockSend.mock.calls[1][0]).toContain('<a href="https://dashboard.example.test/agents/1">Agent</a>');
+    expect(mockSend.mock.calls[1][0]).not.toContain('mcp.example.test');
+  });
   it('retains failure evidence and retries delivery independently of recovery', async () => {
     const db = getDb(); mockSend.mockResolvedValue({ ok: false, error: 'timeout' });
     await deliverPendingNotifications(db);
