@@ -224,6 +224,7 @@ export class ClaudeCodeRuntime implements AgentRuntime {
       sessionId,
       protectedInstanceIds,
       cwd,
+      params.durableRunId ?? null,
     );
 
     let requiredMcpToolNames: string[];
@@ -962,6 +963,7 @@ export class ClaudeCodeRuntime implements AgentRuntime {
     runKey: string,
     protectedInstanceIds: ReadonlySet<number> | null,
     workingDirectory: string | null,
+    durableRunId: string | null,
   ): Promise<ClaudeMcpMaterialization> {
     const empty: ClaudeMcpMaterialization = {
       configPath: null,
@@ -976,6 +978,7 @@ export class ClaudeCodeRuntime implements AgentRuntime {
     }
 
     const result = await materializeClaudeCodeMcpConfig({
+      runIdentity: durableRunId ? { instanceId, durableRunId } : undefined,
       workingDirectory,
       db,
       tenantId,

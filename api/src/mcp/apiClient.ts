@@ -1,4 +1,6 @@
 import type { EnvironmentSetup } from '../lib/environmentSetup';
+import { taskRecurrenceMetadata, type TaskRecurrenceMetadata } from '../domains/tasks/recurrence';
+import { agentRunHeaders, runIdentityFromEnv, type AgentRunIdentity } from '../lib/agentRunIdentity';
 /**
  * Agent HQ MCP Server — API Client
  *
@@ -112,7 +114,7 @@ export interface AgentHqWorkflowSummary {
   ended_at: string | null;
 }
 
-export interface AgentHqTaskSummary {
+export interface AgentHqTaskSummary extends TaskRecurrenceMetadata {
   id: number;
   title: string;
   status: string | null;
@@ -133,7 +135,7 @@ export interface AgentHqTaskSummary {
   blocking: Array<{ id: number; title: string; status: string | null }>;
 }
 
-export interface AgentHqProjectTaskSearchSummary {
+export interface AgentHqProjectTaskSearchSummary extends TaskRecurrenceMetadata {
   id: number;
   title: string;
   status: string | null;
@@ -399,6 +401,7 @@ export function shapeWorkflowSummary(value: unknown): AgentHqWorkflowSummary {
 export function shapeTaskSummary(value: unknown): AgentHqTaskSummary {
   const row = asRecord(value);
   return {
+    ...taskRecurrenceMetadata(row),
     id: asNumber(row.id) ?? 0,
     title: asString(row.title) ?? 'Untitled task',
     status: asString(row.status),
@@ -423,6 +426,7 @@ export function shapeTaskSummary(value: unknown): AgentHqTaskSummary {
 export function shapeProjectTaskSearchSummary(value: unknown): AgentHqProjectTaskSearchSummary {
   const row = asRecord(value);
   return {
+    ...taskRecurrenceMetadata(row),
     id: asNumber(row.id) ?? 0,
     title: asString(row.title) ?? 'Untitled task',
     status: asString(row.status),
@@ -502,6 +506,7 @@ export class AgentHqApiClient {
   constructor(
     private readonly baseUrl: string,
     private readonly apiKey?: string | null,
+    private readonly runIdentity: AgentRunIdentity | null = runIdentityFromEnv(process.env),
   ) {}
 
   private async request<T>(
@@ -513,6 +518,7 @@ export class AgentHqApiClient {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       'x-agent-hq-mcp-client': 'agent-hq-mcp',
+      ...agentRunHeaders(this.runIdentity),
     };
     if (this.apiKey) headers.Authorization = `Bearer ${this.apiKey}`;
     const opts: RequestInit = {
@@ -559,6 +565,7 @@ export class AgentHqApiClient {
     const url = `${this.baseUrl}${path}`;
     const headers: Record<string, string> = {
       'x-agent-hq-mcp-client': 'agent-hq-mcp',
+      ...agentRunHeaders(this.runIdentity),
     };
     if (this.apiKey) headers.Authorization = `Bearer ${this.apiKey}`;
 
@@ -585,6 +592,7 @@ export class AgentHqApiClient {
     const url = `${this.baseUrl}${path}`;
     const headers: Record<string, string> = {
       'x-agent-hq-mcp-client': 'agent-hq-mcp',
+      ...agentRunHeaders(this.runIdentity),
     };
     if (this.apiKey) headers.Authorization = `Bearer ${this.apiKey}`;
 

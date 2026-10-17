@@ -1,3 +1,4 @@
+import { pinMcpRunIdentity, type AgentRunIdentity } from '../../lib/agentRunIdentity';
 import { randomUUID } from 'crypto';
 import fs from 'fs';
 import path from 'path';
@@ -165,6 +166,7 @@ function reusableCredentialSnapshot(
 }
 
 export async function materializeCodexMcpConfig(params: {
+  runIdentity?: AgentRunIdentity;
   db: Db;
   agentId: number;
   instanceId: number;
@@ -183,6 +185,7 @@ export async function materializeCodexMcpConfig(params: {
   const assigned = resolveMcpServerRuntimePaths(
     await fetchAssignedMcpServers(params.db, params.agentId, previousServers),
   );
+  if (params.runIdentity) pinMcpRunIdentity(assigned, params.runIdentity);
   const warnings: string[] = [];
   const servers: Record<string, Record<string, unknown>> = {};
 

@@ -102,6 +102,7 @@ const MISSING_LIFECYCLE_OUTCOME_GRACE_MS: number = (() => {
 })();
 
 interface TaskRow {
+  paused_at?: string | null;
   id: number;
   tenant_id: number;
   title: string;
@@ -411,31 +412,36 @@ export async function reconcileReviewQaRouting(
     // Agent busy? leave review ownership converged on next tick when capacity frees up
     if (await isAgentBusy(db, agent.id)) continue;
 
-    // Agent is available — now safe to write task reassignment to DB
-    const task = await reassignTaskIfNeeded(db, originalTask, routedAgentId);
-    if (!task.assigned_agent_id) continue;
+    // Use the same agent -> task lock order as the regular dispatcher. The
+    // periodic review pass and mutation-triggered pass can overlap.
+    const claim = await db.withTransaction(async db => {
+      const currentAgent = await db.get<{ enabled: number }>('SELECT enabled FROM agents WHERE id = ? FOR UPDATE', agent!.id);
+      const current = await db.get<TaskRow>('SELECT * FROM tasks WHERE id = ? FOR UPDATE', originalTask.id);
+      if (!currentAgent?.enabled || !current || current.status !== 'review' || current.paused_at
+        || current.active_instance_id != null || current.workflow_id !== originalTask.workflow_id
+        || await hasTaskLiveInstance(db, current.id) || await isAgentBusy(db, agent!.id)) return null;
+      const task = await reassignTaskIfNeeded(db, current, routedAgentId);
+      const supportsDurableRunId = await tableHasColumn(db, 'job_instances', 'durable_run_id');
+      const instanceResult = supportsDurableRunId
+        ? await db.run(`
+            INSERT INTO job_instances (tenant_id, agent_id, status, durable_run_id)
+            VALUES (?, ?, 'queued', ?)
+          `, task.tenant_id, agent!.id, createDurableRunId())
+        : await db.run(`
+            INSERT INTO job_instances (tenant_id, agent_id, status)
+            VALUES (?, ?, 'queued')
+          `, task.tenant_id, agent!.id);
+      const instanceId = instanceResult.lastInsertId as number;
+      await attachInstanceToTask(db, instanceId, task.id);
 
+      return { task, instanceId };
+    });
+    if (!claim) continue;
+    const { task, instanceId } = claim;
     const workflow = task.workflow_id
       ? await db.get('SELECT * FROM workflows WHERE id = ?', task.workflow_id) as WorkflowRow | undefined
       : undefined;
-
-    // The agent's own instructions, exactly as the routed dispatch path uses them. This path used
-    // to prepend a hardcoded QA procedure; see the note on reconcileReviewQaRouting for why that
-    // could not be correct for every workflow.
     const jobInstructions = agent.job_instructions;
-
-    const supportsDurableRunId = await tableHasColumn(db, 'job_instances', 'durable_run_id');
-    const instanceResult = supportsDurableRunId
-      ? await db.run(`
-          INSERT INTO job_instances (tenant_id, agent_id, status, durable_run_id)
-          VALUES (?, ?, 'queued', ?)
-        `, task.tenant_id, agent.id, createDurableRunId())
-      : await db.run(`
-          INSERT INTO job_instances (tenant_id, agent_id, status)
-          VALUES (?, ?, 'queued')
-        `, task.tenant_id, agent.id);
-    const instanceId = instanceResult.lastInsertId as number;
-    await attachInstanceToTask(db, instanceId, task.id);
 
     try {
       const taskNotesContext = await getDispatchTaskNotesContext(db, {
@@ -561,11 +567,10 @@ export async function reconcileReviewQaRouting(
           AND status NOT IN ('done', 'failed', 'cancelled')
       `, err instanceof Error ? err.message : String(err), instanceId);
       // Restore previous active_instance_id if this failed instance was set as active
-      const currentTask = await db.get('SELECT active_instance_id FROM tasks WHERE id = ?', task.id) as { active_instance_id: number | null } | undefined;
-      if (currentTask?.active_instance_id === instanceId) {
-        await db.run(`
-          UPDATE tasks SET active_instance_id = NULL, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS') WHERE id = ?
-        `, task.id);
+      const cleared = await db.run(`
+        UPDATE tasks SET active_instance_id = NULL, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS') WHERE id = ? AND active_instance_id = ?
+      `, task.id, instanceId);
+      if (cleared.changes > 0) {
         // Recorded so the detach is visible. An agent refused for not owning "the active
         // dispatched instance" is refused precisely because this link is gone, and without a
         // history row there is nothing to show it was ever here or who removed it.

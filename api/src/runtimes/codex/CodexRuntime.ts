@@ -280,6 +280,7 @@ export class CodexRuntime implements AgentRuntime {
       mcp =
         db && ownership.agentId != null && instanceId != null
           ? await materializeCodexMcpConfig({
+              runIdentity: params.durableRunId ? { instanceId, durableRunId: params.durableRunId } : undefined,
               db,
               agentId: ownership.agentId,
               instanceId,

@@ -81,6 +81,10 @@ Do not overstate readiness. If evidence is incomplete, verification is incomplet
 
 Truth over momentum. The lifecycle outcome write is part of the work; do not end the run with only a narrative handoff.
 
+## Proof of Life
+
+Authenticated calls from this run to Agent HQ, including task/context reads, notes, progress and explicit check-ins, refresh the watchdog. While working without other Agent HQ calls, send `agent_hq_check_in_task_run` with this instance ID at least every two minutes. Runtime output alone does not refresh it. The dispatched MCP client supplies the fixed instance and durable run identity automatically. Any direct HTTP integration must send the same identity in `x-agent-hq-instance-id` and `x-agent-hq-durable-run-id` headers with the agent's scoped credentials.
+
 <!-- AGENT_HQ_RUN_IDENTIFIERS -->
 
 ## Run Identifiers

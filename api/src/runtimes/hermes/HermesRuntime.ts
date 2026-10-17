@@ -288,7 +288,7 @@ export class HermesRuntime implements AgentRuntime {
     const transcriptConfig = { ...mergedConfig, hermesHome: hermesProfileHome };
 
     const db = params.db ?? null;
-    const agentId = await this.materializeMcpConfigForRun(db, params.instanceId ?? null, cwd, hermesProfileHome);
+    const agentId = await this.materializeMcpConfigForRun(db, params.instanceId ?? null, cwd, hermesProfileHome, params.durableRunId ?? null);
     await this.persistUserPrompt(db, params.instanceId ?? null, prompt);
 
     const command = this.buildCommandArgs(mergedConfig, hermesPrompt);
@@ -682,14 +682,16 @@ export class HermesRuntime implements AgentRuntime {
     instanceId: number | null,
     cwd: string,
     hermesProfileHome: string,
+    durableRunId: string | null,
   ): Promise<number | null> {
     if (!db || instanceId == null) return null;
     const agentId = await this.lookupAgentId(db, instanceId);
     if (agentId == null) return null;
 
+    const runIdentity = durableRunId ? { instanceId, durableRunId } : undefined;
     const targets = Array.from(new Set([cwd, hermesProfileHome].filter((value): value is string => typeof value === 'string' && value.trim().length > 0)));
     for (const workingDirectory of targets) {
-      const result = await materializeAgentMcpConfig({ db, agentId, workingDirectory });
+      const result = await materializeAgentMcpConfig({ db, agentId, workingDirectory, runIdentity });
       if (!result.ok) {
         console.warn(`[hermes-runtime] MCP materialization failed for ${workingDirectory}: ${result.error ?? 'unknown error'}`);
       }
@@ -697,6 +699,7 @@ export class HermesRuntime implements AgentRuntime {
     }
 
     const hermesConfig = await materializeHermesMcpConfig({
+          runIdentity,
           db,
           agentId,
           hermesHome: hermesProfileHome,

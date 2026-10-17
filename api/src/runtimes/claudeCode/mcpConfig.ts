@@ -1,3 +1,4 @@
+import { pinMcpRunIdentity, type AgentRunIdentity } from '../../lib/agentRunIdentity';
 /**
  * runtimes/claudeCode/mcpConfig.ts — materialize Agent HQ's assigned MCP servers
  * into a run-scoped config file for `claude --mcp-config <file> --strict-mcp-config`.
@@ -460,6 +461,7 @@ async function synthesizeRegistryToolServer(
 }
 
 export async function materializeClaudeCodeMcpConfig(params: {
+  runIdentity?: AgentRunIdentity;
   db: Db;
   tenantId: number;
   agentId: number;
@@ -512,6 +514,8 @@ export async function materializeClaudeCodeMcpConfig(params: {
     const servers = resolveMcpServerRuntimePaths(
       await fetchAssignedMcpServers(params.db, params.agentId, previousServers),
     );
+
+    if (params.runIdentity) pinMcpRunIdentity(servers, params.runIdentity);
 
     if (registryToolServer) {
       servers[`${REGISTRY_TOOL_MCP_SLUG}__agent-${params.agentId}`] = registryToolServer;

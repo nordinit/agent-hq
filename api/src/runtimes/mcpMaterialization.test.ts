@@ -55,6 +55,27 @@ describe('materializeAgentMcpConfig', () => {
     if (registryFixtureReady) await teardownTestDb();
   });
 
+  it('pins a dispatch identity and preserves it during ordinary MCP sync', async () => {
+    await createRegistryTables();
+    await getDb().run(`INSERT INTO agents (id,tenant_id,name,session_key) VALUES (1,1,'Agent','agent:test-1:main')`);
+    await getDb().run(`INSERT INTO mcp_servers (id,tenant_id,name,slug,command,args) VALUES (40,1,'HQ','agent-hq','node','["server.js"]')`);
+    await getDb().run(`INSERT INTO agent_mcp_assignments (agent_id,mcp_server_id) VALUES (1,40)`);
+    const workspace = makeTempDir('ahq-run-identity-');
+    const first = await materializeAgentMcpConfig({ db: getDb(), agentId: 1, workingDirectory: workspace,
+      runIdentity: { instanceId: 42, durableRunId: 'run-42' } });
+    const before = readBundleConfig(workspace).mcpServers['agent-hq__agent-1'].env;
+    expect(before).toMatchObject({ AGENT_HQ_INSTANCE_ID: '42', AGENT_HQ_DURABLE_RUN_ID: 'run-42' });
+    const sync = await materializeAgentMcpConfig({ db: getDb(), agentId: 1, workingDirectory: workspace });
+    expect(sync.changed).toBe(false);
+    expect(sync.bundleRevision).toBe(first.bundleRevision);
+    await materializeAgentMcpConfig({ db: getDb(), agentId: 1, workingDirectory: workspace,
+      runIdentity: { instanceId: 43, durableRunId: 'run-43' } });
+    expect(readBundleConfig(workspace).mcpServers['agent-hq__agent-1'].env).toMatchObject({
+      AGENT_HQ_INSTANCE_ID: '43', AGENT_HQ_DURABLE_RUN_ID: 'run-43', AGENT_HQ_MCP_API_KEY: before.AGENT_HQ_MCP_API_KEY,
+    });
+    expect(before.AGENT_HQ_INSTANCE_ID).toBe('42');
+  });
+
   it('preserves nonempty files, mtimes and credentials across ten unchanged publications', async () => {
     await createRegistryTables();
     await getDb().run(`INSERT INTO agents (id,tenant_id,name,session_key) VALUES (1,1,'Agent','agent:test-1:main')`);

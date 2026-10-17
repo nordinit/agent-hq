@@ -37,6 +37,16 @@ function materialize(
 }
 
 describe('Codex MCP config materialization', () => {
+  it('pins run identity explicitly instead of depending on Codex environment inheritance', async () => {
+    fetchAssigned.mockResolvedValue({ 'agent-hq__agent-42': { command: '/opt/agent-hq-mcp', env: { AGENT_HQ_MCP_API_KEY: 'key' } } });
+    const result = await materializeCodexMcpConfig({
+      db: {} as never, agentId: 42, instanceId: 7, codexHome,
+      runIdentity: { instanceId: 7, durableRunId: 'durable-7' },
+    });
+    const config = fs.readFileSync(result.configPath, 'utf8');
+    expect(config).toContain('"AGENT_HQ_INSTANCE_ID" = "7"');
+    expect(config).toContain('"AGENT_HQ_DURABLE_RUN_ID" = "durable-7"');
+  });
   it('translates stdio servers and fail-closed tool allowlists to strict TOML', async () => {
     const result = await materialize({
       'agent-hq__agent-42': {

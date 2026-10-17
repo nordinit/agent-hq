@@ -35,12 +35,12 @@ interface Harness {
   close(): Promise<void>;
 }
 
-async function startHarness(options: { capabilities?: string[]; rateLimitRpm?: number } = {}): Promise<Harness> {
+async function startHarness(options: { capabilities?: string[]; rateLimitRpm?: number; apiBaseUrl?: string } = {}): Promise<Harness> {
   const app = express();
   app.use(express.json());
   app.use('/mcp', createMcpHttpRouter({
     // No tool call in these tests reaches the API; an unroutable base URL keeps it that way.
-    apiBaseUrl: 'http://127.0.0.1:1',
+    apiBaseUrl: options.apiBaseUrl ?? 'http://127.0.0.1:1',
     resolveAccess: async identity => buildEffectiveAccess({ identity: { agent_id: identity.agentId, agent_slug: identity.agentSlug, key_id: identity.keyId, key_role: identity.keyRole, tenant_id: identity.tenantId, project_id: 1 }, policy_mode: 'explicit', default_policy: 'scoped_runtime', scopes: [], enabled_capabilities: options.capabilities ?? DEFAULT_GRANTS }),
     rateLimitRpm: options.rateLimitRpm,
     resolveIdentity,
@@ -60,10 +60,10 @@ async function startHarness(options: { capabilities?: string[]; rateLimitRpm?: n
   };
 }
 
-async function connectClient(baseUrl: string, apiKey: string): Promise<Client> {
+async function connectClient(baseUrl: string, apiKey: string, headers: Record<string, string> = {}): Promise<Client> {
   const client = new Client({ name: 'agent-hq-test-client', version: '0.0.0' });
   await client.connect(new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`), {
-    requestInit: { headers: { authorization: `Bearer ${apiKey}` } },
+    requestInit: { headers: { authorization: `Bearer ${apiKey}`, ...headers } },
   }));
   return client;
 }
@@ -74,6 +74,35 @@ describe('MCP Streamable HTTP transport', () => {
 
   beforeEach(() => {
     log = jest.spyOn(console, 'log').mockImplementation(() => undefined);
+  });
+
+  it('forwards the requesting run identity and never inherits the API host run identity', async () => {
+    const requests: Array<Record<string, unknown>> = [];
+    const api = express();
+    api.get('/api/v1/tasks/1', (req, res) => {
+      requests.push({ instance: req.get('x-agent-hq-instance-id'), durable: req.get('x-agent-hq-durable-run-id') });
+      res.json({ id: 1 });
+    });
+    const server: Server = await new Promise(resolve => { const s = api.listen(0, '127.0.0.1', () => resolve(s)); });
+    const address = server.address() as { port: number };
+    const previous = { instance: process.env.AGENT_HQ_INSTANCE_ID, durable: process.env.AGENT_HQ_DURABLE_RUN_ID };
+    try {
+      process.env.AGENT_HQ_INSTANCE_ID = '999';
+      process.env.AGENT_HQ_DURABLE_RUN_ID = 'host-run';
+      harness = await startHarness({ apiBaseUrl: `http://127.0.0.1:${address.port}` });
+      for (const headers of [{ 'x-agent-hq-instance-id': '42', 'x-agent-hq-durable-run-id': 'run-42' }, {}]) {
+        const client = await connectClient(harness.baseUrl, VALID_KEY, headers as Record<string, string>);
+        try { await client.callTool({ name: 'agent_hq_get_task', arguments: { task_id: 1 } }); }
+        finally { await client.close(); }
+      }
+      expect(requests).toEqual([{ instance: '42', durable: 'run-42' }, { instance: undefined, durable: undefined }]);
+    } finally {
+      if (previous.instance === undefined) delete process.env.AGENT_HQ_INSTANCE_ID;
+      else process.env.AGENT_HQ_INSTANCE_ID = previous.instance;
+      if (previous.durable === undefined) delete process.env.AGENT_HQ_DURABLE_RUN_ID;
+      else process.env.AGENT_HQ_DURABLE_RUN_ID = previous.durable;
+      await new Promise<void>(resolve => server.close(() => resolve()));
+    }
   });
 
   afterEach(async () => {

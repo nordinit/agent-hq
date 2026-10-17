@@ -81,8 +81,8 @@ describe('dispatchTaskToJob preserves clone repo mode', () => {
       VALUES (1, 'generic', 'Generic', 0), (1, 'dev', 'Development', 1)
     `);
     await db.run(`
-      INSERT INTO workflows (id, tenant_id, project_id, name, workflow_type)
-      VALUES (9, 1, 1, 'Repository modes', 'generic')
+      INSERT INTO workflows (id, tenant_id, project_id, name, workflow_type, status)
+      VALUES (9, 1, 1, 'Repository modes', 'generic', 'active')
     `);
     await db.run(`
       INSERT INTO agents (
@@ -149,7 +149,7 @@ describe('dispatchTaskToJob preserves clone repo mode', () => {
       openclaw_agent_id
     FROM agents WHERE id = 1`) as Record<string, unknown>;
     const task = await db.get(`SELECT
-      id,
+      id, tenant_id,
       title,
       description,
       status,
@@ -261,7 +261,7 @@ describe('dispatchTaskToJob preserves clone repo mode', () => {
       openclaw_agent_id
     FROM agents WHERE id = 1`) as Record<string, unknown>;
     const task = await db.get(`SELECT
-      id,
+      id, tenant_id,
       title,
       description,
       status,
@@ -284,7 +284,8 @@ describe('dispatchTaskToJob preserves clone repo mode', () => {
     const note = await db.get(`SELECT content FROM task_notes WHERE task_id = 373 ORDER BY id DESC LIMIT 1`) as { content: string } | undefined;
     expect(note?.content).toContain('Workflow-level repository configuration is required for repo-backed workflow dispatch');
     const instanceCount = await db.get(`SELECT COUNT(*) AS count FROM job_instances WHERE task_id = 373`) as { count: number };
-    expect(instanceCount.count).toBe(0);
+    expect(instanceCount.count).toBe(1);
+    expect(await db.value('SELECT status FROM job_instances WHERE task_id = 373')).toBe('failed');
   });
 
   it('dispatchInstance uses persisted repo workspace as runtime working directory', async () => {
@@ -303,6 +304,7 @@ describe('dispatchTaskToJob preserves clone repo mode', () => {
               repoBranch: 'cinder-backend/task-373-agent-repo-source-modes',
             }));
 
+    await db.run('UPDATE tasks SET active_instance_id = 900 WHERE id = 373');
     const getDbSpy = jest.spyOn(require('../db/client'), 'getDb').mockReturnValue(db);
     await db.run(`UPDATE agents SET session_key = ? WHERE id = 1`, 'agent:agent-hq:cinder-platform-engineer:backend-engineer:main');
     process.env.AGENT_HQ_ALLOWED_CLAUDE_BINARIES = claudeBin;
@@ -381,7 +383,7 @@ describe('dispatchTaskToJob preserves clone repo mode', () => {
     await db.run('UPDATE workflows SET environment_setup = ? WHERE id = 9', JSON.stringify({ mode: 'custom', steps: [{ command: [process.execPath, '-e', 'process.exit(7)'] }] }));
     expect(await dispatchFixture()).toBe(false);
     expect(runtimeDispatch).not.toHaveBeenCalled();
-    expect(await db.get('SELECT COUNT(*) AS n FROM job_instances WHERE task_id = 373')).toMatchObject({ n: 0 });
+    expect(await db.get("SELECT COUNT(*) AS n FROM job_instances WHERE task_id = 373 AND status IN ('queued', 'dispatched', 'running')")).toMatchObject({ n: 0 });
     const task = await db.get('SELECT failure_detail FROM tasks WHERE id = 373') as { failure_detail: string };
     expect(task.failure_detail).toContain('Environment setup failed');
   });
@@ -396,7 +398,7 @@ describe('dispatchTaskToJob preserves clone repo mode', () => {
     try {
       expect(await dispatchFixture()).toBe(false);
       expect(runtimeDispatch).not.toHaveBeenCalled();
-      expect(await db.get('SELECT COUNT(*) AS n FROM job_instances WHERE task_id = 373')).toMatchObject({ n: 0 });
+      expect(await db.get("SELECT COUNT(*) AS n FROM job_instances WHERE task_id = 373 AND status IN ('queued', 'dispatched', 'running')")).toMatchObject({ n: 0 });
     } finally { prepare.mockRestore(); }
   });
 

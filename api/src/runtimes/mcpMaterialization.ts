@@ -1,4 +1,5 @@
 import { stableJson } from './openclaw/stableJson';
+import { pinMcpRunIdentity, runIdentityFromEnv, type AgentRunIdentity } from '../lib/agentRunIdentity';
 import { openClawBundleRevision } from './openclaw/mcpAdmission';
 import { createHash, randomUUID } from 'crypto';
 import fs from 'fs';
@@ -1151,6 +1152,7 @@ export function resolveMcpServerRuntimePaths(
 }
 
 export async function materializeHermesMcpConfig(params: {
+  runIdentity?: AgentRunIdentity;
   db: Db;
   agentId: number;
   hermesHome: string;
@@ -1183,6 +1185,7 @@ export async function materializeHermesMcpConfig(params: {
       await fetchAssignedMcpServers(params.db, params.agentId, existingServers),
     ),
   );
+  if (params.runIdentity) pinMcpRunIdentity(desiredServers, params.runIdentity);
   const desiredKeys = Object.keys(desiredServers).sort();
   result.count = desiredKeys.length;
   result.serverNames = desiredKeys;
@@ -1266,6 +1269,7 @@ export async function materializeAgentMcpConfig(params: {
   db: Db;
   agentId: number;
   workingDirectory: string;
+  runIdentity?: AgentRunIdentity;
   // Shared OpenClaw config writes can interrupt active sessions; dispatch uses workspace-only sync.
   materializeOpenClawGlobalConfig?: boolean;
 }): Promise<McpMaterializationResult> {
@@ -1328,6 +1332,11 @@ export async function materializeAgentMcpConfig(params: {
     }
   }
   const desiredServers = await fetchAssignedMcpServers(params.db, params.agentId, existingServers);
+  for (const [name, server] of Object.entries(desiredServers)) {
+    const runIdentity = params.runIdentity ?? runIdentityFromEnv(
+      (existingServers[name]?.env ?? {}) as NodeJS.ProcessEnv);
+    if (runIdentity) pinMcpRunIdentity({ [name]: server }, runIdentity);
+  }
   const desiredKeys = Object.keys(desiredServers);
   result.serverNames = desiredKeys;
   const preservedTopLevel: Record<string, unknown> = {};
@@ -1418,6 +1427,7 @@ async function syncAssignedMcpForAgentUnlocked(params: {
   db: Db;
   agentId: number;
   workingDirectory?: string | null;
+  runIdentity?: AgentRunIdentity;
   /**
    * Routing slug the dispatcher is about to send as `agent:<slug>:run:*`.
    * When provided it is the authoritative OpenClaw agent id for resolving the
@@ -1577,6 +1587,7 @@ async function syncAssignedMcpForAgentUnlocked(params: {
       db: params.db,
       agentId: agent.id,
       workingDirectory,
+      runIdentity: params.runIdentity,
       materializeOpenClawGlobalConfig: params.materializeOpenClawGlobalConfig,
     });
 

@@ -11,6 +11,7 @@ import express, { type Request } from 'express';
 import cors from 'cors';
 import { corsOptionsDelegate, parseAllowedOrigins, rejectCrossOriginRequests } from './lib/originGuard';
 import { getDb } from './db/client';
+import { recordInboundAgentActivity } from './domains/runs/agentActivity';
 import { verifyStartupSchema } from './db/startupVerifier';
 import tasksRouter from './domains/tasks';
 import routingRouter, { dispatchRouter, modelRoutingRouter } from './domains/routing';
@@ -100,6 +101,7 @@ app.use(handleJsonRequestErrors);
 
 // Scope checks read the body.
 app.use('/api/v1', authorizeMcpApiRequestIfPresent);
+app.use('/api/v1', recordInboundAgentActivity);
 
 function dispatchToWorkflowsAlias(req: express.Request, res: express.Response, targetUrl: string): void {
   const originalUrl = req.url;

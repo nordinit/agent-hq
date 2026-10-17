@@ -66,6 +66,18 @@ function agentHqServer(apiKey = 'ahq_mcp_first'): Record<string, unknown> {
   };
 }
 
+it('puts the immutable run identity in the Claude MCP subprocess configuration', async () => {
+  fetchAssignedMcpServersMock.mockResolvedValue({ 'agent-hq__agent-42': agentHqServer() });
+  const result = await materializeClaudeCodeMcpConfig({
+    db: createMockDb(), tenantId: 1, agentId: 42, instanceId: 7, runKey: 'session-7',
+    protectedInstanceIds: new Set([7]), runIdentity: { instanceId: 7, durableRunId: 'durable-7' },
+  });
+  const config = JSON.parse(fs.readFileSync(result.configPath!, 'utf8'));
+  expect(config.mcpServers['agent-hq__agent-42'].env).toMatchObject({
+    AGENT_HQ_INSTANCE_ID: '7', AGENT_HQ_DURABLE_RUN_ID: 'durable-7',
+  });
+});
+
 function filteredServer(include: string[]): Record<string, unknown> {
   return {
     command: '/usr/local/bin/linear-mcp',

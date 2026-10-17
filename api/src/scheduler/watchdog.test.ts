@@ -76,430 +76,80 @@ async function seedRunningInstance(db: Db, params: {
   `, instanceId, taskId, startedAt);
 }
 
-function writeOpenClawSession(openclawHome: string, params: {
-  instanceId?: number;
-  agentSlug?: string;
-  durableRunId?: string;
-  lines: Array<Record<string, unknown>>;
-}): string {
-  const instanceId = params.instanceId ?? 42;
-  const agentSlug = params.agentSlug ?? 'cinder-backend';
-  const durableRunId = params.durableRunId ?? `durable-${instanceId}`;
-  const sessionsDir = path.join(openclawHome, 'agents', agentSlug, 'sessions');
-  fs.mkdirSync(sessionsDir, { recursive: true });
-  const sessionFile = path.join(sessionsDir, `session-${instanceId}.jsonl`);
-  fs.writeFileSync(
-    path.join(sessionsDir, 'sessions.json'),
-    JSON.stringify({
-      [`agent:${agentSlug}:run:${instanceId}:${durableRunId}`]: {
-        sessionId: `session-${instanceId}`,
-        sessionFile,
-        updatedAt: Date.parse('2026-05-13T10:59:30.000Z'),
-      },
-    }),
-  );
-  fs.writeFileSync(sessionFile, `${params.lines.map(line => JSON.stringify(line)).join('\n')}\n`);
-  return sessionFile;
-}
+jest.mock('../domains/runs/stopInstanceExecution', () => ({
+  abortInstanceExecutionTransport: jest.fn(async () => ({ result: { attempted: true, ok: true } })),
+}));
+jest.mock('../domains/runs/openclawSessionState', () => ({ evaluateOpenClawInstanceSessionState: jest.fn() }));
+jest.mock('../domains/runs/runtimeSessionState', () => ({ evaluateRuntimeInstanceLiveness: jest.fn() }));
 
-function writeOpenClawTrajectory(sessionFile: string, lines: Array<Record<string, unknown>>): string {
-  const trajectoryFile = sessionFile.replace(/\.jsonl$/, '.trajectory.jsonl');
-  fs.writeFileSync(trajectoryFile, `${lines.map(line => JSON.stringify(line)).join('\n')}\n`);
-  return trajectoryFile;
-}
+import { abortInstanceExecutionTransport } from '../domains/runs/stopInstanceExecution';
+import { evaluateOpenClawInstanceSessionState } from '../domains/runs/openclawSessionState';
+import { evaluateRuntimeInstanceLiveness } from '../domains/runs/runtimeSessionState';
 
-describe('watchdog transcript activity', () => {
+const NOW = new Date('2026-05-13T11:00:00.000Z');
+describe('watchdog uses inbound Agent HQ activity only', () => {
   let db: Db;
-  let openclawHome: string;
-  let previousOpenClawHome: string | undefined;
-
   beforeEach(async () => {
     db = await createDb();
-    openclawHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-hq-watchdog-openclaw-'));
-    previousOpenClawHome = process.env.OPENCLAW_HOME;
-    process.env.OPENCLAW_HOME = openclawHome;
-  });
-
-  afterEach(async () => {
-    await teardownTestDb();
-    fs.rmSync(openclawHome, { recursive: true, force: true });
-    if (previousOpenClawHome === undefined) {
-      delete process.env.OPENCLAW_HOME;
-    } else {
-      process.env.OPENCLAW_HOME = previousOpenClawHome;
-    }
-  });
-
-  it('reconciles a stale Hermes response.runtimeEnd success before watchdog stale failure', async () => {
-    await seedRunningInstance(db, {
-            instanceId: 4590,
-            taskId: 715,
-            startedAt: '2026-06-03T00:00:00.000Z',
-            dispatchedAt: '2026-06-03T00:00:00.000Z',
-            createdAt: '2026-06-03T00:00:00.000Z',
-          });
-    await db.run(`UPDATE agents SET runtime_type = 'hermes', name = 'Hermes' WHERE id = 94`);
-    await db.run(`
-      UPDATE job_instances
-      SET response = ?
-      WHERE id = 4590
-    `, JSON.stringify({
-            runtimeEnd: {
-              type: 'runEnded',
-              source: 'hermes',
-              sessionKey: 'run:4590',
-              success: true,
-              endedAt: '2026-06-03T00:32:30.031Z',
-              reason: 'completed',
-            },
-          }));
-
-    await runWatchdogPass(db, new Date('2026-06-03T01:00:00.000Z'));
-    await new Promise(resolve => setImmediate(resolve));
-
-    const row = await db.get(`
-      SELECT status, completed_at, runtime_ended_at, runtime_end_success, runtime_end_source, runtime_end_error, error
-      FROM job_instances WHERE id = 4590
-    `) as {
-      status: string;
-      completed_at: string | null;
-      runtime_ended_at: string | null;
-      runtime_end_success: number | null;
-      runtime_end_source: string | null;
-      runtime_end_error: string | null;
-      error: string | null;
-    };
-    expect(row.status).toBe('done');
-    expect(row.completed_at).toBe('2026-06-03 00:32:30.031');
-    expect(row.runtime_ended_at).toBe('2026-06-03 00:32:30.031');
-    expect(row.runtime_end_success).toBe(1);
-    expect(row.runtime_end_source).toBe('hermes');
-    expect(row.runtime_end_error).toBeNull();
-    expect(row.error).toBeNull();
-
-    const log = await db.get(`SELECT message FROM logs WHERE instance_id = 4590`) as { message: string };
-    expect(log.message).toContain('response.runtimeEnd');
-  });
-
-  it('reconciles a persisted runtimeEnd failure generically', async () => {
-    await seedRunningInstance(db, { instanceId: 88, taskId: 808, startedAt: '2026-05-13T10:00:00.000Z' });
-    await db.run(`UPDATE agents SET runtime_type = 'codex', name = 'Codex' WHERE id = 94`);
-    await db.run(`
-      UPDATE job_instances
-      SET response = ?
-      WHERE id = 88
-    `, JSON.stringify({
-            runtimeEnd: {
-              type: 'runEnded',
-              source: 'codex',
-              sessionKey: 'run:88',
-              success: false,
-              endedAt: '2026-05-13T10:05:00.000Z',
-              reason: 'error',
-              error: 'codex execution failed',
-            },
-          }));
-
-    await runWatchdogPass(db, new Date('2026-05-13T11:00:00.000Z'));
-    await new Promise(resolve => setImmediate(resolve));
-
-    const row = await db.get(`
-      SELECT status, completed_at, runtime_ended_at, runtime_end_success, runtime_end_source, runtime_end_error, error
-      FROM job_instances WHERE id = 88
-    `) as {
-      status: string;
-      completed_at: string | null;
-      runtime_ended_at: string | null;
-      runtime_end_success: number | null;
-      runtime_end_source: string | null;
-      runtime_end_error: string | null;
-      error: string | null;
-    };
-    expect(row.status).toBe('failed');
-    expect(row.completed_at).toBe('2026-05-13 10:05:00.000');
-    expect(row.runtime_ended_at).toBe('2026-05-13 10:05:00.000');
-    expect(row.runtime_end_success).toBe(0);
-    expect(row.runtime_end_source).toBe('codex');
-    expect(row.runtime_end_error).toBe('codex execution failed');
-    expect(row.error).toBeNull();
-  });
-
-  it('falls back to a terminal turn_end chat message when response.runtimeEnd is absent', async () => {
-    await seedRunningInstance(db, { instanceId: 77, taskId: 707, startedAt: '2026-05-13T10:00:00.000Z' });
-    await db.run(`UPDATE agents SET runtime_type = 'hermes', name = 'Hermes' WHERE id = 94`);
-    await db.run(`
-      INSERT INTO chat_messages (id, agent_id, instance_id, role, content, timestamp, event_type, event_meta, session_key)
-      VALUES (?, 94, 77, 'system', 'Runtime runEnded (completed)', ?, 'turn_end', ?, 'run:77')
-    `, 'hermes-runtime-end-77', '2026-05-13T10:06:00.000Z', JSON.stringify({
-              runtime_end_type: 'runEnded',
-              terminal_reason: 'completed',
-              success: true,
-              error: null,
-            }));
-
-    await runWatchdogPass(db, new Date('2026-05-13T11:00:00.000Z'));
-    await new Promise(resolve => setImmediate(resolve));
-
-    const row = await db.get(`
-      SELECT status, completed_at, runtime_ended_at, runtime_end_success, runtime_end_source, runtime_end_error, error
-      FROM job_instances WHERE id = 77
-    `) as {
-      status: string;
-      completed_at: string | null;
-      runtime_ended_at: string | null;
-      runtime_end_success: number | null;
-      runtime_end_source: string | null;
-      runtime_end_error: string | null;
-      error: string | null;
-    };
-    expect(row.status).toBe('done');
-    expect(row.completed_at).toBe('2026-05-13 10:06:00.000');
-    expect(row.runtime_ended_at).toBe('2026-05-13 10:06:00.000');
-    expect(row.runtime_end_success).toBe(1);
-    expect(row.runtime_end_source).toBe('hermes');
-    expect(row.runtime_end_error).toBeNull();
-    expect(row.error).toBeNull();
-  });
-
-  it('does not fail a run when raw OpenClaw transcript activity is recent', async () => {
+    jest.clearAllMocks();
     await seedRunningInstance(db);
-    writeOpenClawSession(openclawHome, {
-      lines: [
-        {
-          type: 'message',
-          id: 'assistant-tool-call',
-          timestamp: '2026-05-13T10:59:00.000Z',
-          message: {
-            role: 'assistant',
-            content: [{ type: 'toolCall', id: 'call-1', name: 'explore_codebase', arguments: { focus: 'routing' } }],
-          },
-        },
-        {
-          type: 'message',
-          id: 'tool-result',
-          timestamp: '2026-05-13T10:59:30.000Z',
-          message: {
-            role: 'toolResult',
-            toolCallId: 'call-1',
-            toolName: 'explore_codebase',
-            content: [{ type: 'text', text: 'Still working through tool calls' }],
-            isError: false,
-          },
-        },
-      ],
-    });
+    await db.run(`UPDATE job_instances SET tenant_id = 1, first_agent_call_at = started_at WHERE id = 42`);
+  });
+  afterEach(async () => { await teardownTestDb(); });
 
-    await runWatchdogPass(db, new Date('2026-05-13T11:00:00.000Z'));
-
-    const row = await db.get(`SELECT status, error FROM job_instances WHERE id = 42`) as {
-      status: string;
-      error: string | null;
-    };
-    expect(row.status).toBe('running');
-    expect(row.error).toBeNull();
-
-    const chatRows = await db.all(`
-      SELECT role, event_type, content
-        FROM chat_messages
-        WHERE instance_id = 42
-        ORDER BY timestamp ASC
-    `) as Array<{ role: string; event_type: string; content: string }>;
-    expect(chatRows.map(row => [row.role, row.event_type, row.content])).toEqual([
-      ['assistant', 'tool_call', 'explore_codebase'],
-      ['tool', 'tool_result', 'Still working through tool calls'],
-    ]);
+  it('keeps a run alive after a recent authenticated Agent HQ call', async () => {
+    await db.run(`UPDATE job_instances SET last_agent_call_at = '2026-05-13 10:59:30' WHERE id = 42`);
+    await runWatchdogPass(db, NOW);
+    expect(await db.value('SELECT status FROM job_instances WHERE id = 42')).toBe('running');
+    expect(abortInstanceExecutionTransport).not.toHaveBeenCalled();
   });
 
-  it('reconciles a stale row when the raw OpenClaw transcript reached a final answer', async () => {
-    await seedRunningInstance(db);
-    await db.run(`
-      UPDATE job_instances
-      SET task_outcome = 'deployed_live',
-          lifecycle_outcome_posted_at = '2026-05-13T10:59:35.000Z'
-      WHERE id = 42
-    `);
-    writeOpenClawSession(openclawHome, {
-      lines: [
-        {
-          type: 'message',
-          id: 'assistant-final',
-          timestamp: '2026-05-13T10:59:30.000Z',
-          message: {
-            role: 'assistant',
-            stopReason: 'stop',
-            provider: 'openai-codex',
-            api: 'openai-codex-responses',
-            content: [
-              {
-                type: 'text',
-                text: 'Done.',
-                textSignature: JSON.stringify({ phase: 'final_answer' }),
-              },
-            ],
-          },
-        },
-      ],
-    });
-
-    await runWatchdogPass(db, new Date('2026-05-13T11:20:00.000Z'));
-    await new Promise(resolve => setImmediate(resolve));
-
-    const row = await db.get(`
-      SELECT status, completed_at, runtime_ended_at, runtime_end_success, runtime_end_source, error
-      FROM job_instances
-      WHERE id = 42
-    `) as {
-      status: string;
-      completed_at: string | null;
-      runtime_ended_at: string | null;
-      runtime_end_success: number | null;
-      runtime_end_source: string | null;
-      error: string | null;
-    };
-    expect(row.status).toBe('done');
-    expect(row.completed_at).toBe('2026-05-13 10:59:30.000');
-    expect(row.runtime_ended_at).toBe('2026-05-13 10:59:30.000');
-    expect(row.runtime_end_success).toBe(1);
-    expect(row.runtime_end_source).toBe('watchdog_raw_session');
-    expect(row.error).toBeNull();
+  it('ignores runtime heartbeat/output and never probes runtime state', async () => {
+    await db.run(`UPDATE instance_artifacts SET last_agent_heartbeat_at = '2026-05-13 10:59:59',
+      last_meaningful_output_at = '2026-05-13 10:59:59' WHERE instance_id = 42`);
+    await runWatchdogPass(db, NOW);
+    expect(await db.value('SELECT status FROM job_instances WHERE id = 42')).toBe('failed');
+    expect(await db.value('SELECT active_instance_id FROM tasks WHERE id = 478')).toBeNull();
+    expect(evaluateOpenClawInstanceSessionState).not.toHaveBeenCalled();
+    expect(evaluateRuntimeInstanceLiveness).not.toHaveBeenCalled();
+    expect(abortInstanceExecutionTransport).toHaveBeenCalledTimes(1);
   });
 
-  it('ignores the initial user prompt when deciding whether a run is alive', async () => {
-    await seedRunningInstance(db);
-    await db.run(`
-      INSERT INTO chat_messages (id, agent_id, instance_id, role, content, timestamp)
-      VALUES ('user-1', 94, 42, 'user', 'Dispatch prompt', '2026-05-13T10:59:30.000Z')
-    `);
-
-    await runWatchdogPass(db, new Date('2026-05-13T11:00:00.000Z'));
-
-    const row = await db.get(`SELECT status, error, runtime_end_source FROM job_instances WHERE id = 42`) as {
-      status: string;
-      error: string | null;
-      runtime_end_source: string | null;
-    };
-    expect(row.status).toBe('failed');
-    expect(row.error).toBe('Watchdog: stale run: no start signal for 11m');
-    expect(row.runtime_end_source).toBe('watchdog');
-
-    const notification = await db.get(`
-      SELECT tenant_id, type, title, body, source, outlet
-      FROM notification_records
-      WHERE type = 'watchdog_stale_run'
-    `) as {
-      tenant_id: number;
-      type: string;
-      title: string;
-      body: string;
-      source: string;
-      outlet: string;
-    };
-    expect(notification.tenant_id).toBe(1);
-    expect(notification.title).toBe('⏰ Watchdog auto-failed Task #478');
-    expect(notification.body).toContain('Instance #42 · Task #478 · Agent: Cinder / Backend');
-    expect(notification.body).toContain('Reason: stale run: no start signal for 11m');
-    expect(notification.source).toBe('watchdog');
-    expect(notification.outlet).toBe('agent_hq');
+  it('rechecks an Agent HQ call that arrives after the initial scan before aborting', async () => {
+    const all = db.all.bind(db);
+    const spy = jest.spyOn(db, 'all').mockImplementation(async (sql, ...params) => {
+      const result = await all(sql, ...params);
+      if (sql.includes('ji.first_agent_call_at')) {
+        await db.run(`UPDATE job_instances SET last_agent_call_at = '2026-05-13 10:59:59' WHERE id = 42`);
+      }
+      return result as never;
+    });
+    try { await runWatchdogPass(db, NOW); } finally { spy.mockRestore(); }
+    expect(await db.value('SELECT status FROM job_instances WHERE id = 42')).toBe('running');
+    expect(abortInstanceExecutionTransport).not.toHaveBeenCalled();
   });
 
-  it('reconciles a run 4581-style prompt-only OpenClaw session when trajectory ended with an error', async () => {
-    await seedRunningInstance(db, {
-            instanceId: 4581,
-            taskId: 679,
-            durableRunId: '244f30ff-cf5d-4c86-96f9-273787cf8062',
-            createdAt: '2026-06-02T23:12:57.000Z',
-            dispatchedAt: '2026-06-02T23:12:57.000Z',
-            startedAt: '2026-06-02T23:13:00.000Z',
-          });
-    const sessionFile = writeOpenClawSession(openclawHome, {
-      instanceId: 4581,
-      durableRunId: '244f30ff-cf5d-4c86-96f9-273787cf8062',
-      lines: [
-        {
-          type: 'message',
-          id: 'initial-prompt',
-          timestamp: '2026-06-02T23:23:57.214Z',
-          message: {
-            role: 'user',
-            content: 'Dispatch prompt only',
-          },
-        },
-      ],
-    });
-    const trajectoryFile = writeOpenClawTrajectory(sessionFile, [
-      {
-        traceSchema: 'openclaw-trajectory',
-        type: 'session.ended',
-        ts: '2026-06-02T23:23:57.211Z',
-        sessionKey: 'agent:cinder-backend:run:4581:244f30ff-cf5d-4c86-96f9-273787cf8062',
-        data: {
-          status: 'error',
-          promptError: JSON.stringify({
-            type: 'error',
-            error: { message: "The model 'gpt-image-2' does not exist." },
-            status: 400,
-          }),
-        },
-      },
-    ]);
-
-    await runWatchdogPass(db, new Date('2026-06-02T23:24:30.000Z'));
-    await new Promise(resolve => setImmediate(resolve));
-
-    const row = await db.get(`
-      SELECT status, completed_at, runtime_ended_at, runtime_end_success, runtime_end_error, runtime_end_source
-      FROM job_instances
-      WHERE id = 4581
-    `) as {
-      status: string;
-      completed_at: string | null;
-      runtime_ended_at: string | null;
-      runtime_end_success: number | null;
-      runtime_end_error: string | null;
-      runtime_end_source: string | null;
-    };
-    expect(row.status).toBe('failed');
-    expect(row.completed_at).toBe('2026-06-02 23:23:57.211');
-    expect(row.runtime_ended_at).toBe('2026-06-02 23:23:57.211');
-    expect(row.runtime_end_success).toBe(0);
-    expect(row.runtime_end_error).toBe("The model 'gpt-image-2' does not exist.");
-    expect(row.runtime_end_source).toBe('watchdog_raw_session');
-
-    const log = await db.get(`SELECT message FROM logs WHERE instance_id = 4581`) as { message: string };
-    expect(log.message).toContain('trajectory_prompt_error');
-    expect(log.message).toContain(trajectoryFile);
+  it('allows only one overlapping watchdog pass to expire and abort the run', async () => {
+    await Promise.all([runWatchdogPass(db, NOW), runWatchdogPass(db, NOW)]);
+    expect(await db.value('SELECT status FROM job_instances WHERE id = 42')).toBe('failed');
+    expect(abortInstanceExecutionTransport).toHaveBeenCalledTimes(1);
   });
 
-  it('does not defer a prompt-only OpenClaw session forever when no terminal trajectory exists', async () => {
-    await seedRunningInstance(db, {
-            startedAt: null,
-            createdAt: '2026-05-13T10:48:08.000Z',
-            dispatchedAt: '2026-05-13T10:48:08.000Z',
-          });
-    writeOpenClawSession(openclawHome, {
-      lines: [
-        {
-          type: 'message',
-          id: 'initial-prompt',
-          timestamp: '2026-05-13T10:59:30.000Z',
-          message: {
-            role: 'user',
-            content: 'Dispatch prompt only',
-          },
-        },
-      ],
-    });
+  it('accepts a first tool call during startup without needing transcript/start telemetry', async () => {
+    await db.run(`UPDATE job_instances SET status = 'dispatched', started_at = NULL,
+      first_agent_call_at = '2026-05-13 10:59:00', last_agent_call_at = '2026-05-13 10:59:00' WHERE id = 42`);
+    await runWatchdogPass(db, NOW);
+    expect(await db.value('SELECT status FROM job_instances WHERE id = 42')).toBe('dispatched');
+  });
 
-    await runWatchdogPass(db, new Date('2026-05-13T11:00:00.000Z'));
-
-    const row = await db.get(`SELECT status, error, runtime_end_source FROM job_instances WHERE id = 42`) as {
-      status: string;
-      error: string | null;
-      runtime_end_source: string | null;
-    };
-    expect(row.status).toBe('failed');
-    expect(row.error).toBe('Watchdog: startup timeout: no real start/check-in within 5m');
-    expect(row.runtime_end_source).toBe('watchdog');
+  it('expires silent startup and keeps the configured total execution cap', async () => {
+    await db.run(`UPDATE job_instances SET started_at = NULL, first_agent_call_at = NULL WHERE id = 42`);
+    await runWatchdogPass(db, NOW);
+    expect(await db.value('SELECT error FROM job_instances WHERE id = 42')).toContain('startup timeout');
+    await db.run(`UPDATE job_instances SET status = 'running', first_agent_call_at = '2026-05-13 10:00:00',
+      last_agent_call_at = '2026-05-13 10:59:59' WHERE id = 42`);
+    await runWatchdogPass(db, NOW);
+    expect(await db.value('SELECT error FROM job_instances WHERE id = 42')).toContain('execution timeout');
   });
 });
 

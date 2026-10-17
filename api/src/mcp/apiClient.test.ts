@@ -10,6 +10,47 @@ function jsonResponse(body: unknown): Response {
   } as Response;
 }
 
+describe('task recurrence through the final MCP client response', () => {
+  const originalFetch = global.fetch;
+  afterEach(() => { global.fetch = originalFetch; });
+
+  it.each([
+    { recurring_series_id: 5, scheduled_for: '2026-10-16 13:48:00', schedule_run_id: 123, generated_from: 'recurring_task_series' },
+    { recurring_series_id: null, scheduled_for: null, schedule_run_id: null, generated_from: null },
+  ])('preserves all four recurrence fields in list, detail and project search: %j', async metadata => {
+    const task = { id: 2951, title: 'Search', ...metadata, custom_fields: { source_query: 'web scraping' } };
+    global.fetch = jest.fn(async (url: string) => jsonResponse(
+      url.includes('tasks/2951') ? task : { tasks: [task], total: 1 },
+    )) as unknown as typeof fetch;
+    const api = new AgentHqApiClient('http://test');
+    expect((await api.listTasks()).tasks[0]).toMatchObject(metadata);
+    expect(await api.getTask(2951)).toMatchObject({ ...metadata, custom_fields: task.custom_fields });
+    expect((await api.searchProjectTasks()).tasks[0]).toMatchObject(metadata);
+  });
+
+  it('pins request identity when the client starts instead of following changing environment values', async () => {
+    const prior = { instance: process.env.AGENT_HQ_INSTANCE_ID, durable: process.env.AGENT_HQ_DURABLE_RUN_ID };
+    try {
+      process.env.AGENT_HQ_INSTANCE_ID = '42';
+      process.env.AGENT_HQ_DURABLE_RUN_ID = 'run-42';
+      const api = new AgentHqApiClient('http://test', 'agent-key');
+      process.env.AGENT_HQ_INSTANCE_ID = '43';
+      process.env.AGENT_HQ_DURABLE_RUN_ID = 'run-43';
+      const fetchMock = jest.fn(async () => jsonResponse({ id: 1 }));
+      global.fetch = fetchMock as unknown as typeof fetch;
+      await api.getTask(1);
+      expect(fetchMock).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ headers: expect.objectContaining({
+        'x-agent-hq-instance-id': '42', 'x-agent-hq-durable-run-id': 'run-42',
+      }) }));
+    } finally {
+      if (prior.instance === undefined) delete process.env.AGENT_HQ_INSTANCE_ID;
+      else process.env.AGENT_HQ_INSTANCE_ID = prior.instance;
+      if (prior.durable === undefined) delete process.env.AGENT_HQ_DURABLE_RUN_ID;
+      else process.env.AGENT_HQ_DURABLE_RUN_ID = prior.durable;
+    }
+  });
+});
+
 describe('AgentHqApiClient telemetry routes', () => {
   const originalFetch = global.fetch;
 

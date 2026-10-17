@@ -999,6 +999,7 @@ describe('runDispatcher thinking-level routing', () => {
       INSERT INTO job_instances (id, tenant_id, agent_id, task_id, status, created_at)
       VALUES (11, 1, 1, 382, 'queued', '2026-04-28T20:00:00.000Z')
     `);
+    await db.run('UPDATE tasks SET active_instance_id = 11 WHERE id = 382');
 
     await db.run(`
       INSERT INTO story_point_model_routing (tenant_id, project_id, workflow_id, max_points, provider, model, thinking_level, label)

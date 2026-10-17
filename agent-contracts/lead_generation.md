@@ -13,6 +13,10 @@ Start this run, then read the current task, task type, active owner, and configu
 
 ## Select the Current Work
 
+For recurring lead-search production, read this task's canonical context and its immediate predecessor's canonical task context before any CRM search or write. Verify both recurring series IDs and the predecessor's frozen `source_query`, then select the next query using this series' configured order. If this task already has a frozen query, preserve it and verify it against that evidence. Missing recurrence fields in a list/search response are incomplete evidence: fetch task detail/context, never substitute a default query. If the predecessor, series, or frozen query remains unavailable or conflicts, report the specific blocker before CRM work. Record the predecessor task ID, series ID, prior query, and selected query in the task evidence. Preserve rejected runs and their CRM evidence without replaying or relabeling them.
+
+For a confirmed first occurrence with no predecessor, use the series' configured initial query and record the evidence that this is the first occurrence. An incomplete history response does not establish that the series has no predecessor.
+
 For a `proposal` task dispatched in `review`, review the exact CRM proposal snapshot and post the configured approval, rejection, revision, or blocked outcome. This review run does not submit externally.
 
 For a `proposal` task dispatched in `approved`, assigned by the current routing to its authorized submission owner, with `submit_external` available: **this is the separate approved-proposal submission phase**. Re-read the live CRM approval and check for a prior confirmed submission. If the proposal is unsubmitted, the approval matches the unchanged snapshot, and all current eligibility/ownership checks pass, submit once through the approval-gated CRM operation and post `submit_external` with the actual proof. If submission cannot proceed, complete the blocked handoff below. Approval from a previous run is expected at this stage; it is not evidence that submission already happened. An old “approve or reject” title, review-only description, or agent-authored replay note does not override this current phase.
@@ -46,6 +50,8 @@ An instance-level `agent_hq_report_task_blocker` call is a check-in only. It doe
 ## Lifecycle Calls
 
 Use Agent HQ MCP tools. Start with `agent_hq_start_task_run`, send meaningful progress as needed, and finish with `agent_hq_post_task_outcome` using the truthful configured outcome and required evidence. Preview with `dry_run: true`, then apply the validated outcome and read back task state, run closure, and any dependency link. A preview is not a completed handoff.
+
+Authenticated calls to Agent HQ from this run (including task/context reads and notes) provide proof of life. While working without other Agent HQ calls, send `agent_hq_check_in_task_run` with this instance ID at least every two minutes. Runtime output alone does not refresh the watchdog. Direct HTTP calls must carry `x-agent-hq-instance-id: {{instanceId}}` and `x-agent-hq-durable-run-id: {{durableRunId}}` with the agent's scoped credentials; the dispatched MCP client supplies these automatically.
 
 <!-- AGENT_HQ_RUN_IDENTIFIERS -->
 

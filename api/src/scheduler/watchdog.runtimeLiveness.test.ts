@@ -74,19 +74,17 @@ afterEach(async () => {
 });
 
 describe('watchdog liveness for runtime-backed runs', () => {
-  it('defers failing a claude-code run that is still writing transcript activity', async () => {
+  it('does not let recent runtime transcript activity override expiration', async () => {
     await seedTimedOutRuntimeInstance();
     await writeTranscriptEvent('tool_call', 30_000);
 
     await runWatchdogPass(db, NOW);
 
-    // Before the runtime liveness probe this was failed: the OpenClaw JSONL
-    // probe finds nothing for a claude-code run, so the reprieve never fired.
-    expect(await instanceStatus()).toBe('running');
-    expect(abortMock).not.toHaveBeenCalled();
+    expect(await instanceStatus()).toBe('failed');
+    expect(abortMock).toHaveBeenCalledTimes(1);
   });
 
-  it('fails a claude-code run that has gone quiet, and asks the runtime to stop first', async () => {
+  it('fails a claude-code run that has gone quiet, and asks the runtime to stop', async () => {
     await seedTimedOutRuntimeInstance();
     await writeTranscriptEvent('tool_call', 30 * 60_000);
 
@@ -116,10 +114,9 @@ describe('watchdog liveness for runtime-backed runs', () => {
     expect(await instanceStatus()).toBe('failed');
   });
 
-  it('still routes an OpenClaw run through the OpenClaw probe, not the transcript one', async () => {
+  it('also ignores transcript activity for an OpenClaw run', async () => {
     await seedTimedOutRuntimeInstance('openclaw');
-    // Recent transcript rows must not spare an OpenClaw run; its own session
-    // state is authoritative there, and it has none here.
+    // Liveness has the same inbound-call contract for every runtime.
     await writeTranscriptEvent('tool_call', 10_000);
 
     await runWatchdogPass(db, NOW);

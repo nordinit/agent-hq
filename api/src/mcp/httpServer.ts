@@ -26,6 +26,7 @@
 import { Router, type Request, type Response } from 'express';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { AgentHqApiClient } from './apiClient';
+import { parseAgentRunIdentity } from '../lib/agentRunIdentity';
 import { RateLimiter } from './rateLimiter';
 import { createAgentHqMcpServer } from './serverFactory';
 import { traceMcpHttpRequest } from './httpTrace';
@@ -160,7 +161,8 @@ export function createMcpHttpRouter(options: McpHttpRouterOptions): Router {
     }
 
     const server = createAgentHqMcpServer({
-      api: new AgentHqApiClient(options.apiBaseUrl, key),
+      api: new AgentHqApiClient(options.apiBaseUrl, key,
+        parseAgentRunIdentity(req.get('x-agent-hq-instance-id'), req.get('x-agent-hq-durable-run-id'))),
       hasApiKey: true,
       // Limiting already happened per key above; a second bucket would double-count.
       rateLimiter: null,

@@ -87,7 +87,7 @@ check passes:
 | Loop | Interval | What it does |
 |---|---|---|
 | Reconciler | ~12s | Runtime execution reconciliation, missing-outcome handling after a runtime ends, recurring task series, per-project dispatch, review routing, orphaned in-progress recovery, token backfill |
-| Watchdog | 60s | Startup, heartbeat, and execution-timeout detection; stops and records stale runs |
+| Watchdog | 60s | Startup, authenticated Agent HQ call freshness, and execution-timeout detection; stops and records stale runs |
 | Worktree prune | 30 min | Removes orphaned task worktrees |
 | Workflow check | 5 min | Completes workflows that reached their time or run limit |
 | Telemetry workers | continuous | Project captured observations; run queued telemetry queries |
@@ -158,6 +158,10 @@ Hermes runtime setup, config, and troubleshooting live in [Hermes Runtime Suppor
 
 ### 5.4 Job dispatch / run tracking
 Job instances track: dispatched/started/completed timestamps, session key, heartbeats, artifacts, token usage, abort state, and worktree path. Local CLI runtimes also record durable runtime executions and checkpoints so a restarted API can decide what happened to a run.
+
+The watchdog uses `job_instances.first_agent_call_at` and `last_agent_call_at`, written at the authenticated, scoped Agent HQ API boundary. Task/context reads, task notes, writes and explicit check-ins count when the request carries the dispatched instance and durable run IDs and still owns that run. Operator requests, MCP discovery/preflight, other agents, stale runs and runtime-generated telemetry do not renew activity. It never reads runtime transcripts, session files or process state to decide liveness. Expiry locks and rereads the instance before failing it; an inbound call committed during the scan prevents a stale abort. The configured execution-time limit remains a separate cap. Existing runs without inbound-call timestamps retain their recorded start/dispatch baseline.
+
+The task dispatcher and review reconciler lock the agent and task in the same database transaction, recheck availability, and create/link a queued instance before preparing the workspace or launching a runtime. Failed or cancelled preparation releases only its own claim. This coordinates mutation-triggered passes with periodic reconciliation across processes.
 
 ### 5.5 Release truth
 Evidence gates are config-driven. Code validates configured requirement rows and does not infer required evidence from workflow phase labels, status names, or outcome names.
