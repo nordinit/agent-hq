@@ -18,6 +18,10 @@ Existing invalid definitions are not rewritten. Analyze flags missing journey co
 
 ## Persistence and API
 
+The Explorer loads routing transitions and event mappings separately from fields and saved definitions, using the current scope. `/api/v1/telemetry/v2/catalog/routing` accepts `limit` (1–200, default 200 per collection) and `offset` (default 0). Its `routing_pagination.next_offset` is null when both collections are exhausted; otherwise use that offset with the same scope and limit. The UI exposes **Load more routing rules** and keeps failures and retries local to this list. Changing scope discards previous rows and cancels pending requests. Pages use priority descending, then ID; they are live reads, so restart discovery if routing rules change during pagination.
+
+For compatibility, `/catalog` includes the first routing page by default, with the same pagination metadata, and accepts `routing_limit` / `routing_offset`. Set `include_routing=false` for core metadata only. MCP offers `agent_hq_list_telemetry_routing_signals` for subsequent pages. Disabled overrides still suppress inherited defaults even when those overrides are on another page. Import/export resolves referenced event mappings directly within authorized scope, regardless of discovery page.
+
 A saved view is a report resource with `presentation: "view"` and exactly one metric; a multi-metric report omits `presentation` (or uses `"report"`) and holds up to ten. Dashboards are separate page resources. `presentation: "dashboard"` and the widget `layout` field stay valid so older stored report revisions still load, but nothing renders them. Entries retain `metric_revision_id` and may include `id`, `metric_id`, `title`, `display`, and `view`.
 
 Query requests accept `bucket` as an override (or null to remove a bucket). Saved report widgets apply their own group, filter, scope, and time settings. Global and widget population filters intersect. Contributor requests accept `group` as a JSON-encoded exact group key and filter before pagination. `metric_index` disambiguates repeated uses of the same metric revision.

@@ -101,7 +101,9 @@ it('never silently maps a retired field generation onto a new same-key field',as
 
 it('requires a scoped destination mapping for selected external event receipts',async()=>{
   await db.run("INSERT INTO external_event_mappings(id,tenant_id,project_id,workflow_type,event_name,action_kind,action_target) VALUES(1,1,1,'source','submitted','status','approved_old'),(2,1,2,'target','submitted','status','accepted_new')");
-  const signal=(await getTelemetryCatalog(db,access,source)).event_mappings[0];
+  // Both referenced mappings sit beyond the first discovery page.
+  await db.run("INSERT INTO external_event_mappings(id,tenant_id,project_id,workflow_type,event_name,action_kind,priority) SELECT project_id*1000+n,1,project_id,type,'filler_'||n,'status',100 FROM (VALUES (1,'source'),(2,'target')) AS scopes(project_id,type) CROSS JOIN generate_series(1,205) n");
+  const signal=(await getTelemetryCatalog(db,access,source,{includeRouting:true,routingPage:{offset:200}})).event_mappings.find(mapping=>mapping.source.id===1)!;
   const {bundle}=await pack(milestoneRecipe({key:'mapped_receipts',name:'Mapped receipts',milestone:signal.predicate}));
   expect(bundle.event_mappings?.[0]).toMatchObject({source:{id:1},event_name:'submitted'});
   expect((await importTelemetry(db,access,{bundle,scope:target})).drafts).toBe(1);

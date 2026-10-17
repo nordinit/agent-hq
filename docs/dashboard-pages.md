@@ -22,6 +22,8 @@ Sections contain one to four independently stacked columns. Drag a block by its 
 
 ## Storage, API, and rollout
 
+Dashboard startup requests `/api/v1/telemetry/v2/catalog?include_routing=false`. Routing-rule discovery is optional and is not used to compile or calculate dashboard metrics, so a large rule catalog or a discovery failure cannot block dashboard metadata or calculations. This requires no data migration.
+
 Migration `35-dashboard-pages.sql` permits `kind=dashboard` in the existing telemetry revision store. It does not rewrite saved reports or metrics. Apply the migration and deploy the API before the new UI. A migration regression test verifies existing report revisions and metric pins remain identical.
 
 Migration `41-telemetry-outcome-evidence.sql` adds a compact, trigger-maintained outcome-evidence projection to observations. Current task metrics that only inspect historical outcomes read this projection; other historical expressions keep the full loader. Observation identities, correction chains, causal outcomes and project authorization remain intact. During upgrades, old rows use an equivalent computed projection until `node api/dist/tooling/backfillTelemetryOutcomeEvidence.js` completes its 500-row batches. Run that backfill before measuring dashboard latency. Interactive SQL statements retain a five-second timeout; background statements retain thirty seconds. Rollback application releases must carry the applied migration file, even though the extra column is backward compatible.

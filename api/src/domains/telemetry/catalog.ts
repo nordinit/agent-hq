@@ -3,7 +3,7 @@ import type { Db } from '../../db/adapter/types';
 import type { CatalogDescriptor, Grain, ValueBasis } from './contracts';
 import { resolveScope, type TelemetryAccess, type TelemetryScope } from './access';
 import {registerTelemetrySignals} from './signals';
-import { getRoutingCatalogSignals } from './catalogRouting';
+import { getRoutingCatalogSignals, type RoutingCatalogPage } from './catalogRouting';
 
 export interface TelemetryField extends CatalogDescriptor {
   key: string; label: string; scope: TelemetryScope; value_bases: ValueBasis[];
@@ -76,7 +76,8 @@ async function registerFields(db: Db, access: TelemetryAccess, sourceFields: Arr
   });
 }
 
-async function buildTelemetryCatalog(db: Db, access: TelemetryAccess, scope: TelemetryScope = {}) {
+type CatalogOptions={includeRouting?:boolean;routingPage?:RoutingCatalogPage};
+async function buildTelemetryCatalog(db: Db, access: TelemetryAccess, scope: TelemetryScope = {},options:CatalogOptions={}) {
   const project = scope.project_id ?? access.projectId;
   const types = await db.all<any>(`SELECT key,name,project_id FROM workflow_types WHERE tenant_id = ?${access.projectId == null ? '' : ' AND (project_id IS NULL OR project_id = ?)'} ORDER BY name`,access.tenantId,...(access.projectId==null?[]:[access.projectId]));
   const typeMap = new Map(types.map(row=>[row.key,row]));
@@ -117,16 +118,16 @@ async function buildTelemetryCatalog(db: Db, access: TelemetryAccess, scope: Tel
     .map(row=>({kind:'outcome' as const,key:row.key,label:row.label,source:{table:'workflow_type_outcomes',id:String(row.id)},scope:{workflow_type:row.workflow_type,...(typeMap.get(row.workflow_type)?.project_id?{project_id:Number(typeMap.get(row.workflow_type).project_id)}:{}),...(row.task_type?{task_type:row.task_type}:{})}}));
   const signals=await registerTelemetrySignals(db,access,[...statusSources,...outcomeSources]);
   const statuses=signals.filter(signal=>signal.kind==='status'),outcomes=signals.filter(signal=>signal.kind==='outcome');
-  const routingSignals=await getRoutingCatalogSignals(db,access,scope,allowedTypeKeys);
+  const routingSignals=options.includeRouting?await getRoutingCatalogSignals(db,access,scope,allowedTypeKeys,options.routingPage):{routing_transitions:[],event_mappings:[],routing_pagination:null};
   return {fields:[...BUILTIN_FIELDS,...registered.filter(field=>applicable(field.scope))],statuses,outcomes,projects,workflows,workflow_types:workflowTypes,task_types:taskTypes.filter(row=>allowedTypeKeys.has(row.workflow_type)),agents,...routingSignals};
 }
 
 /** Serialize canonical reads and descriptor registration against schema writes. */
-export async function getTelemetryCatalog(db:Db,access:TelemetryAccess,scope:TelemetryScope={}){
+export async function getTelemetryCatalog(db:Db,access:TelemetryAccess,scope:TelemetryScope={},options:CatalogOptions={}){
   return db.withTransaction(async tx=>{
     await tx.get('SELECT pg_advisory_xact_lock_shared(hashtextextended(?, 0))','telemetry:signals');
     await tx.get('SELECT pg_advisory_xact_lock(hashtextextended(?, 0))',`telemetry:catalog:${access.tenantId}`);
-    return buildTelemetryCatalog(tx,access,await resolveScope(tx,access,scope));
+    return buildTelemetryCatalog(tx,access,await resolveScope(tx,access,scope),options);
   });
 }
 

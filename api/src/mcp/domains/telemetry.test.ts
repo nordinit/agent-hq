@@ -33,6 +33,19 @@ function registry() {
   return { api, tools };
 }
 
+test('routing discovery exposes bounded pagination and forwards scope without dropping controls',async()=>{
+  const {api,tools}=registry();
+  const tool=tools.get('agent_hq_list_telemetry_routing_signals')!;
+  const args=z.object(tool.schema).parse({workflow_id:114,limit:200,offset:1000});
+  await tool.handler(args);
+  expect(api.telemetryGet).toHaveBeenLastCalledWith('/catalog/routing',args);
+  expect(z.object(tool.schema).safeParse({limit:201}).success).toBe(false);
+  expect(z.object(tool.schema).safeParse({offset:-1}).success).toBe(false);
+  const catalog=tools.get('agent_hq_list_telemetry_catalog')!;
+  await catalog.handler(z.object(catalog.schema).parse({include_routing:false}));
+  expect(api.telemetryGet).toHaveBeenLastCalledWith('/catalog',{include_routing:false});
+});
+
 describe('telemetry MCP uses the shared REST API', () => {
   test('query and preview forward the same definition and scoped filters without recalculating values', async () => {
     const { api, tools } = registry();
@@ -119,7 +132,8 @@ describe('telemetry MCP uses the shared REST API', () => {
       await server.connect(serverTransport);
       await client.connect(clientTransport);
       const listed = (await client.listTools()).tools.filter(tool => tool.name.includes('_telemetry_'));
-      expect(listed).toHaveLength(35);
+      expect(listed).toHaveLength(36);
+      expect(listed.some(tool=>tool.name==='agent_hq_list_telemetry_routing_signals')).toBe(true);
       for (const tool of listed) expectResolvableReferences(tool.inputSchema);
       const definition = listed.find(tool => tool.name === 'agent_hq_validate_telemetry_definition')!.inputSchema.properties!.definition as any;
       expect(definition.properties).toHaveProperty('journey');

@@ -65,7 +65,7 @@ declare(['create_recurring_task_series', 'update_recurring_task_series', 'disabl
   'run_recurring_task_series_now'], any('recurring_task_series.manage_project_scope'));
 declare(['get_external_task_event_receipt', 'list_external_task_event_receipts'], any('external.manage_project_task_events'));
 declare(['get_telemetry_contributors', 'get_telemetry_coverage', 'get_telemetry_metric', 'get_telemetry_profile', 'get_telemetry_query',
-  'get_telemetry_report', 'list_telemetry_bindings', 'list_telemetry_catalog', 'list_telemetry_metrics', 'list_telemetry_profiles',
+  'get_telemetry_report', 'list_telemetry_bindings', 'list_telemetry_catalog', 'list_telemetry_routing_signals', 'list_telemetry_metrics', 'list_telemetry_profiles',
   'list_telemetry_reports', 'list_telemetry_snapshots', 'preview_telemetry_binding'], any('telemetry.read'));
 declare(['cancel_telemetry_query', 'preview_telemetry_metric', 'query_telemetry_metrics', 'validate_telemetry_definition'], any('telemetry.query'));
 declare(['archive_telemetry_metric', 'archive_telemetry_profile', 'revise_telemetry_metric', 'revise_telemetry_profile',

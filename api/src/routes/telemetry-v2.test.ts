@@ -8,6 +8,7 @@ import {numericRecipe,firstPassRecipe,milestoneRecipe,coreRuntimeRecipes} from '
 import {runTelemetryQueryJobs} from '../domains/telemetry/queries';
 import {winningBinding} from '../domains/telemetry/definitions';
 import {calendarBucket} from '../domains/telemetry/evaluator';
+import * as routingCatalog from '../domains/telemetry/catalogRouting';
 let db:Db;
 jest.mock('../db/client',()=>({getDb:()=>db}));
 import router from './telemetry-v2';
@@ -30,6 +31,40 @@ async function amount(scope={project_id:11}){
   const field=catalog.fields.find((field:any)=>field.key==='amount');
   expect(field).toBeDefined();return numericRecipe({key:'amount',name:'Proposal amount',field:field.id});
 }
+
+test('large routing catalogs paginate while dashboard metadata and calculations stay available',async()=>{
+  await db.run(`INSERT INTO workflow_task_transitions(tenant_id,project_id,workflow_id,workflow_type,from_status,outcome,to_status)
+    SELECT 1,11,111,'content','draft','outcome_'||n,'approved' FROM generate_series(1,1091) n`);
+  const legacy=await request('/catalog');
+  expect(legacy.status).toBe(200);expect(legacy.body.routing_transitions).toHaveLength(200);
+  expect(legacy.body.routing_pagination).toMatchObject({has_more:true,next_offset:200});
+  const metadata=await request('/catalog?include_routing=false');
+  expect(metadata.status).toBe(200);expect(metadata.body.fields.length).toBeGreaterThan(0);
+  expect(metadata.body.routing_transitions).toEqual([]);expect(metadata.body.routing_pagination).toBeNull();
+  const last=await request('/catalog/routing?workflow_id=111&offset=1000');
+  expect(last.status).toBe(200);expect(last.body.routing_transitions).toHaveLength(91);
+  expect(last.body.routing_pagination).toMatchObject({has_more:false,next_offset:null});
+  expect((await request('/catalog/routing?project_id=12',undefined,{project:11})).status).toBe(403);
+  const definition=await amount();
+  expect((await request('/definitions/validate',{definition,scope:{project_id:11}})).status).toBe(200);
+  const preview=await request('/queries/preview',{definition,scope:{project_id:11}});
+  expect(preview.status).toBe(200);expect(preview.body.value).toBe(210);
+  const metric=await saveMetric(definition);
+  const batch=await request('/queries/batch',{queries:[{binding_id:'amount',query:{metric_revision_id:metric.latest_revision_id,scope:{project_id:11}}}]});
+  expect(batch.status).toBe(200);expect(batch.body.results[0].response.value).toBe(210);
+});
+test.each(['/catalog/routing?limit=201','/catalog/routing?limit=0','/catalog/routing?offset=-1','/catalog/routing?offset=1.5','/catalog/routing?offset=nope','/catalog?routing_limit=201','/catalog?include_routing=nope'])('rejects invalid catalog pagination: %s',async path=>{
+  expect((await request(path)).status).toBe(400);
+});
+test('optional routing discovery failure does not block metadata or metric evaluation',async()=>{
+  const failure=jest.spyOn(routingCatalog,'getTelemetryRoutingCatalog').mockRejectedValue(new Error('routing unavailable'));
+  try{
+    expect((await request('/catalog/routing')).status).toBe(500);
+    expect((await request('/catalog?include_routing=false')).status).toBe(200);
+    const definition=await amount();
+    expect((await request('/queries/preview',{definition,scope:{project_id:11}})).body.value).toBe(210);
+  }finally{failure.mockRestore();}
+});
 
 test('entry attribution is rejected consistently by validation, preview, and save',async()=>{
   const definition={...await amount(),attribution:'assigned_agent_at_entry'};

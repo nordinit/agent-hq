@@ -33,10 +33,17 @@ export interface TelemetryCatalog {
   agents: { id: number; name: string; project_id?: number }[];
   recipes: { key: string; name: string; description?: string }[];
   core_metrics: MetricDefinition[];
-  routing_transitions?: { id: string; label: string; predicate: Predicate; enabled: boolean; scope: TelemetryScope }[];
-  event_mappings?: { id: string; label: string; predicate: Predicate; enabled: boolean; scope: TelemetryScope }[];
+  routing_transitions?: TelemetryRoutingSignal[];
+  event_mappings?: TelemetryRoutingSignal[];
+  routing_pagination?: TelemetryRoutingCatalog['routing_pagination'] | null;
   coverage?: Record<string, unknown>;
   operations?: string[];
+}
+export interface TelemetryRoutingSignal { id: string; label: string; predicate: Predicate; enabled: boolean; scope: TelemetryScope }
+export interface TelemetryRoutingCatalog {
+  routing_transitions: TelemetryRoutingSignal[];
+  event_mappings: TelemetryRoutingSignal[];
+  routing_pagination: { limit: number; offset: number; has_more: boolean; next_offset: number | null };
 }
 export interface TelemetryRevision<T> {
   id: string;

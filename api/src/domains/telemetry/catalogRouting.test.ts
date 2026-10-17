@@ -1,6 +1,7 @@
 import type { Db } from '../../db/adapter/types';
 import { setupTestDb,teardownTestDb } from '../../db/testDb';
-import { getTelemetryCatalog,BUILTIN_FIELDS } from './catalog';
+import { BUILTIN_FIELDS } from './catalog';
+import { getTelemetryRoutingCatalog as getTelemetryCatalog } from './catalogRouting';
 import { evaluateMetric,validateMetricDefinition } from './evaluator';
 import { milestoneRecipe } from './recipes';
 
@@ -14,6 +15,35 @@ beforeEach(async()=>{
   await db.run("INSERT INTO workflows(id,tenant_id,project_id,name,workflow_type) VALUES(1,1,1,'One','article'),(2,1,1,'Sibling','article'),(3,1,2,'Other','other'),(4,2,3,'Private','secret')");
 });
 afterEach(teardownTestDb);
+it('pages beyond 1,000 rules without losing disabled-override precedence or scope containment',async()=>{
+  await transition(5,1,1,null,'article');await transition(5000,1,1,1,'article',0);
+  await transition(6,1,1,2,'article');await transition(7,1,2,3,'other');await transition(8,2,3,4,'secret');
+  await db.run(`INSERT INTO workflow_task_transitions(id,tenant_id,project_id,workflow_id,workflow_type,from_status,outcome,to_status)
+    SELECT 1000+n,1,1,1,'article','draft','outcome_'||n,'review' FROM generate_series(1,1091) n`);
+  await db.run(`INSERT INTO external_event_mappings(id,tenant_id,project_id,workflow_id,workflow_type,event_name,action_kind,action_target)
+    SELECT 1000+n,1,1,1,'article','event_'||n,'status','review' FROM generate_series(1,207) n`);
+  await mapping(1,1,null,null,null);await mapping(2,1,1,2,'article','sibling');await mapping(3,2,3,4,'secret','private');
+  const ids:string[]=[],mappings:string[]=[];
+  let offset:number|null=0;
+  while(offset!=null){
+    const page=await getTelemetryCatalog(db,access,{workflow_id:1},{limit:200,offset});
+    expect(page.routing_transitions.length).toBeLessThanOrEqual(200);expect(page.event_mappings.length).toBeLessThanOrEqual(200);
+    if(offset===0)expect(page.routing_transitions[0]).toMatchObject({id:'transition:5',effective_for_workflow:false});
+    ids.push(...page.routing_transitions.map(row=>row.id));mappings.push(...page.event_mappings.map(row=>row.id));
+    offset=page.routing_pagination.next_offset;
+  }
+  expect(ids).toHaveLength(1093);expect(new Set(ids).size).toBe(1093);expect(ids.at(-1)).toBe('transition:5000');
+  expect(mappings).toHaveLength(208);expect(new Set(mappings).size).toBe(208);
+  for(const excluded of [6,7,8])expect(ids).not.toContain(`transition:${excluded}`);
+  expect(mappings).not.toContain('event_mapping:2');expect(mappings).not.toContain('event_mapping:3');
+  expect(await getTelemetryCatalog(db,access,{workflow_id:1},{offset:2000})).toMatchObject({routing_transitions:[],event_mappings:[],routing_pagination:{has_more:false,next_offset:null}});
+});
+it('filters inaccessible workflow types before filling a page',async()=>{
+  await transition(1,1,1,null,'other');await transition(2,1,1,null,'article');
+  const page=await getTelemetryCatalog(db,access,{}, {limit:1});
+  expect(page.routing_transitions.map(row=>row.id)).toEqual(['transition:2']);
+  expect(page.routing_pagination.has_more).toBe(false);
+});
 async function transition(id:number,tenant:number,project:number|null,workflow:number|null,type:string,enabled=1){
   await db.run("INSERT INTO workflow_task_transitions(id,tenant_id,project_id,workflow_id,workflow_type,from_status,outcome,to_status,enabled) VALUES(?,?,?,?,?,'draft','submitted','review',?)",id,tenant,project,workflow,type,enabled);
 }

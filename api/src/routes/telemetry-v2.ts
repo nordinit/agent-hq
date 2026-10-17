@@ -3,6 +3,7 @@ import { z, ZodError } from 'zod';
 import { getDb } from '../db/client';
 import { TelemetryError, telemetryAccess, queryScope, resolveScope } from '../domains/telemetry/access';
 import { getTelemetryCatalog } from '../domains/telemetry/catalog';
+import { getTelemetryRoutingCatalog, routingCatalogPageSchema } from '../domains/telemetry/catalogRouting';
 import { recipeCatalog, coreRuntimeRecipes } from '../domains/telemetry/recipes';
 import { TelemetryDefinitionError } from '../domains/telemetry/contracts';
 import { compileDefinition, createDefinition, reviseDefinition, getDefinition, listDefinitions, archiveDefinition, listBindings, previewBinding, saveBinding, type DefinitionKind } from '../domains/telemetry/definitions';
@@ -23,7 +24,13 @@ const handle=(fn:(req:Request,res:Response)=>Promise<unknown>)=>(req:Request,res
 });};
 router.get('/catalog',handle(async(req,res)=>{
   const db=getDb(),access=await telemetryAccess(db,req),scope=await resolveScope(db,access,queryScope(req.query));
-  res.json({...await getTelemetryCatalog(db,access,scope),definition_contract:getTelemetryDefinitionContract(),recipes:recipeCatalog,core_metrics:coreRuntimeRecipes(),coverage:await getTelemetryCoverage(db,access.tenantId,scope.project_id==null?undefined:[scope.project_id]),operations:['count','distinct_count','count_if','sum','mean','min','max','percentile','distribution','ratio','duration','funnel'],scope});
+  const includeRouting=z.enum(['true','false']).default('true').parse(req.query.include_routing)==='true';
+  const routingPage=routingCatalogPageSchema.parse({limit:req.query.routing_limit,offset:req.query.routing_offset});
+  res.json({...await getTelemetryCatalog(db,access,scope,{includeRouting,routingPage}),definition_contract:getTelemetryDefinitionContract(),recipes:recipeCatalog,core_metrics:coreRuntimeRecipes(),coverage:await getTelemetryCoverage(db,access.tenantId,scope.project_id==null?undefined:[scope.project_id]),operations:['count','distinct_count','count_if','sum','mean','min','max','percentile','distribution','ratio','duration','funnel'],scope});
+}));
+router.get('/catalog/routing',handle(async(req,res)=>{
+  const db=getDb(),access=await telemetryAccess(db,req);
+  res.json(await getTelemetryRoutingCatalog(db,access,queryScope(req.query),routingCatalogPageSchema.parse(req.query)));
 }));
 router.post('/definitions/validate',handle(async(req,res)=>{
   const db=getDb(),access=await telemetryAccess(db,req),scope=await resolveScope(db,access,req.body.scope??{});

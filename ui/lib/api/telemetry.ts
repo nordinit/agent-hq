@@ -2,6 +2,7 @@ import { getApiBase } from './http';
 import { isUiSessionExpired, redirectToLogin } from '../sessionExpiry';
 import type { DashboardDocument, SavedDashboard } from '../dashboardTypes';
 import { telemetryScopeQuery } from '../telemetryPresentation';
+import type { TelemetryRoutingCatalog } from '../telemetryTypes';
 import type { DefinitionValidation, MetricDefinition, TelemetryBinding, TelemetryBindingPreview, TelemetryBindingPreviewRequest, TelemetryBatchRequest, TelemetryBatchResponse, TelemetryCatalog, TelemetryContributors, TelemetryMetric, TelemetryProfile, TelemetryQuery, TelemetryQueryResponse, TelemetryReport, TelemetryReportDefinition, TelemetryResource, TelemetryScope } from '../telemetryTypes';
 
 const BASE = '/api/v1/telemetry/v2';
@@ -28,7 +29,8 @@ export const telemetryClient = {
   getDashboards: (scope?: TelemetryScope, signal?: AbortSignal) => request<{ dashboards: SavedDashboard[] }>(`/dashboards${scopeQuery(scope)}`, { signal }),
   createDashboard: (data: { key: string; name: string; scope: TelemetryScope; definition: DashboardDocument }) => post<SavedDashboard>('/dashboards', data),
   reviseDashboard: (id: string, data: { name: string; definition: DashboardDocument; expected_revision_id: string }) => post<SavedDashboard>(`/dashboards/${encodeURIComponent(id)}/revisions`, data),
-  getTelemetryCatalog: (scope?: TelemetryScope, signal?: AbortSignal) => request<TelemetryCatalog>(`/catalog${scopeQuery(scope)}`, { signal }),
+  getTelemetryCatalog: (scope?: TelemetryScope, signal?: AbortSignal) => request<TelemetryCatalog>(`/catalog${telemetryScopeQuery({ ...scope, include_routing: false })}`, { signal }),
+  getTelemetryRoutingCatalog: (scope?: TelemetryScope, page: { limit?: number; offset?: number } = {}, signal?: AbortSignal) => request<TelemetryRoutingCatalog>(`/catalog/routing${telemetryScopeQuery({ ...scope, ...page })}`, { signal }),
   validateTelemetryDefinition: (definition: MetricDefinition, scope: TelemetryScope) => post<DefinitionValidation & { description?: string }>('/definitions/validate', { definition, scope }),
   previewTelemetry: (query: TelemetryQuery, signal?: AbortSignal) => post<TelemetryQueryResponse>('/queries/preview', query, signal),
   queryTelemetryBatch: (batch: TelemetryBatchRequest, signal?: AbortSignal) => post<TelemetryBatchResponse>('/queries/batch', batch, signal),

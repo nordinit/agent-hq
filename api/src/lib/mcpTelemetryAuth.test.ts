@@ -37,6 +37,8 @@ describe('telemetry MCP capability boundary', () => {
   test('reads require their grant and omission of scope forces the assigned project', async () => {
     await replaceAgentMcpPermissionPolicy(getDb(), 901, ['telemetry.read']);
     expect(await (await request('/catalog')).json()).toEqual({ authorized_project_id: 901 });
+    expect((await request('/catalog/routing?limit=200&offset=200')).status).toBe(200);
+    expect((await request('/catalog/routing?project_id=902')).status).toBe(403);
     expect((await request('/queries/id/contributors')).status).toBe(200);
     expect((await request('/bindings/preview','POST',{family_key:'value',scope:{project_id:901}})).status).toBe(200);
     expect((await request('/bindings/preview','POST',{family_key:'value',scope:{project_id:902}})).status).toBe(403);
@@ -50,6 +52,7 @@ describe('telemetry MCP capability boundary', () => {
     expect((await request('/metrics', 'POST', {})).status).toBe(403);
     expect((await request('/backfills', 'POST', {})).status).toBe(403);
     expect((await request('/settings', 'PUT', {})).status).toBe(403);
+    expect((await request('/catalog/routing')).status).toBe(403);
     expect((await request('/future-operation', 'POST', {})).status).toBe(403);
   });
   test('cross-project and cross-tenant selectors are denied while forged body authority is ignored', async () => {

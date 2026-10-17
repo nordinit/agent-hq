@@ -14,6 +14,10 @@ import type { AggregateMeasure, MetricDefinition } from '../src/domains/telemetr
 async function main() {
   const db = await setupTestDb();
   await seedTelemetryScenario(db);
+  const routingCount=Number(process.env.DASHBOARD_SMOKE_ROUTING_COUNT??0);
+  if(!Number.isSafeInteger(routingCount)||routingCount<0||routingCount>10000)throw new Error('Invalid synthetic routing count.');
+  if(routingCount)await db.run(`INSERT INTO workflow_task_transitions(tenant_id,project_id,workflow_id,workflow_type,from_status,outcome,to_status)
+    SELECT 1,11,111,'content','draft','smoke_outcome_'||n,'approved' FROM generate_series(1,?) n`,routingCount);
   const access = { tenantId: 1, projectId: 11, actor: 'dashboard-preview' };
   const scope = { project_id: 11, workflow_id: 111, workflow_type: 'content', task_type: 'article' };
   await db.run('UPDATE projects SET name=? WHERE id=11', 'Agency · synthetic preview');
@@ -75,6 +79,7 @@ async function main() {
       ],
     } });
   const app = express(); app.use(cors()); app.use(express.json({ limit: '10mb' }));
+  if(process.env.DASHBOARD_SMOKE_ROUTING_FAILURE==='1')app.get('/api/v1/telemetry/v2/catalog/routing',(_req,res)=>res.status(503).json({code:'smoke_routing_failure',error:'Synthetic routing discovery failure.'}));
   app.use('/api/v1/telemetry/v2', telemetryRouter);
   app.get('/api/v1/projects', async (_req, res) => res.json(await db.all('SELECT id,name,tenant_id FROM projects WHERE tenant_id=1')));
   app.get('/api/v1/tenants', async (_req, res) => res.json(await db.all('SELECT * FROM tenants WHERE id=1')));

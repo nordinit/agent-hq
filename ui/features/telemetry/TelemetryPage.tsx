@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Activity, BarChart3, CheckCircle2, Database, FolderOpen, Library, Play, Plus, Save, Settings2, ShieldCheck, Upload } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -16,6 +16,7 @@ import TelemetryAnalyze from './TelemetryAnalyze';
 import { metricAttributionIssues } from '@/lib/telemetry-contracts/requirements';
 import TelemetryLibrary, { type LibraryData } from './TelemetryLibrary';
 import { ErrorNotice, JsonDetails } from './TelemetryControls';
+import { useRoutingCatalog } from './useRoutingCatalog';
 
 type WorkspaceTab = 'analyze' | 'explore' | 'metrics' | 'reports' | 'bindings' | 'profiles' | 'coverage' | 'portability';
 const tabs = [
@@ -35,7 +36,7 @@ export default function TelemetryPage() {
   const [tab, setTab] = useState<WorkspaceTab>('explore');
   const [analysisMetricId, setAnalysisMetricId] = useState<string>();
   const [filters, setFilters] = useState<TelemetryFilters>({ scope: { include_archived: true }, from: '', to: '', timezone: 'UTC', grouping: '' });
-  const [catalog, setCatalog] = useState<TelemetryCatalog | null>(null);
+  const [baseCatalog, setCatalog] = useState<TelemetryCatalog | null>(null);
   const [library, setLibrary] = useState<LibraryData>(emptyLibrary);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -61,6 +62,8 @@ export default function TelemetryPage() {
   const libraryGuard = useRef(createTelemetryRequestGuard());
   const lastAction = useRef<(() => void) | null>(null);
   const scopeKey = JSON.stringify(filters.scope);
+  const routing = useRoutingCatalog(scopeKey, tab === 'explore');
+  const catalog = useMemo(() => baseCatalog ? { ...baseCatalog, ...routing.data } : null, [baseCatalog, routing.data]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -94,7 +97,7 @@ export default function TelemetryPage() {
   }, [scopeKey]);
   useEffect(() => {
     const controller = new AbortController(); const scope: TelemetryScope = JSON.parse(scopeKey);
-    setLoading(true); setLoadError(null); setLibrary(emptyLibrary); setCoverage(null);
+    setLoading(true); setLoadError(null); setCatalog(null); setLibrary(emptyLibrary); setCoverage(null);
     Promise.all([telemetryClient.getTelemetryCatalog(scope, controller.signal), reloadLibrary(), telemetryClient.getTelemetryCoverage(scope, controller.signal)])
       .then(([nextCatalog, , nextCoverage]) => { if (!controller.signal.aborted) { setCatalog(nextCatalog); setCoverage(nextCoverage); } })
       .catch(cause => { if (!controller.signal.aborted) setLoadError(telemetryErrorMessage(cause)); })
@@ -219,6 +222,12 @@ export default function TelemetryPage() {
     {bindingNotice && <p role="status" className="rounded-lg border border-amber-500/30 bg-amber-950/20 p-3 text-sm text-amber-200">{bindingNotice}</p>}
     {loading ? <p role="status" className="py-8 text-sm text-slate-400">Loading the scoped catalog and saved definitions…</p> : <>
       {tab === 'explore' && <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]"><Card>
+        <div className="mb-4 space-y-2 text-xs text-slate-400">
+          {routing.busy && <p role="status">Loading routing rules for this scope…</p>}
+          {routing.error && <p role="alert">Routing rules could not load: {routing.error} Other fields and calculations remain available.</p>}
+          {routing.data && <p>{routing.data.routing_transitions.length} transitions · {routing.data.event_mappings.length} event mappings loaded.{routing.data.routing_pagination.has_more ? ' More rules are available; narrow the scope or load the next page.' : ''}</p>}
+          {(routing.error || routing.data?.routing_pagination.has_more) && <Button size="sm" disabled={routing.busy} onClick={routing.loadMore}>{routing.error ? 'Retry routing rules' : 'Load more routing rules'}</Button>}
+        </div>
         {editing && <p className="mb-4 rounded-lg border border-sky-500/20 bg-sky-950/20 p-3 text-xs text-sky-200">Editing {editing.name} from revision {editing.revision}. {metricAttributionIssues(editing.definition).length ? 'This saved definition needs repair. Preview evaluates your proposed correction.' : 'Preview compares the saved definition and your proposed revision over the same time boundary.'}</p>}
         <TelemetryBuilder key={builderVersion} catalog={catalog} draftText={draftText} initialGuide={guide} editing={advanced} lockedKey={Boolean(editing)} onChange={changeDraft} onGuideChange={setGuide} onModeChange={setAdvanced} onValidationChange={setBuilderError}/>
         {builderError && <p className="mt-4 text-xs text-amber-200">{builderError}</p>}

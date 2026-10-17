@@ -4,6 +4,7 @@ import type {Db} from '../../db/adapter/types';
 import {TelemetryError,type TelemetryAccess,scopeSchema,resolveScope,scopeKey} from './access';
 import {getDefinition,getRevision,listDefinitions,listBindings,validateStoredDefinition,saveBinding,type DefinitionKind} from './definitions';
 import {contentHash,getTelemetryCatalog} from './catalog';
+import {getTelemetryEventMappingsByIds} from './catalogRouting';
 import type {TelemetrySignal} from './signals';
 
 export async function exportTelemetry(db:Db,access:TelemetryAccess,raw:unknown){
@@ -47,7 +48,7 @@ export async function exportTelemetry(db:Db,access:TelemetryAccess,raw:unknown){
   const signalRegistry=signals.size?await db.all<{id:string;retired_at:unknown}>('SELECT id,retired_at FROM telemetry_catalog_entries WHERE tenant_id=? AND id=ANY(?::text[])',access.tenantId,[...signals.keys()]):[];
   for(const signal of signalRegistry)if(signal.retired_at)signals.set(signal.id,{...signals.get(signal.id)!,retired:true});
   for(const resource of resources)for(const revision of resource.revisions)if(revision.dependencies?.signals)revision.dependencies.signals=revision.dependencies.signals.map((signal:TelemetrySignal)=>signals.get(signal.id)??signal);
-  const eventMappings=eventMappingIds.size?(await getTelemetryCatalog(db,access,scope)).event_mappings.filter(mapping=>eventMappingIds.has(mapping.source.id)):[];
+  const eventMappings=await getTelemetryEventMappingsByIds(db,access,scope,[...eventMappingIds]);
   return {format:'agent-hq-telemetry',version:1,exported_at:new Date().toISOString(),resources,catalog:[...catalog.values()],bindings,
     ...(eventMappingIds.size?{event_mappings:eventMappings}:{}),...(signals.size?{signals:[...signals.values()]}:{})};
 }
@@ -58,7 +59,9 @@ export async function importTelemetry(db:Db,access:TelemetryAccess,raw:unknown){
   const input=z.object({bundle:z.unknown(),scope:scopeSchema,reference_map:z.record(z.string(),z.string()).default({})}).strict().parse(raw);
   if(Buffer.byteLength(JSON.stringify(input.bundle),'utf8')>4*1024*1024)throw new TelemetryError('query_limit_exceeded','Telemetry packages are limited to 4 MB.');
   const bundle=bundleSchema.parse(input.bundle),scope=await resolveScope(db,access,input.scope,true);
-  const catalog=await getTelemetryCatalog(db,access,scope),fieldIds=new Set(catalog.fields.map(field=>field.id));
+  const mappingTargets=Object.values(input.reference_map).map(Number).filter(id=>Number.isSafeInteger(id)&&id>0);
+  const destinationCatalog=async(tx:Db,selectedScope:typeof scope)=>({...await getTelemetryCatalog(tx,access,selectedScope),event_mappings:await getTelemetryEventMappingsByIds(tx,access,selectedScope,mappingTargets)});
+  const catalog=await destinationCatalog(db,scope),fieldIds=new Set(catalog.fields.map(field=>field.id));
   const remap:Record<string,string>={...input.reference_map};
   const allIds=new Set<string>();
   for(const resource of bundle.resources){
@@ -173,7 +176,7 @@ export async function importTelemetry(db:Db,access:TelemetryAccess,raw:unknown){
       let targetScope=scope;
       try{targetScope=await resolveScope(tx,access,destinationScope(resource.scope),true);}catch(error){issues.set(id,[`Scope mapping: ${error instanceof Error?error.message:'Destination scope requires review.'}`]);}
       targetScopes.set(id,targetScope);
-      const resourceCatalog=await getTelemetryCatalog(tx,access,targetScope);
+      const resourceCatalog=await destinationCatalog(tx,targetScope);
       const conflict=await tx.get('SELECT id FROM telemetry_definitions WHERE tenant_id=? AND kind=? AND key=? AND scope_key=?',access.tenantId,resource.kind,resource.key,scopeKey(targetScope));
       const importedKey=conflict?`${resource.key.slice(0,110)}_${id.slice(0,8)}`:resource.key;
       await tx.run(`INSERT INTO telemetry_definitions(id,tenant_id,kind,key,name,description,scope,scope_key,project_id,validation_state) VALUES(?,?,?,?,?,?,?::jsonb,?,?,'draft')`,id,access.tenantId,resource.kind,importedKey,resource.name,resource.description??'',JSON.stringify(targetScope),scopeKey(targetScope),targetScope.project_id??null);
@@ -206,7 +209,7 @@ export async function importTelemetry(db:Db,access:TelemetryAccess,raw:unknown){
     const bindings:any[]=[];
     for(const binding of bundle.bindings??[]){
       try{
-        const bindingScope=await resolveScope(tx,access,destinationScope(binding.scope),true),bindingCatalog=await getTelemetryCatalog(tx,access,bindingScope);
+        const bindingScope=await resolveScope(tx,access,destinationScope(binding.scope),true),bindingCatalog=await destinationCatalog(tx,bindingScope);
         const mapped=remapValue(binding,undefined,bindingCatalog,bindingScope);mapped.scope=bindingScope;
         const saved=await saveBinding(tx,access,mapped);bindings.push(saved.binding);
       }catch(error){bindings.push({family_key:binding.family_key,activated:false,reason:error instanceof Error?error.message:'Binding requires review.'});}

@@ -1,7 +1,13 @@
 import type { Db } from '../../db/adapter/types';
-import { annotateTransitionScope } from '../routing/scope';
-import { TelemetryError, type TelemetryAccess, type TelemetryScope } from './access';
+import { z } from 'zod';
+import { resolveScope, type TelemetryAccess, type TelemetryScope } from './access';
 import type { Predicate } from './contracts';
+
+export const routingCatalogPageSchema=z.object({
+  limit:z.coerce.number().int().min(1).max(200).default(200),
+  offset:z.coerce.number().int().min(0).max(Number.MAX_SAFE_INTEGER).default(0),
+});
+export type RoutingCatalogPage={limit?:number;offset?:number};
 
 /** Inspectable predicate templates over recorded evidence, not new routing rules. */
 export interface TelemetryRoutingSignal {
@@ -22,43 +28,51 @@ function strings(value:unknown):string[] {
   return Array.isArray(value)?value.filter((entry):entry is string=>typeof entry==='string'):[];
 }
 
-export async function getRoutingCatalogSignals(db:Db,access:TelemetryAccess,scope:TelemetryScope,allowedTypes:Set<string>){
+export async function getRoutingCatalogSignals(db:Db,access:TelemetryAccess,scope:TelemetryScope,allowedTypes:Set<string>,page:RoutingCatalogPage={},eventMappingIds?:number[]){
+  const {limit,offset}=routingCatalogPageSchema.parse(page);
   const project=scope.project_id??access.projectId;
   async function rows(table:'workflow_task_transitions'|'external_event_mappings',columns:string,inheritGlobal:boolean){
+    if(eventMappingIds&&table==='workflow_task_transitions')return [];
     const projectExpr='COALESCE(r.project_id,s.project_id)',typeExpr='COALESCE(r.workflow_type,s.workflow_type)';
     const clauses=['r.tenant_id=?','(r.workflow_id IS NULL OR s.id IS NOT NULL)',
       `(r.project_id IS NULL OR p.id IS NOT NULL)`,
       '(r.workflow_id IS NULL OR r.project_id IS NULL OR r.project_id=s.project_id)',
       '(r.workflow_id IS NULL OR r.workflow_type IS NULL OR r.workflow_type=s.workflow_type)'];
     const params:unknown[]=[access.tenantId];
+    if(eventMappingIds){clauses.push('r.id=ANY(?::bigint[])');params.push(eventMappingIds);}
     if(project!=null){clauses.push(`(${projectExpr}=?${inheritGlobal?` OR ${projectExpr} IS NULL`:''})`);params.push(project);}
     if(scope.workflow_type){clauses.push(`(${typeExpr}=?${inheritGlobal?` OR ${typeExpr} IS NULL`:''})`);params.push(scope.workflow_type);}
     if(scope.workflow_id){clauses.push('(r.workflow_id IS NULL OR r.workflow_id=?)');params.push(scope.workflow_id);}
     else if(scope.workflow_type)clauses.push('r.workflow_id IS NULL');
     if(scope.task_type){clauses.push('(r.task_type IS NULL OR r.task_type=?)');params.push(scope.task_type);}
+    // Apply authorization before pagination so inaccessible types cannot consume a page.
+    clauses.push(`(${typeExpr} IS NULL OR ${typeExpr}=ANY(?::text[]))`);params.push([...allowedTypes]);
+    // Compute precedence across the full scoped set, including disabled overrides and
+    // overrides on later pages. LIMIT must not change which default is effective.
+    const override=table==='workflow_task_transitions'&&scope.workflow_id!=null
+      ? "BOOL_OR(r.workflow_id IS NOT NULL) OVER (PARTITION BY COALESCE(r.task_type,''),r.from_status,r.outcome)"
+      : 'FALSE';
     const result=await db.all<Record<string,any>>(`SELECT r.id,r.workflow_id AS workflow_id,${projectExpr} AS project_id,
-      ${typeExpr} AS workflow_type,r.task_type,r.enabled,r.priority,${columns}
+      ${typeExpr} AS workflow_type,r.task_type,r.enabled,r.priority,${override} AS has_workflow_override,${columns}
       FROM ${table} r LEFT JOIN workflows s ON s.id=r.workflow_id AND s.tenant_id=r.tenant_id
       LEFT JOIN projects p ON p.id=r.project_id AND p.tenant_id=r.tenant_id
-      WHERE ${clauses.join(' AND ')} ORDER BY r.priority DESC,r.id LIMIT 1001`,...params);
-    if(result.length>1000)throw new TelemetryError('query_limit_exceeded','Routing catalog exceeds 1,000 entries. Narrow the workflow scope.',413);
-    return result.filter(row=>!row.workflow_type||allowedTypes.has(row.workflow_type));
+      WHERE ${clauses.join(' AND ')} ORDER BY r.priority DESC,r.id LIMIT ? OFFSET ?`,...params,limit+1,offset);
+    return result;
   }
   const transitionRows=await rows('workflow_task_transitions','r.from_status,r.outcome,r.to_status',false);
-  const annotated=annotateTransitionScope(transitionRows.map(row=>({...row,workflow_id:row.workflow_id,
-    rule_scope_kind:row.workflow_id==null?'workflow_type_default':'workflow_override'})),scope.workflow_id??null);
-  const routing_transitions=annotated.map(raw=>{
-    const row=raw as Record<string,any>,signalScope=scopeOf(row);
+  const routing_transitions=transitionRows.slice(0,limit).map(row=>{
+    const signalScope=scopeOf(row),isOverride=scope.workflow_id!=null&&Number(row.workflow_id)===scope.workflow_id;
     return {id:`transition:${row.id}`,key:String(row.id),label:`${row.from_status} → ${row.to_status} (${row.outcome})`,
       scope:signalScope,source:{table:'workflow_task_transitions' as const,id:Number(row.id)},enabled:Number(row.enabled)===1,priority:Number(row.priority),
       from_status:row.from_status,outcome:row.outcome,to_status:row.to_status,
-      is_inherited:row.is_inherited,is_override:row.is_override,effective_for_workflow:row.effective_for_workflow,
+      is_inherited:row.workflow_id==null,is_override:isOverride,
+      effective_for_workflow:scope.workflow_id==null||isOverride||!row.has_workflow_override,
       predicate:inRecordedScope(signalScope,[{field:'event.type',op:'eq',value:'task.changed'},
         {field:'event.from_status',op:'eq',value:row.from_status},{field:'event.outcome',op:'eq',value:row.outcome},
         {field:'event.to_status',op:'eq',value:row.to_status}])} satisfies TelemetryRoutingSignal & Record<string,unknown>;
   });
   const mappingRows=await rows('external_event_mappings','r.source,r.event_name,r.status_includes_json,r.status_excludes_json,r.action_kind,r.action_target',true);
-  const event_mappings=mappingRows.map(row=>{
+  const event_mappings=mappingRows.slice(0,limit).map(row=>{
     const signalScope=scopeOf(row);
     return {id:`event_mapping:${row.id}`,key:String(row.id),label:`${row.event_name}${row.source?` (${row.source})`:''} → ${row.action_kind}${row.action_target?` ${row.action_target}`:''}`,
       scope:signalScope,source:{table:'external_event_mappings' as const,id:Number(row.id)},enabled:Number(row.enabled)===1,priority:Number(row.priority),
@@ -69,5 +83,24 @@ export async function getRoutingCatalogSignals(db:Db,access:TelemetryAccess,scop
         {field:'event.event',op:'eq',value:row.event_name},{field:'event.mapping_id',op:'eq',value:Number(row.id)},
         {field:'event.processing_state',op:'eq',value:'processed'}])} satisfies TelemetryRoutingSignal & Record<string,unknown>;
   });
-  return {routing_transitions,event_mappings};
+  const has_more=transitionRows.length>limit||mappingRows.length>limit;
+  return {routing_transitions,event_mappings,routing_pagination:{limit,offset,has_more,next_offset:has_more?offset+limit:null}};
+}
+
+/** Routing discovery is optional; field discovery and metric evaluation do not depend on it. */
+export async function getTelemetryRoutingCatalog(db:Db,access:TelemetryAccess,rawScope:TelemetryScope={},page:RoutingCatalogPage={},eventMappingIds?:number[]){
+  const scope=await resolveScope(db,access,rawScope),project=scope.project_id??access.projectId;
+  const types=await db.all<{key:string}>(`SELECT key FROM workflow_types WHERE tenant_id=?
+    ${project==null?'':'AND (project_id IS NULL OR project_id=?)'}
+    ${scope.workflow_type?'AND key=?':''}`,access.tenantId,...(project==null?[]:[project]),...(scope.workflow_type?[scope.workflow_type]:[]));
+  return {...await getRoutingCatalogSignals(db,access,scope,new Set(types.map(type=>type.key)),page,eventMappingIds),scope};
+}
+
+/** Import/export resolves only referenced IDs, independently of their discovery page. */
+export async function getTelemetryEventMappingsByIds(db:Db,access:TelemetryAccess,scope:TelemetryScope,ids:number[]){
+  const unique=[...new Set(ids)],mappings:Awaited<ReturnType<typeof getTelemetryRoutingCatalog>>['event_mappings']=[];
+  for(let start=0;start<unique.length;start+=200){
+    mappings.push(...(await getTelemetryRoutingCatalog(db,access,scope,{limit:200},unique.slice(start,start+200))).event_mappings);
+  }
+  return mappings;
 }
