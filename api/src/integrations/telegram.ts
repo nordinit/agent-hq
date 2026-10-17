@@ -35,17 +35,23 @@ async function getCredentials(): Promise<{ token: string; chatId: string } | nul
 }
 
 export async function notifyTelegram(text: string): Promise<void> {
+  const result = await sendTelegramNotification(text);
+  if (!result.ok) console.error(`[telegram] ${result.error}`);
+}
+
+/** Acknowledged delivery for durable outboxes; never expose the bot URL/token in errors. */
+export async function sendTelegramNotification(text: string): Promise<{ ok: true } | { ok: false; error: string }> {
   const creds = await getCredentials();
 
   if (!creds) {
-    console.error('[telegram] Missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID — skipping notification');
-    return;
+    return { ok: false, error: 'Telegram is not configured' };
   }
 
   try {
     const url = `https://api.telegram.org/bot${creds.token}/sendMessage`;
     const res = await fetch(url, {
       method: 'POST',
+      signal: AbortSignal.timeout(10_000),
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         chat_id: creds.chatId,
@@ -54,11 +60,10 @@ export async function notifyTelegram(text: string): Promise<void> {
       }),
     });
 
-    if (!res.ok) {
-      const body = await res.text();
-      console.error(`[telegram] sendMessage failed (${res.status}): ${body}`);
-    }
-  } catch (err) {
-    console.error('[telegram] Notification error:', err);
+    const body = await res.json() as { ok?: boolean };
+    if (!res.ok || body.ok !== true) return { ok: false, error: `Telegram delivery was not acknowledged (HTTP ${res.status})` };
+    return { ok: true };
+  } catch {
+    return { ok: false, error: 'Telegram delivery failed or timed out' };
   }
 }

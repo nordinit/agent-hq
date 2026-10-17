@@ -7,6 +7,7 @@ import os from 'os';
 import path from 'path';
 import { ensureMaterializedMcpApiKeyForAgent } from '../lib/mcpApiAuth';
 import { runMaintenanceCommand, serializeOpenClawMaintenance } from './openclaw/maintenanceCommand';
+import { assertRecoveryActive } from '../lib/mcpRecovery';
 import { reconcileOpenClawMcp } from '../services/openclawMcpReconciliation';
 import { parseAgentSessionKey, resolveRuntimeAgentSlug } from '../lib/sessionKeys';
 import { fetchEffectiveAgentMcpRows, findAgentIdsWithEffectiveMcpServer } from '../domains/teams/effectiveCapabilities';
@@ -1424,7 +1425,13 @@ export async function materializeAgentMcpConfig(params: {
 }
 
 export async function syncAssignedMcpForAgent(params: Parameters<typeof syncAssignedMcpForAgentUnlocked>[0]): Promise<AgentMcpSyncResult> {
-  return serializeOpenClawMaintenance(`${resolveOpenClawConfigPath()}:agent:${params.agentId}`, () => syncAssignedMcpForAgentUnlocked(params));
+  const key = `${resolveOpenClawConfigPath()}:agent:${params.agentId}`;
+  return serializeOpenClawMaintenance(key, () => params.db.withTransaction(async lock => {
+    const owned = await lock.value<boolean>('SELECT pg_try_advisory_xact_lock(hashtextextended(?, 0))', `mcp-materialization:${key}`);
+    if (!owned) throw new Error('Another owner is applying this agent MCP configuration');
+    await assertRecoveryActive(params.db, params.recoveryId);
+    return syncAssignedMcpForAgentUnlocked(params);
+  }));
 }
 
 async function syncAssignedMcpForAgentUnlocked(params: {
@@ -1444,8 +1451,10 @@ async function syncAssignedMcpForAgentUnlocked(params: {
   // Dispatch can pre-materialize workspace files without mutating global plugin state.
   activateOpenClawWorkspaceBundle?: boolean;
   refreshPluginRegistry?: boolean;
-  /** Explicit operator retry after inspecting an uncertain gateway update. Never set by dispatch. */
+  /** Operator retry or deadline-bound automatic recovery. Never set by dispatch. */
   forceReconciliation?: boolean;
+  /** Durable automatic recovery episode; all mutations must fit its original deadline. */
+  recoveryId?: number;
   refreshOpenClawPluginRegistry?: OpenClawPluginRegistryRefreshFn;
 }): Promise<AgentMcpSyncResult> {
   const agent = await params.db.get(`
@@ -1636,6 +1645,7 @@ async function syncAssignedMcpForAgentUnlocked(params: {
       await reconcileOpenClawMcp({
         db: params.db, agentId: agent.id, bundlePath: result.bundlePath,
         bundlePluginId: result.bundlePluginId!, configPath: result.openClawConfigPath, force: params.forceReconciliation,
+        recoveryId: params.recoveryId,
       });
     } catch (error) {
       result.ok = false;

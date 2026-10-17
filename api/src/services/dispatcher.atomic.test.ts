@@ -76,6 +76,7 @@ import { resolveRuntime } from '../runtimes';
 import type { AgentRuntime } from '../runtimes';
 import { dispatchTaskToJob, runDispatcher } from './dispatcher';
 import { parseTimestamp, timestampFromEpochMs } from '../lib/timestamps';
+import { beginMcpRecovery, resolveMcpRecovery } from '../lib/mcpRecovery';
 
 const mockedResolveRuntime = resolveRuntime as jest.MockedFunction<typeof resolveRuntime>;
 const mockedTaskNotifications = jest.requireMock('../lib/taskNotifications') as {
@@ -175,6 +176,20 @@ it('two concurrent dispatch passes create one claim, preparation and runtime lau
   expect(dispatch).toHaveBeenCalledTimes(1);
 });
 
+it('holds routed tasks before instance creation during recovery and resumes through normal ownership checks', async () => {
+  await beginMcpRecovery(db, '/gateway', 1, 'Gateway update interrupted');
+  const results = await Promise.all([runDispatcher(db, 86), runDispatcher(db, 86)]);
+  expect(results.reduce((n, r) => n + r.dispatched, 0)).toBe(0);
+  expect(await db.value('SELECT count(*) FROM job_instances')).toBe(0);
+  expect(await db.value('SELECT count(*) FROM openclaw_mcp_recovery_tasks WHERE task_id = 7')).toBe(1);
+  expect(await db.value('SELECT status FROM tasks WHERE id = 7')).toBe('ready');
+  expect(prepare).not.toHaveBeenCalled();
+  await resolveMcpRecovery(db, '/gateway', 1);
+  expect((await runDispatcher(db, 86)).dispatched).toBe(1);
+  await waitForInstanceDispatchPersistence(db, 1);
+  expect(dispatch).toHaveBeenCalledTimes(1);
+});
+
 it('reserves agent capacity across different tasks', async () => {
   await db.run(`INSERT INTO tasks (id, tenant_id, title, status, project_id, workflow_id, task_type)
     VALUES (8, 1, 'Other search', 'ready', 86, 10, 'backend')`);
@@ -266,4 +281,15 @@ it('shares the claim protocol with the review reconciler', async () => {
   if (regular.dispatched) await waitForInstanceDispatchPersistence(db, 1);
   expect(await db.value('SELECT count(*) FROM job_instances')).toBe(1);
   expect(regular.dispatched + reviewDispatch.mock.calls.length).toBe(1);
+});
+
+it('both dispatch checks respect the same recovery blocker before creating review instances', async () => {
+  await db.run("UPDATE tasks SET status = 'review', assigned_agent_id = 1 WHERE id = 7");
+  await db.run("UPDATE workflow_task_routing_rules SET status = 'review' WHERE agent_id = 1");
+  await beginMcpRecovery(db, '/gateway', 1, 'interrupted');
+  const reviewDispatch = jest.fn(async () => undefined);
+  await Promise.all([runDispatcher(db, 86), reconcileReviewQaRouting({ dispatchInstance: reviewDispatch }, db)]);
+  expect(await db.value('SELECT count(*) FROM job_instances')).toBe(0);
+  expect(reviewDispatch).not.toHaveBeenCalled();
+  expect(await db.value('SELECT count(*) FROM openclaw_mcp_recovery_tasks WHERE task_id=7')).toBe(1);
 });

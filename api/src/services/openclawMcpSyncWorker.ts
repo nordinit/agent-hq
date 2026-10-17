@@ -1,6 +1,7 @@
 import type { Db } from '../db/adapter/types';
 import { syncAssignedMcpForAgent } from '../runtimes/mcpMaterialization';
 import { redactSensitiveRuntimeText } from '../runtimes/sensitiveText';
+import { startMcpRecoveryWorker } from './openclawMcpRecoveryWorker';
 
 /** Opt-in only after the deployment has assigned this API exclusive maintenance ownership. */
 export function assertOpenClawMaintenanceOwner(): void {
@@ -13,7 +14,9 @@ export function assertOpenClawMaintenanceOwner(): void {
 export async function drainOpenClawMcpSyncQueue(db: Db): Promise<void> {
   const jobs = await db.all<{ agent_id: number; revision: number }>(`
     SELECT agent_id, revision FROM openclaw_mcp_sync_queue
-    WHERE attempts < 3 AND retry_at <= now() ORDER BY retry_at, agent_id LIMIT 32`);
+    WHERE attempts < 3 AND retry_at <= now()
+      AND NOT EXISTS (SELECT 1 FROM openclaw_mcp_recovery r WHERE r.agent_id = openclaw_mcp_sync_queue.agent_id AND r.resolved_at IS NULL)
+    ORDER BY retry_at, agent_id LIMIT 32`);
   for (const job of jobs) {
     try {
       // Keep publication, reconciliation and admission under the same existing per-agent queue.
@@ -39,6 +42,7 @@ export function startOpenClawMcpSyncWorker(db: Db): () => void {
   if (process.env.AGENT_HQ_OPENCLAW_MCP_RECONCILIATION_MODE !== 'on-change'
     || process.env.AGENT_HQ_DISABLE_OPENCLAW_PLUGIN_REGISTRY_REFRESH === '1') return () => {};
   let stopped = false;
+  const stopRecovery = startMcpRecoveryWorker(db);
   let timer: NodeJS.Timeout | undefined;
   const tick = async () => {
     try { await drainOpenClawMcpSyncQueue(db); }
@@ -47,5 +51,5 @@ export function startOpenClawMcpSyncWorker(db: Db): () => void {
   };
   // Start only after HTTP listen, so MCP callbacks can reach the API.
   void tick();
-  return () => { stopped = true; if (timer) clearTimeout(timer); };
+  return () => { stopped = true; stopRecovery(); if (timer) clearTimeout(timer); };
 }

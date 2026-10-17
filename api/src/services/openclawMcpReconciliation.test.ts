@@ -4,6 +4,7 @@ import path from 'path';
 import { getDb } from '../db/client';
 import { setupTestDb, teardownTestDb } from '../db/testDb';
 import { reconcileOpenClawMcp, resetOpenClawMcpReconciliationForTests } from './openclawMcpReconciliation';
+import { getAgentMcpRecovery } from '../lib/mcpRecovery';
 
 const originalMode = process.env.AGENT_HQ_OPENCLAW_MCP_RECONCILIATION_MODE;
 let mockEpoch = 1;
@@ -50,6 +51,31 @@ describe('OpenClaw MCP reconciliation', () => {
     expect(mockRpc).toHaveBeenCalledTimes(1);
     expect(mockRpc).toHaveBeenCalledWith(expect.objectContaining({ method: 'plugins.reload', retryOnDisconnect: false }));
     expect(await getDb().get('SELECT state, desired_revision, applied_revision FROM openclaw_mcp_reconciliation')).toEqual(expect.objectContaining({ state: 'applied' }));
+  });
+
+  it('automatically repairs an uncertain update only after gateway inspection and verified receipt', async () => {
+    const params = input();
+    mockRpc.mockResolvedValueOnce({ ok: false, error: 'disconnected' });
+    await expect(reconcileOpenClawMcp(params)).rejects.toThrow('disconnected');
+    const incident = await getAgentMcpRecovery(getDb(), 1);
+    mockRpc.mockResolvedValueOnce({ ok: true, payload: { generation: 4 } });
+    await reconcileOpenClawMcp({ ...params, force: true, recoveryId: incident!.id });
+    expect(mockRpc.mock.calls.map(c => c[0].method)).toEqual(['plugins.reload', 'plugins.list', 'plugins.reload']);
+    expect(await getAgentMcpRecovery(getDb(), 1)).toBeNull();
+    expect(await getDb().get('SELECT state,recovery_required FROM openclaw_mcp_reconciliation'))
+      .toEqual({ state: 'applied', recovery_required: false });
+  });
+
+  it('never sends maintenance after a recovery deadline or accepts an inspection without a generation', async () => {
+    const params = input();
+    mockRpc.mockResolvedValueOnce({ ok: false, error: 'disconnected' });
+    await expect(reconcileOpenClawMcp(params)).rejects.toThrow();
+    const incident = await getAgentMcpRecovery(getDb(), 1);
+    mockRpc.mockResolvedValueOnce({ ok: true, payload: {} });
+    await expect(reconcileOpenClawMcp({ ...params, force: true, recoveryId: incident!.id })).rejects.toThrow('plugin state');
+    await getDb().run("UPDATE openclaw_mcp_recovery SET deadline_at=now()-interval '1 second'");
+    await expect(reconcileOpenClawMcp({ ...params, force: true, recoveryId: incident!.id })).rejects.toThrow('deadline');
+    expect(mockRpc.mock.calls.map(c => c[0].method)).toEqual(['plugins.reload', 'plugins.list']);
   });
 
   it('batches different agents and shares same-revision waiters', async () => {

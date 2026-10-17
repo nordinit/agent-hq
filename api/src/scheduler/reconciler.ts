@@ -1,4 +1,5 @@
 import { getDb } from '../db/client';
+import { getAgentMcpRecovery, attachRecoveryTask } from '../lib/mcpRecovery';
 import { loadTaskRecurrenceMetadata } from '../domains/tasks/recurrence';
 import {
   runDispatcher, type DispatchResult,
@@ -421,6 +422,10 @@ export async function reconcileReviewQaRouting(
         || current.active_instance_id != null || current.workflow_id !== originalTask.workflow_id
         || await hasTaskLiveInstance(db, current.id) || await isAgentBusy(db, agent!.id)) return null;
       const task = await reassignTaskIfNeeded(db, current, routedAgentId);
+      if ((agent!.runtime_type ?? 'openclaw') === 'openclaw') {
+        const recovery = await getAgentMcpRecovery(db, agent!.id);
+        if (recovery) { await attachRecoveryTask(db, recovery, task.id); return null; }
+      }
       const supportsDurableRunId = await tableHasColumn(db, 'job_instances', 'durable_run_id');
       const instanceResult = supportsDurableRunId
         ? await db.run(`

@@ -26,6 +26,7 @@ import {
   TaskFieldsSection,
 } from './TaskDetailSections';
 import { ContextViewer } from './ContextViewer';
+import { RuntimeRecoveryBanner } from '@/components/RuntimeRecoveryBanner';
 
 const PRIORITY_BADGE: Record<string, string> = {
   low: 'bg-slate-700 text-slate-300',
@@ -1355,6 +1356,7 @@ export function TaskDetailPanel({ task, statuses, onClose, onSave, onDelete, onC
                   </section>
                   {descriptionBlock}
                   <NeedsAttentionSection task={localTask} />
+                  <RuntimeRecoveryBanner recovery={localTask.runtime_recovery} />
                   <FailureStateSection task={localTask} history={historyEntries} outcomeMap={outcomeMap} />
                   <TaskFieldsSection
                     fields={resolvedFieldSchema?.fields ?? localTask.resolved_custom_field_schema?.fields ?? []}
@@ -1484,6 +1486,7 @@ export function TaskDetailPanel({ task, statuses, onClose, onSave, onDelete, onC
               {pausedBanner}
               {observabilityBlock}
               <NeedsAttentionSection task={localTask} />
+              <RuntimeRecoveryBanner recovery={localTask.runtime_recovery} />
 
               <FailureStateSection task={localTask} history={historyEntries} outcomeMap={outcomeMap} />
 

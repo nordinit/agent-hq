@@ -1471,6 +1471,7 @@ export default function AgentsPage() {
 
               <div className="flex items-center gap-2 flex-wrap">
                 <Badge variant={agent.status}>{agent.status}</Badge>
+                {agent.runtime_recovery && <span className="text-xs text-amber-300">{agent.runtime_recovery.state === 'attention' ? 'Recovery needs attention' : 'Recovering tools'}</span>}
                 <code className="text-xs text-slate-500 bg-slate-700/50 px-1.5 py-0.5 rounded">
                   {agent.session_key}
                 </code>

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Bell, BellOff, CheckCircle2, Loader2, RefreshCw, Send, ToggleLeft, ToggleRight } from 'lucide-react';
 import { parseDbDate } from '@/lib/date';
+import { NotificationLinks } from '@/components/NotificationToasts';
 
 interface NotificationPreferences {
   enabled: boolean;
@@ -20,6 +21,8 @@ interface NotificationRecord {
   source: string | null;
   outlet: string | null;
   created_at: string;
+  metadata_json?: string;
+  delivery?: { state: string; last_error: string | null } | null;
 }
 
 interface NotificationsResponse {
@@ -282,6 +285,8 @@ export default function NotificationsSettingsPage() {
                     )}
                   </div>
                   <p className="mt-1 whitespace-pre-line text-sm leading-5 text-slate-300">{record.body}</p>
+                  <NotificationLinks metadata={record.metadata_json} />
+                  {record.delivery && <p className="mt-2 text-xs text-slate-400">Telegram: {record.delivery.state}{record.delivery.last_error ? ` — ${record.delivery.last_error}` : ''}</p>}
                 </div>
                 <div className="text-xs text-slate-500 md:text-right">
                   <div>{formatTime(record.created_at)}</div>

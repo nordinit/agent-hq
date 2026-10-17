@@ -5,6 +5,7 @@ import { recordDispatchStartupFailureNotification } from '../lib/dispatchStartup
 import { recordSkillMaterializationIssues } from '../lib/skillMaterializationNotifications';
 import { resolveRepoConfig } from '../lib/repoConfig';
 import { writeTaskHistory, writeTaskStatusChange } from '../domains/tasks/history';
+import { getAgentMcpRecovery, attachRecoveryTask, recoveryLabel } from '../lib/mcpRecovery';
 import { syncTaskActiveAgentFromInstance } from '../domains/tasks/ownership';
 import { resolveRuntime } from '../runtimes';
 import { resolveRuntimeProviderDispatchSelection } from '../domains/providers/runtimeAdapters';
@@ -560,7 +561,9 @@ async function persistDispatchStartupFailure(
           `Next owner: ${classification.nextOwner}`,
         ].join('\n'));
 
-  await recordDispatchStartupFailureNotification(db, {
+  // MCP recovery owns a single, delayed escalation for the shared agent/gateway incident.
+  const recoveringMcp = params.matchedAgentId != null && await getAgentMcpRecovery(db, params.matchedAgentId);
+  if (!recoveringMcp) await recordDispatchStartupFailureNotification(db, {
         taskId: params.taskId,
         tenantId: (await resolveRuntimeTenantId(db, { taskId: params.taskId })) ?? params.tenantId ?? null,
         matchedAgentId: params.matchedAgentId,
@@ -1865,6 +1868,10 @@ async function claimTaskDispatch(db: Db, job: JobRow, task: CandidateTask, routi
     if (!current || current.active_instance_id != null || current.status !== task.status
       || current.workflow_id !== task.workflow_id || current.task_type !== task.task_type
       || current.project_id !== task.project_id || current.tenant_id !== task.tenant_id) return null;
+    if ((job.runtime_type ?? 'openclaw') === 'openclaw') {
+      const recovery = await getAgentMcpRecovery(db, job.agent_id);
+      if (recovery) { await attachRecoveryTask(db, recovery, task.id); return null; }
+    }
     if (await hasActiveInstance(db, job.agent_id) || await hasTaskLiveInstance(db, task.id)) return null;
     // Recheck pause, retry cooldown, workflow and dependency gates on the locked
     // task. The earlier list response is only a routing candidate snapshot.
@@ -2507,6 +2514,13 @@ export interface DispatchInstanceParams {
  */
 export async function dispatchInstance(params: DispatchInstanceParams): Promise<void> {
   const db = getDb();
+  if ((params.runtimeType ?? 'openclaw') === 'openclaw') {
+    const recovery = await getAgentMcpRecovery(db, params.agentId);
+    if (recovery) {
+      if (params.taskId != null) await attachRecoveryTask(db, recovery, params.taskId);
+      throw new Error(`${recoveryLabel(recovery)} (recovery #${recovery.id}): ${recovery.last_error}`);
+    }
+  }
   // Canonical (offset-less UTC) so this write of job_instances.dispatched_at is
   // indistinguishable from PostgreSQL defaults and inline canonical SQL writes.
   const now = nowTimestamp();

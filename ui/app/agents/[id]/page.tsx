@@ -1,4 +1,5 @@
 'use client';
+import { RuntimeRecoveryBanner } from '@/components/RuntimeRecoveryBanner';
 import { McpToolAccessPreview } from '@/components/agents/McpToolAccessPreview';
 import { formatDateTime, formatTime } from '@/lib/date';
 
@@ -1476,6 +1477,7 @@ export default function AgentDetailPage() {
         </div>
       </div>
 
+      <RuntimeRecoveryBanner recovery={agent.runtime_recovery} />
       {(runtimeDiagnostic || runtimeDiagnosticError) && (
         <Card className={runtimeDiagnostic?.ok ? 'border-emerald-500/30' : 'border-red-500/30'}>
           <div className="flex items-center justify-between gap-3 mb-3">

@@ -1,3 +1,4 @@
+import { getTaskMcpRecovery, recoveryLabel } from '../../lib/mcpRecovery';
 import { getDb } from '../../db/client';
 import { taskRecurrenceMetadata } from './recurrence';
 import { evaluateTaskIntegrity } from '../../lib/taskRelease';
@@ -292,6 +293,7 @@ async function loadTask(taskId: number): Promise<RecordLike | null> {
 
   return {
     ...publicTask,
+    runtime_recovery: await getTaskMcpRecovery(db, task),
     ...taskRecurrenceMetadata(task),
     ...await evaluateTaskIntegrity(canonicalTask as { status?: string | null; task_type?: string | null }, db),
     custom_fields: customFields,
@@ -784,6 +786,9 @@ function buildTimeline(notes: ClassifiedNote[], events: Array<RecordLike>, limit
 }
 
 function deriveNextAction(task: RecordLike, blockerContext: RecordLike | null, leaseContext: RecordLike | null, runState: RecordLike | null): string | null {
+  if (task.runtime_recovery) return asRecord(task.runtime_recovery).state === 'attention'
+    ? 'Operator: inspect the agent tool configuration recovery and retry recovery.'
+    : 'Wait for automatic tool configuration recovery; task dispatch is blocked.';
   const status = asString(task.status) ?? 'unknown';
   const customFields = asRecord(task.custom_fields);
   if (blockerContext && ['blocked', 'failed', 'stalled'].includes(status)) {
@@ -885,7 +890,14 @@ export async function buildTaskContext(taskId: number, mode: TaskContextMode = '
 
   const meaningfulNotes = buildMeaningfulNotesSummary(notes);
   const meaningfulEvents = buildMeaningfulEventSummary(history, externalEvents, normalized.includeNoisyEvents);
-  const blockerContext = deriveBlockerContext(task, meaningfulNotes, meaningfulEvents, runs);
+  let blockerContext = deriveBlockerContext(task, meaningfulNotes, meaningfulEvents, runs);
+  if (task.runtime_recovery) {
+    const recovery = task.runtime_recovery as Awaited<ReturnType<typeof getTaskMcpRecovery>>;
+    if (recovery) {
+      task.failure_detail = `${recoveryLabel(recovery)}: ${recovery.last_error}`;
+      blockerContext = { ...blockerContext, failure_detail: task.failure_detail, runtime_recovery: recovery };
+    }
+  }
   const leaseContext = deriveLeaseContext(task, externalEvents);
   const runState = latestRunState(task, runs);
   const timeline = buildTimeline(meaningfulNotes, meaningfulEvents, normalized.timelineLimit);

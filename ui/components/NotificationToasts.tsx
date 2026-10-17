@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Bell, X } from 'lucide-react';
+import Link from 'next/link';
 import { parseDbDate } from '@/lib/date';
 
 interface NotificationPreferences {
@@ -19,6 +20,8 @@ interface NotificationRecord {
   source: string | null;
   outlet: string | null;
   created_at: string;
+  metadata_json?: string;
+  delivery?: { state: string; last_error: string | null } | null;
 }
 
 interface NotificationsResponse {
@@ -115,6 +118,8 @@ export default function NotificationToasts() {
                 <span className="text-xs text-slate-500">{formatTime(record.created_at)}</span>
               </div>
               <p className="mt-1 line-clamp-3 whitespace-pre-line text-xs leading-5 text-slate-300">{record.body}</p>
+              <NotificationLinks metadata={record.metadata_json} />
+              {record.delivery?.last_error && <p className="mt-1 text-xs text-red-300">Telegram delivery pending: {record.delivery.last_error}</p>}
               {(record.outlet || record.source) && (
                 <p className="mt-1 truncate text-xs text-slate-500">
                   {[record.outlet, record.source].filter(Boolean).join(' · ')}
@@ -126,4 +131,12 @@ export default function NotificationToasts() {
       ))}
     </div>
   );
+}
+
+export function NotificationLinks({ metadata }: { metadata?: string }) {
+  let links: Array<{ href: string; label: string }> = [];
+  try { links = JSON.parse(metadata ?? '{}').links ?? []; } catch { /* Older notifications have no links. */ }
+  if (!Array.isArray(links)) return null;
+  return <div className="mt-2 flex flex-wrap gap-2 text-xs text-amber-300">{links.filter(link => link && typeof link.label === 'string' && typeof link.href === 'string' && /^\/(agents|tasks)\/\d+$/.test(link.href)).map(link =>
+    <Link className="underline" href={link.href} key={link.href}>{link.label}</Link>)}</div>;
 }

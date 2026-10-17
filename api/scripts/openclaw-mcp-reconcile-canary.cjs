@@ -87,10 +87,13 @@ async function waitForGateway() {
   resetOpenClawMcpReconciliationForTests(); const count = calls.length;
   await assert.rejects(reconcileOpenClawMcp(input), /interrupted after mutation began/);
   assert.equal(calls.length, count);
-  // Explicit fixture recovery after inspecting the actual runtime; never a business action.
-  assert.equal((await originalRpc({ method: 'plugins.list', rpcParams: {} })).ok, true);
-  await reconcileOpenClawMcp({ ...input, force: true });
-  console.log('PASS: killed process after publication is held until inspected and explicitly reconciled');
+  // Automatic recovery inspects the running gateway and applies configuration through its
+  // atomic lifecycle lease, under the original incident deadline. No business task is started.
+  const incident = await db.get('SELECT id FROM openclaw_mcp_recovery WHERE agent_id=1 AND resolved_at IS NULL');
+  assert(incident, 'the interrupted update must create a durable recovery episode');
+  await reconcileOpenClawMcp({ ...input, force: true, recoveryId: incident.id });
+  assert.equal(await db.value('SELECT state FROM openclaw_mcp_recovery WHERE id=?', incident.id), 'resolved');
+  console.log('PASS: killed process after publication recovers automatically after gateway inspection and a new verified receipt');
 })().catch(error => { console.error(error); process.exitCode = 1; }).finally(async () => {
   gateway.__resetGatewayConnectionPoolForTests();
   if (process.connected) process.disconnect();

@@ -157,6 +157,13 @@ export async function listNotificationRecordsPage(
       LIMIT ?
     `, tenantId, pageSize) as NotificationRecord[];
 
+  const ids = records.map(record => record.id);
+  if (ids.length) {
+    const deliveries = await db.all<{ notification_id: number; state: string; last_error: string | null }>(
+      `SELECT notification_id, state, last_error FROM notification_deliveries WHERE notification_id IN (${ids.map(() => '?').join(',')})`, ...ids);
+    for (const record of records) Object.assign(record, { delivery: deliveries.find(d => d.notification_id === record.id) ?? null });
+  }
+
   const visibleRecords = records.slice(0, safeLimit);
   const nextRecord = records.length > safeLimit ? visibleRecords[visibleRecords.length - 1] : null;
   return {

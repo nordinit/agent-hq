@@ -4,8 +4,9 @@ import { gatewayRpcCall, getGatewayConnectionEpoch, type GatewayRpcCallResult } 
 import { serializeOpenClawMaintenance } from '../runtimes/openclaw/maintenanceCommand';
 import { openClawMcpRevision } from '../runtimes/openclaw/mcpRevision';
 import { redactSensitiveRuntimeText } from '../runtimes/sensitiveText';
+import { beginMcpRecovery, resolveMcpRecovery, assertRecoveryActive } from '../lib/mcpRecovery';
 
-type Input = { db: Db; agentId: number; bundlePath: string; bundlePluginId: string; configPath: string; force?: boolean };
+type Input = { db: Db; agentId: number; bundlePath: string; bundlePluginId: string; configPath: string; force?: boolean; recoveryId?: number };
 type Receipt = { revision: string; epoch: number };
 type Persisted = { desired_revision: string; applied_revision: string | null; metadata_revision: string | null;
   runtime_revision: string | null; state: string; operation_phase: string; attempts: number;
@@ -30,16 +31,19 @@ function rejectResponse(response: GatewayRpcCallResult): never {
   throw new ApplicationFailure(response.error ?? 'OpenClaw plugin application failed', !notApplied, retryable, failure?.retryAfterMs);
 }
 
-async function mutation(method: string, rpcParams: Record<string, unknown>): Promise<GatewayRpcCallResult> {
+async function mutation(method: string, rpcParams: Record<string, unknown>, input: Input): Promise<GatewayRpcCallResult> {
+  const remaining = await assertRecoveryActive(input.db, input.recoveryId);
   const before = getGatewayConnectionEpoch();
-  const response = await gatewayRpcCall({ method, rpcParams, timeoutMs: 90_000, retryOnDisconnect: false });
+  const response = await gatewayRpcCall({ method, rpcParams, timeoutMs: Math.min(90_000, remaining), retryOnDisconnect: false });
   if (response.ok && (!before || getGatewayConnectionEpoch() !== before)) {
     return { ok: false, error: 'OpenClaw connection changed during plugin application; inspect the runtime before retrying' };
   }
   return response;
 }
 
-function reloadPlugin(target: string, pluginId: string): Promise<GatewayRpcCallResult> {
+function reloadPlugin(target: string, pluginId: string, input: Input): Promise<GatewayRpcCallResult> {
+  // Recovery has its own deadline and must not share another caller's timeout/batch.
+  if (input.recoveryId != null) return serializeOpenClawMaintenance(target, () => mutation('plugins.reload', { plugins: [{ pluginId }] }, input));
   return new Promise(resolve => {
     let batch = batches.get(target);
     if (!batch) {
@@ -52,7 +56,7 @@ function reloadPlugin(target: string, pluginId: string): Promise<GatewayRpcCallR
           const ids = Array.from(queued.ids);
           if (ids.length > 64) return { ok: false, error: 'MCP update batch exceeds the gateway limit of 64 plugins',
             failure: { code: 'INVALID_REQUEST' } };
-          return mutation('plugins.reload', { plugins: ids.map(pluginId => ({ pluginId })) });
+          return mutation('plugins.reload', { plugins: ids.map(pluginId => ({ pluginId })) }, input);
         }).then(result => queued.waiters.forEach(waiter => waiter(result)), error => queued.waiters.forEach(waiter => waiter({ ok: false, error: String(error) })));
       }, 250);
     }
@@ -78,15 +82,21 @@ export async function reconcileOpenClawMcp(input: Input): Promise<void> {
   const key = `${target}:${input.agentId}`;
   const snapshot = openClawMcpRevision(input);
   const existing = pending.get(key);
-  if (existing?.revision === snapshot.revision) return existing.promise;
+  if (!input.force && existing?.revision === snapshot.revision) return existing.promise;
   if (existing) { await existing.promise.catch(() => undefined); return reconcileOpenClawMcp(input); }
-  const promise = reconcile(input, target, key, snapshot);
+  const promise = reconcile(input, target, key, snapshot).then(async () => {
+    await resolveMcpRecovery(input.db, target, input.agentId);
+  }).catch(async error => {
+    await beginMcpRecovery(input.db, target, input.agentId, error instanceof Error ? error.message : String(error));
+    throw error;
+  });
   pending.set(key, { revision: snapshot.revision, promise });
   try { await promise; }
   finally { if (pending.get(key)?.promise === promise) pending.delete(key); }
 }
 
 async function reconcile(input: Input, target: string, key: string, snapshot: ReturnType<typeof openClawMcpRevision>) {
+  await assertRecoveryActive(input.db, input.recoveryId);
   const { revision } = snapshot;
   let epoch = getGatewayConnectionEpoch();
   if (!epoch) {
@@ -95,6 +105,12 @@ async function reconcile(input: Input, target: string, key: string, snapshot: Re
     epoch = getGatewayConnectionEpoch();
   }
   if (!epoch) throw new Error('OpenClaw gateway connection could not be verified');
+  if (input.recoveryId != null) {
+    // Read running-gateway state, never infer readiness from a process or files on disk.
+    const inspection = await gatewayRpcCall({ method: 'plugins.list', timeoutMs: Math.min(10_000, await assertRecoveryActive(input.db, input.recoveryId)) });
+    const payload = (inspection.payload ?? inspection.result) as { generation?: number } | undefined;
+    if (!inspection.ok || typeof payload?.generation !== 'number') throw new Error(inspection.error ?? 'Gateway plugin state could not be verified');
+  }
   const current = applied.get(key);
   if (!input.force && current?.epoch === epoch && current.revision === revision) return;
 
@@ -121,17 +137,17 @@ async function reconcile(input: Input, target: string, key: string, snapshot: Re
     attempts = EXCLUDED.attempts, retry_at = NULL, recovery_required = false, error = NULL, updated_at = now()`,
   target, input.agentId, revision, revision, attempts);
   try {
-    const phase = async (value: string) => input.db.run(`UPDATE openclaw_mcp_reconciliation
-      SET operation_phase = ?, updated_at = now() WHERE target_key = ? AND agent_id = ? AND desired_revision = ?`, value, target, input.agentId, revision);
+    const phase = async (value: string) => { await assertRecoveryActive(input.db, input.recoveryId); return input.db.run(`UPDATE openclaw_mcp_reconciliation
+      SET operation_phase = ?, updated_at = now() WHERE target_key = ? AND agent_id = ? AND desired_revision = ?`, value, target, input.agentId, revision); };
     // Metadata repair belongs to the running gateway's lifecycle, not a competing registry CLI.
     // Existing legacy mode retains its externally awaited registry fallback.
     if (process.env.AGENT_HQ_OPENCLAW_MCP_RECONCILIATION_MODE === 'on-change'
       && (input.force || previous?.metadata_revision !== snapshot.metadata || previous?.runtime_revision !== snapshot.runtime)) {
       await phase('refresh');
-      applicationReceipt(await serializeOpenClawMaintenance(target, () => mutation('plugins.refresh', {})));
+      applicationReceipt(await serializeOpenClawMaintenance(target, () => mutation('plugins.refresh', {}, input)));
     }
     await phase('reload');
-    const runtime = applicationReceipt(await reloadPlugin(target, input.bundlePluginId), input.bundlePluginId);
+    const runtime = applicationReceipt(await reloadPlugin(target, input.bundlePluginId, input), input.bundlePluginId);
     if (openClawMcpRevision(input).revision !== revision) {
       throw new ApplicationFailure('OpenClaw MCP configuration changed during application; a newer revision must be applied', false, true);
     }

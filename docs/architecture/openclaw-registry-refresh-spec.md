@@ -2,6 +2,20 @@
 
 Status: as of October 12, 2026, production is the only running Agent HQ environment and uses `on-change` reconciliation with `AGENT_HQ_OPENCLAW_MCP_MAINTENANCE_OWNER=1`. Development 1 is preserved offline; development 2 is retired. Cross-process ownership enforcement is still not implemented, so do not restart another API against this OpenClaw state without first establishing maintenance isolation. Earlier rollout history is retained below.
 
+## Automatic recovery and ten-minute escalation — October 17 implementation
+
+Migration 44 adds a durable recovery episode per gateway configuration and agent. The first failure fixes a ten-minute deadline; retries, restarts and configuration edits preserve it. Startup reconstructs interrupted refresh/reload work using its persisted timestamp, so an already-overdue failure escalates immediately. This section describes the implementation; deployment must be verified separately.
+
+The recovery worker attempts repair at most once per minute after a failed attempt, with a five-second scheduling check. It reads the running gateway plugin generation, then requests configuration refresh/reload through the gateway's atomic plugin lifecycle lease. A still-running operation refuses admission. This is a new application of the desired configuration, not an operation-result lookup or a replay of a business task. The gateway must acknowledge the matching plugin generation and the desired files must remain unchanged before the incident resolves. Existing dispatch tool-readiness verification remains in place.
+
+PostgreSQL advisory locks serialize recovery per gateway and materialization per agent within this HQ database, including manual sync. They do not coordinate separate HQ databases: the existing exclusive maintenance-owner deployment requirement remains. Task dispatch and review reconciliation check the recovery gate while holding their existing agent/task ownership locks, before creating an instance. Workflow status, operator pauses and other dispatch eligibility checks retain ownership of task behavior.
+
+Escalation runs independently of slow gateway calls. At ten minutes, the episode becomes `attention`, new automatic mutations stop, and one notification plus delivery-outbox record is committed atomically. Agent/task pages and canonical task context expose the blocker, timestamps, attempts and latest sanitized error. Notes/history identify affected tasks without creating agent heartbeat evidence. The operator can use **Retry recovery**, which uses the existing force-reconcile endpoint without resetting the original deadline. A verified recovery removes its gate and records one resolution notification; normal dispatch resumes only where otherwise eligible.
+
+HQ retains alerts and links in notification history. Telegram delivery honors notification preferences, records failures, retries with a capped five-minute backoff, and recovers expired send leases after restart. Setting `AGENT_HQ_PUBLIC_URL` to the public UI origin includes clickable task/agent links in Telegram; HQ links work without it. Telegram does not provide a send idempotency key: an acknowledgement lost after acceptance can cause a duplicate external message, carrying the same HQ alert ID. The durable HQ incident and notification themselves are deduplicated.
+
+The worker requires the existing `on-change` mode, exclusive maintenance-owner setting and enabled plugin registry application. It does not inspect runtime processes for agent liveness, change the watchdog, restart the production gateway, or fix the separate OpenClaw memory-growth issue.
+
 ## Readiness budget and request timeout isolation — October 13
 
 The production API now uses `AGENT_HQ_OPENCLAW_MCP_READINESS_TIMEOUT_MS=30000`. This is also the default and invalid-value fallback for the gateway readiness polling budget. Each `tools.effective` call receives the remaining budget, and polling delays consume that same deadline; the previous hard-coded ten-second request cap is removed. Direct MCP server probes still precede gateway readiness polling, and plugin application retains its separate 90-second deadline.

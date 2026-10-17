@@ -1,4 +1,5 @@
 import { getAgentResolution } from '../domains/agents/resolution';
+import { getAgentMcpRecovery } from '../lib/mcpRecovery';
 import { describeToolAccess } from '../mcp/accessView';
 import { Router, Request, Response } from 'express';
 import * as fs from 'fs';
@@ -682,7 +683,10 @@ router.get('/', async (req: Request, res: Response) => {
       agents = await db.all(`${baseQuery} WHERE ${whereClause} ORDER BY a.created_at ASC`, tenantId);
     }
 
-    res.json(parseAgents(agents));
+    const recoveries = await db.all<{ agent_id: number }>(`SELECT r.* FROM openclaw_mcp_recovery r
+      JOIN agents a ON a.id = r.agent_id WHERE a.tenant_id = ? AND r.resolved_at IS NULL ORDER BY r.started_at DESC`, tenantId);
+    const recoveryByAgent = new Map(recoveries.map(r => [r.agent_id, r]));
+    res.json(parseAgents(agents).map(agent => ({ ...agent, runtime_recovery: recoveryByAgent.get(Number(agent.id)) ?? null })));
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
@@ -1415,7 +1419,7 @@ router.get('/:id', async (req: Request, res: Response) => {
           req.query.include_deleted === '1' || req.query.include_deleted === 'true',
         );
     if (!agent) return res.status(404).json({ error: 'Agent not found' });
-    return res.json(parseAgentRuntimeConfig(agent));
+    return res.json({ ...parseAgentRuntimeConfig(agent), runtime_recovery: await getAgentMcpRecovery(db, Number(req.params.id)) });
   } catch (err) {
     return res.status(500).json({ error: String(err) });
   }

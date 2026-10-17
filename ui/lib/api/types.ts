@@ -118,7 +118,13 @@ export interface InstanceRuntimeView {
   };
 }
 
+export interface RuntimeRecovery {
+  id: number; agent_id: number; state: 'recovering' | 'attention';
+  started_at: string; deadline_at: string; attempts: number; last_error: string;
+}
+
 export interface Agent {
+  runtime_recovery?: RuntimeRecovery | null;
   id: number;
   name: string;
   role: string;
@@ -873,6 +879,7 @@ export type CreateTaskPayload = Omit<Partial<Task>, 'relationships'> & {
 };
 
 export interface Task {
+  runtime_recovery?: RuntimeRecovery | null;
   id: number;
   title: string;
   description: string;

@@ -1,4 +1,5 @@
 import { getDb } from '../../db/client';
+import { getTaskMcpRecovery } from '../../lib/mcpRecovery';
 import { evaluateTaskIntegrity } from '../../lib/taskRelease';
 import { listConfiguredTerminalStatuses } from './terminality';
 import { parseCustomFields, resolveTaskFieldSchema } from './fields';
@@ -137,6 +138,7 @@ export async function enrichTask(task: TaskRecord): Promise<TaskRecord> {
     : (typeof task.active_instance_task_outcome === 'string' && task.active_instance_task_outcome.trim() ? task.active_instance_task_outcome.trim() : null);
   return {
     ...publicTask,
+    runtime_recovery: await getTaskMcpRecovery(db, task),
     ...await evaluateTaskIntegrity({ ...canonicalTask, ...unifiedCustomFields } as { status?: string | null; task_type?: string | null }, db),
     latest_task_outcome: latestTaskOutcome,
     changed_files: changedFiles,

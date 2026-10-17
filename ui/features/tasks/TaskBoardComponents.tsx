@@ -15,6 +15,7 @@ import { CSS } from '@dnd-kit/utilities';
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface BoardTask {
+  runtime_recovery?: import('@/lib/api').RuntimeRecovery | null;
   id: number;
   title: string;
   description: string;
@@ -320,6 +321,7 @@ export function TaskCard({ task, allTasks, onClick, relationshipTypes, onLinkTas
           <span className="text-xs text-slate-600 font-mono mr-1.5">#{task.id}</span>
           <span className={`text-sm md:text-sm font-semibold leading-snug ${blocked ? 'text-orange-100' : 'text-white group-hover:text-amber-50'}`}>
             {task.title}
+            {task.runtime_recovery && <span className="ml-2 text-xs text-amber-300">{task.runtime_recovery.state === 'attention' ? 'Recovery needs attention' : 'Recovering tools'}</span>}
             {task.recurring ? <span className="ml-1.5 text-xs text-slate-400" title="Recurring">🔁</span> : null}
           </span>
         </div>
