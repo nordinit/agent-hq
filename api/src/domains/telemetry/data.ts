@@ -81,6 +81,32 @@ function requiresObservations(definition:MetricDefinition,references:string[]):b
   };
   return historicalValue(definition);
 }
+/** Only current task expressions whose historical reads use outcome fields.
+ * Retain EVERY observation identity, correction and causal relation; a thin
+ * payload is sufficient here, but never for journeys or historical field reads.
+ */
+export function usesOutcomeEvidence(definition:MetricDefinition):boolean {
+  if(definition.grain!=='task'||definition.time_basis!=='current'||
+    (definition.attribution&&definition.attribution!=='assigned_agent_current'))return false;
+  let hasEvents=false;
+  const compatible=(value:unknown,inEvent=false):boolean=>{
+    if(Array.isArray(value))return value.every(child=>compatible(child,inEvent));
+    if(!value||typeof value!=='object')return true;
+    const node=value as Record<string,unknown>;
+    if('duration' in node||'journey' in node)return false;
+    if(node.basis!==undefined&&node.basis!=='current')return false;
+    if(typeof node.field==='string'){
+      if(node.field==='instruction_fingerprint')return false;
+      if((inEvent||node.field.startsWith('event.'))&&!['event.outcome','event.outcome_identity'].includes(node.field))return false;
+    }
+    return Object.entries(node).every(([key,child])=>{
+      const event=key==='event_exists'||key==='event_count';
+      if(event)hasEvents=true;
+      return compatible(child,inEvent||event);
+    });
+  };
+  return compatible(definition)&&hasEvents;
+}
 function historicalScopePredicate(scope:TelemetryScope,grain:MetricDefinition['grain']):Predicate|undefined {
   const conditions:Predicate[]=[];
   for(const field of ['project_id','workflow_id','workflow_type','task_type'] as const)if(scope[field]!==undefined)conditions.push({field,basis:grain==='journey'?'at_entry':'at_event',op:'eq',value:scope[field]!});
@@ -124,7 +150,7 @@ export async function loadMetricData(db:Db,access:TelemetryAccess,scope:Telemetr
   const taskSnapshots=new Map<number,Record<string,any>>(taskRows.map(row=>[Number(row.id),{...row.snapshot,workflow_status:row.workflow_status}]));
   // Prerequisites are unresolved according to the blocker workflow's configured
   // terminality. Existence of a dependency alone is never a blockage signal.
-  const dependencyRows=taskIds.length?await db.all<any>(`SELECT d.blocked_id,b.id AS source_task_id,b.project_id,b.id IS NOT NULL AS visible,
+  const dependencyRows=taskIds.length&&references.some(field=>field.includes('unresolved_dependencies'))?await db.all<any>(`SELECT d.blocked_id,b.id AS source_task_id,b.project_id,b.id IS NOT NULL AS visible,
     COALESCE(ws.terminal,ts.terminal,gs.terminal,0) AS terminal
     FROM task_dependencies d LEFT JOIN tasks b ON b.id=d.blocker_id AND b.tenant_id=?
     LEFT JOIN workflows bs ON bs.id=b.workflow_id AND bs.tenant_id=b.tenant_id
@@ -181,12 +207,15 @@ export async function loadMetricData(db:Db,access:TelemetryAccess,scope:Telemetr
   const isTask=['task','event','journey'].includes(grain);
   const obsWhere=isTask?'o.task_id = ANY(?::bigint[])':'o.entity_type = ? AND o.entity_id = ANY(?::bigint[])';
   const observationLimit=Math.min(250000,entityLimit*20);
-  const historicalProject="COALESCE(o.payload->'context'->>'project_id',o.payload->'after'->>'project_id')";
+  const compact=usesOutcomeEvidence(definition);
+  const payload=compact?'COALESCE(o.outcome_evidence,telemetry_outcome_evidence(o.payload))':'o.payload';
+  const observationColumns=compact?`o.id,o.tenant_id,o.source,o.source_key,o.entity_type,o.entity_id,o.task_id,o.project_id,o.workflow_id,o.agent_id,o.kind,o.occurred_at,o.recorded_at,o.sequence,o.causation_id,o.provenance,o.producer_version,${payload} AS payload`:'o.*';
+  const historicalProject=`COALESCE(${payload}->'context'->>'project_id',${payload}->'after'->>'project_id')`;
   const constrainHistory=loadObservations&&access.projectId!=null;
   // Effective time limits contributions, not knowledge of corrections. Load
   // every superseder in the authorized population so chains/forks retract
   // their parents even when the corrected event moves beyond as_of.
-  const observationRows=loadObservations&&entityIds.length?await db.all<TelemetryObservationRow>(`SELECT o.* FROM telemetry_observations o WHERE o.tenant_id=? AND ${obsWhere} AND (o.occurred_at<=?::timestamptz OR jsonb_exists(o.payload,'supersedes_source_key'))${constrainHistory?` AND ${historicalProject}=?`:''} ORDER BY o.occurred_at,o.sequence LIMIT ?`,access.tenantId,...(isTask?[entityIds]:[grain,entityIds]),asOf,...(constrainHistory?[String(access.projectId)]:[]),observationLimit+1):[];
+  const observationRows=loadObservations&&entityIds.length?await db.all<TelemetryObservationRow>(`SELECT ${observationColumns} FROM telemetry_observations o WHERE o.tenant_id=? AND ${obsWhere} AND (o.occurred_at<=?::timestamptz OR jsonb_exists(${payload},'supersedes_source_key'))${constrainHistory?` AND ${historicalProject}=?`:''} ORDER BY o.occurred_at,o.sequence LIMIT ?`,access.tenantId,...(isTask?[entityIds]:[grain,entityIds]),asOf,...(constrainHistory?[String(access.projectId)]:[]),observationLimit+1):[];
   if(constrainHistory&&entityIds.length){
     const entityColumn=isTask?'task_id':'entity_id';
     const gaps=await db.all<{entity_id:number;through:Date}>(`SELECT o.${entityColumn} AS entity_id,MAX(o.occurred_at) AS through FROM telemetry_observations o WHERE o.tenant_id=? AND ${obsWhere} AND o.occurred_at<=?::timestamptz AND ${historicalProject} IS DISTINCT FROM ? GROUP BY o.${entityColumn}`,access.tenantId,...(isTask?[entityIds]:[grain,entityIds]),asOf,String(access.projectId));
@@ -262,6 +291,6 @@ export async function loadMetricData(db:Db,access:TelemetryAccess,scope:Telemetr
   if (references.some(field=>field.includes('unresolved_dependencies'))) for(const row of dependencyRows) {
     if(row.visible && (access.projectId==null || Number(row.project_id)===access.projectId)) roots.push({source_type:'tasks',source_id:Number(row.source_task_id)});
   }
-  const sources=await captureSources(db,access.tenantId,roots);
+  const sources=await captureSources(db,access.tenantId,[...new Map(roots.map(root=>[`${root.source_type}:${root.source_id}`,root])).values()]);
   return {entities,observations,history:{...history,required_sources:requiredSources},coverageWindow:baseCoverage,dataRevision,taskIds,sourceProjects,sources,scopePredicate:historical?historicalScopePredicate(scope,grain):undefined};
 }

@@ -4,6 +4,7 @@ import { applyTaskOutcome } from '../../lib/taskOutcome';
 import { writeTaskHistory, writeTaskStatusChange } from '../tasks/history';
 import { resolveRuntimeTenantId, tenantInsertColumns } from '../../lib/runtimeTenantScope';
 import { type Db } from "../../db/adapter/types";
+import { WorkflowAllowedValuesError } from '../../lib/taskStatusValidation';
 
 export interface RuntimeFailureWorkflowEventParams {
   taskId: number;
@@ -101,13 +102,28 @@ export async function applyConfiguredRuntimeFailedEvent(
   }
 
   if (mapping.action_kind === 'outcome' && mapping.action_target) {
-    await applyTaskOutcome(db, {
-      taskId: params.taskId,
-      outcome: mapping.action_target,
-      changedBy,
-      summary: `Workflow event ${RUNTIME_FAILED_EVENT} via ${AGENT_HQ_RUNTIME_SOURCE}. ${summary}`,
-      instanceId: params.instanceId,
-      failureDetail: mapping.apply_failure_detail ? failureDetail : undefined,
-    });
+    try {
+      await applyTaskOutcome(db, {
+        taskId: params.taskId,
+        outcome: mapping.action_target,
+        changedBy,
+        summary: `Workflow event ${RUNTIME_FAILED_EVENT} via ${AGENT_HQ_RUNTIME_SOURCE}. ${summary}`,
+        instanceId: params.instanceId,
+        failureDetail: mapping.apply_failure_detail ? failureDetail : undefined,
+      });
+    } catch (error) {
+      // A stale/default event mapping must not interrupt terminal run processing.
+      // Keep the workflow's allowed outcomes authoritative and audit the rejected
+      // mapping; database and other unexpected failures must still propagate.
+      if (!(error instanceof WorkflowAllowedValuesError)
+        || error.code !== 'task_outcome_not_allowed_for_workflow') throw error;
+      await writeTaskHistory(db, params.taskId, changedBy, 'workflow_event_mapping_rejected',
+        mapping.id, error.message, false);
+      if (mapping.apply_failure_detail) {
+        await db.run('UPDATE tasks SET failure_detail = ? WHERE id = ?',
+          `${failureDetail}\nRejected mapping #${mapping.id}: ${error.message}`, params.taskId);
+      }
+      console.warn(`[runtime-failure] Rejected workflow event mapping #${mapping.id} for task #${params.taskId}: ${error.message}`);
+    }
   }
 }

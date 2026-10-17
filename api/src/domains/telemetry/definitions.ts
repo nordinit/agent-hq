@@ -57,14 +57,14 @@ export async function getRevision(db:Db,access:TelemetryAccess,id:string,kind?:D
 }
 
 /** Resolve revision references with one authority, a bounded DAG and scope checks. */
-export async function compileDefinition(db:Db,access:TelemetryAccess,raw:any,scope:TelemetryScope,profileRevisionId?:string,stack:string[]=[],catalog?:CatalogDescriptor[],pinnedSignals?:TelemetrySignal[]):Promise<{definition:MetricDefinition;dependencies:any}> {
+export async function compileDefinition(db:Db,access:TelemetryAccess,raw:any,scope:TelemetryScope,profileRevisionId?:string,stack:string[]=[],catalog?:CatalogDescriptor[],pinnedSignals?:TelemetrySignal[],cachedCatalog?:Awaited<ReturnType<typeof getTelemetryCatalog>>):Promise<{definition:MetricDefinition;dependencies:any}> {
   if(!raw||typeof raw!=='object'||Array.isArray(raw)) throw new TelemetryError('invalid_definition','Metric definition must be an object.');
   const profileId=profileRevisionId??raw.profile_revision_id;
   if(profileRevisionId&&raw.profile_revision_id&&profileRevisionId!==raw.profile_revision_id) throw new TelemetryError('invalid_definition','Binding conflicts with the pinned profile revision.');
   const profile=profileId?await getRevision(db,access,profileId,'profile'):null;
   if(profile && !scopeMatches(profile.scope,scope)) throw new TelemetryError('incompatible_scope','Profile scope does not cover this metric population.');
   const dependencies:any={profile_revision_id:profileId??null,metric_revision_ids:[],catalog:[],signals:[]};
-  const liveCatalog=await getTelemetryCatalog(db,access,scope),liveSignals=[...liveCatalog.statuses,...liveCatalog.outcomes];
+  const liveCatalog=cachedCatalog??await getTelemetryCatalog(db,access,scope),liveSignals=[...liveCatalog.statuses,...liveCatalog.outcomes];
   let nodes=0;
   async function expand(value:any):Promise<any> {
     if(++nodes>500) throw new TelemetryError('query_limit_exceeded','Definition exceeds 500 expression nodes.');
@@ -82,7 +82,7 @@ export async function compileDefinition(db:Db,access:TelemetryAccess,raw:any,sco
       if(stack.includes(id)||stack.length>=10) throw new TelemetryError('invalid_definition','Metric dependencies contain a cycle or exceed 10 components.');
       const revision=await getRevision(db,access,id,'metric');
       if(!scopeMatches(revision.scope,scope)) throw new TelemetryError('incompatible_scope','Component scope is incompatible with the query population.');
-      const component=await compileDefinition(db,access,revision.definition,scope,undefined,[...stack,id],catalog,revision.dependencies?.signals);
+      const component=await compileDefinition(db,access,revision.definition,scope,undefined,[...stack,id],catalog,revision.dependencies?.signals,liveCatalog);
       if(component.definition.grain!==raw.grain||component.definition.time_basis!==raw.time_basis||component.definition.attribution!==raw.attribution) throw new TelemetryError('incompatible_comparison','Component grain, attribution and time basis must match.');
       if(component.definition.measure.kind!=='aggregate') throw new TelemetryError('unsupported_operation','Ratio components must reduce to an aggregate.');
       dependencies.metric_revision_ids.push(id,...component.dependencies.metric_revision_ids);

@@ -7,23 +7,27 @@ import { telemetryResponseResults, telemetryWidgetQuery } from '@/lib/telemetryV
 import type { DashboardDocument } from '@/lib/dashboardTypes';
 import type { MetricDefinition, TelemetryMetric, TelemetryQuery, TelemetryResult, TelemetryScope } from '@/lib/telemetryTypes';
 import { createTelemetryRecoveryGate } from '@/lib/telemetryRecovery';
+import { beginDashboardRefresh, finishDashboardMetric, type DashboardMetricSnapshot, type DashboardMetricState } from '@/lib/dashboardMetricState';
 
-export interface DashboardMetricState { definition?: MetricDefinition; result?: TelemetryResult; query?: TelemetryQuery; error?: string; busy: boolean }
+export type { DashboardMetricState } from '@/lib/dashboardMetricState';
 export interface DashboardOperations { stats?: DashboardStats; tasks?: CompletedRecentTask[]; statsError?: string; tasksError?: string; busy: boolean }
 export function useDashboardData(page: DashboardDocument, metrics: TelemetryMetric[], scope: TelemetryScope, window: { from?: string; to?: string; timezone: string }, refresh: number) {
-  const [data, setData] = useState<Record<string, DashboardMetricState>>({});
+  const [snapshot, setSnapshot] = useState<DashboardMetricSnapshot>({ requestKey: '', data: {} });
   const [operations, setOperations] = useState<DashboardOperations>({ busy: false });
   const recoverRef = useRef<(bindingId: string, queryId: string, manual?: boolean) => Promise<boolean>>(async () => false);
   const recover = useCallback((bindingId: string, queryId: string, manual?: boolean) => recoverRef.current(bindingId, queryId, manual), []);
   // Layout, labels and formatting never trigger recalculation. Duplicate blocks
   // share a binding; identical bindings share both the result and retained proof.
   const requestKey = JSON.stringify({ bindings: page.metrics.map(({ id, metric_id, metric_revision_id, view }) => ({ id, metric_id, metric_revision_id, view: view ? { ...view, sort: undefined } : undefined })), scope, window });
+  const data = snapshot.requestKey === requestKey ? snapshot.data : {};
   useEffect(() => {
     const controller = new AbortController();
     const input = JSON.parse(requestKey) as { bindings: DashboardDocument['metrics']; scope: TelemetryScope; window: typeof window };
-    setData(Object.fromEntries(input.bindings.map(binding => [binding.id, { busy: true }])));
+    setSnapshot(current => beginDashboardRefresh(current, requestKey, input.bindings.map(binding => binding.id)));
+    const setData = (update: (current: Record<string, DashboardMetricState>) => Record<string, DashboardMetricState>) => {
+      if (!controller.signal.aborted) setSnapshot(current => current.requestKey === requestKey ? { ...current, data: update(current.data) } : current);
+    };
     const definitions = new Map<string, Promise<MetricDefinition>>();
-    const queries = new Map<string, Promise<TelemetryResult>>();
     const loaded = new Map<string, DashboardMetricState>();
     const recovery = createTelemetryRecoveryGate();
     recoverRef.current = async (bindingId, queryId, manual = false) => {
@@ -40,7 +44,6 @@ export function useDashboardData(page: DashboardDocument, metrics: TelemetryMetr
             if (!result) throw new Error('No result returned. Try a narrower scope in Analyze.');
             return result;
           });
-          queries.set(key, pending);
           const result = await pending;
           if (controller.signal.aborted) return;
           for (const id of affected) loaded.set(id, { ...loaded.get(id)!, result, busy: false, error: undefined });
@@ -67,34 +70,56 @@ export function useDashboardData(page: DashboardDocument, metrics: TelemetryMetr
       })();
       definitions.set(binding.metric_revision_id, promise); return promise;
     };
-    let cursor = 0;
-    const worker = async () => {
-      while (!controller.signal.aborted && cursor < input.bindings.length) {
-        const binding = input.bindings[cursor++]; let definition: MetricDefinition | undefined;
+    const load = async () => {
+      type Prepared = { id: string; definition: MetricDefinition; query: TelemetryQuery };
+      const prepared = await Promise.all(input.bindings.map(async binding => {
         try {
-          definition = await definitionFor(binding);
+          const definition = await definitionFor(binding);
+          return { id: binding.id, definition, query: telemetryWidgetQuery(binding, definition, input.scope, input.window) };
+        } catch (cause) {
+          if (!controller.signal.aborted) setData(current => ({ ...current, [binding.id]: { error: cause instanceof Error ? cause.message : 'Could not load this metric.', busy: false } }));
+          return undefined;
+        }
+      }));
+      if (controller.signal.aborted) return;
+      const unique = new Map<string, Prepared[]>();
+      for (const item of prepared) if (item) {
+        const key = JSON.stringify(item.query), bindings = unique.get(key) ?? [];
+        bindings.push(item); unique.set(key, bindings);
+      }
+      const groups = [...unique.entries()];
+      for (let offset = 0; offset < groups.length && !controller.signal.aborted; offset += 10) {
+        const chunk = groups.slice(offset, offset + 10);
+        const publish = (bindings: Prepared[], result?: TelemetryResult, error?: string) => {
           if (controller.signal.aborted) return;
-          const query = telemetryWidgetQuery(binding, definition, input.scope, input.window), key = JSON.stringify(query);
-          let pending = queries.get(key);
-          if (!pending) {
-            pending = telemetryClient.queryTelemetry(query, controller.signal).then(response => {
-              const result = telemetryResponseResults(response)[0];
-              if (!result) throw new Error('No result returned. Try a narrower scope in Analyze.');
-              return result;
-            }); queries.set(key, pending);
+          const changes: Record<string, DashboardMetricState> = {};
+          for (const binding of bindings) {
+            const state = { definition: binding.definition, query: binding.query, result, error, busy: false };
+            changes[binding.id] = state;
           }
-          const result = await pending;
-          if (!controller.signal.aborted) {
-            const state = { definition, result, query, busy: false };
-            loaded.set(binding.id, state);
-            setData(current => ({ ...current, [binding.id]: state }));
+          setData(current => ({ ...current, ...Object.fromEntries(Object.entries(changes).map(([id, next]) => {
+            const state = finishDashboardMetric(current[id], next);
+            loaded.set(id, state);
+            return [id, state];
+          })) }));
+        };
+        try {
+          const response = await telemetryClient.queryTelemetryBatch({ queries: chunk.map(([, bindings]) => ({ binding_id: bindings[0].id, query: bindings[0].query })) }, controller.signal);
+          if (controller.signal.aborted) return;
+          const byBinding = new Map(response.results.map(item => [item.binding_id, item]));
+          for (const [, bindings] of chunk) {
+            const item = byBinding.get(bindings[0].id);
+            const result = item?.response ? telemetryResponseResults(item.response)[0] : undefined;
+            if (result) publish(bindings, result);
+            else publish(bindings, undefined, item?.error?.message ?? 'No result returned. Try a narrower scope in Analyze.');
           }
         } catch (cause) {
-          if (!controller.signal.aborted) setData(current => ({ ...current, [binding.id]: { definition, error: cause instanceof Error ? cause.message : 'Could not load this metric.', busy: false } }));
+          const error = cause instanceof Error ? cause.message : 'Could not load these metrics.';
+          for (const [, bindings] of chunk) publish(bindings, undefined, error);
         }
       }
     };
-    const debounce = setTimeout(() => { void Promise.all(Array.from({ length: Math.min(3, input.bindings.length) }, worker)); }, 250);
+    const debounce = setTimeout(() => { void load(); }, 250);
     return () => { clearTimeout(debounce); controller.abort(); };
   }, [requestKey, metrics, refresh]);
   const needsOperations = dashboardBlocks(page).some(block => block.type === 'operation');

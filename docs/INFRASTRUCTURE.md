@@ -235,6 +235,8 @@ Concrete runs. Key fields: id, agent_id, task_id, status, session_key, dispatche
 ### 7.3 tasks
 Key fields: id, title, description, status, priority, agent_id, project_id, workflow_id, task_type, story_points, active_instance_id, retry_count, max_retries, routing_reason, review_owner_agent_id, custom_fields_json. Lifecycle/release evidence such as review branch/commit/url, QA verified commit/tested URL, deploy commit/target/timestamp, and live verification metadata is canonical in `custom_fields_json` and exposed through task `custom_fields`.
 
+Dispatch startup failures retry without an attempt limit. The wait increases by two minutes per failure: 2, 4, 6, 8, then 10 minutes, staying at ten minutes for subsequent failures. `DISPATCH_FAILURE_BACKOFF_SECONDS` can change the starting interval and increment; the ten-minute cap still applies. `retry_count` and the failure's `dispatched_at` preserve the wait across API restarts, and successful startup resets the count. This applies to preparation failures before an instance exists as well as runtime startup failures. Workflow routing, dependencies, terminal statuses, and operator pauses continue to control dispatch. Migration 40 releases pauses created by the former startup retry limit and records that recovery in task history; it preserves operator pauses and workflow statuses.
+
 ### 7.4 Routing tables
 - `workflow_task_transitions` — workflow transitions (workflow, task_type, from_status, outcome, to_status)
 - `workflow_task_routing_rules` — task→agent assignment rules (workflow, task_type, status, agent, priority)

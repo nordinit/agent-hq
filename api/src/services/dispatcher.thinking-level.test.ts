@@ -74,7 +74,8 @@ jest.mock('../lib/agentHqBaseUrl', () => ({
 
 import { resolveRuntime } from '../runtimes';
 import type { AgentRuntime } from '../runtimes';
-import { dispatchInstance, resolveModelFromStoryPoints, runDispatcher } from './dispatcher';
+import { dispatchFailureBackoffSeconds, dispatchInstance, resolveModelFromStoryPoints, runDispatcher } from './dispatcher';
+import { parseTimestamp, timestampFromEpochMs } from '../lib/timestamps';
 
 const mockedResolveRuntime = resolveRuntime as jest.MockedFunction<typeof resolveRuntime>;
 const mockedTaskNotifications = jest.requireMock('../lib/taskNotifications') as {
@@ -774,19 +775,25 @@ describe('runDispatcher thinking-level routing', () => {
     expect(mockedTaskNotifications.notifyTaskStatusChange).not.toHaveBeenCalled();
     expect(mockedResolveRuntime).not.toHaveBeenCalled();
 
-    // Failures before instance creation obey the same budget, even when the
-    // workflow explicitly ignores the startup-failure status event.
-    for (let attempt = 2; attempt <= 3; attempt += 1) {
+    // A fallback route must not retry the same failed preparation immediately.
+    await db.run(`INSERT INTO agents (id, tenant_id, name, session_key, enabled, project_id)
+      VALUES (2, 1, 'Fallback', 'fallback', 1, 86)`);
+    await db.run(`INSERT INTO workflow_task_routing_rules (tenant_id, workflow_id, project_id, workflow_type, task_type, status, agent_id, priority)
+      VALUES (1, 10, 86, 'dev', 'backend', 'ready', 2, 5)`);
+
+    // Failures before instance creation keep retrying beyond the old limit,
+    // including workflows that ignore the startup-failure status event.
+    for (let attempt = 3; attempt <= 6; attempt += 1) {
       await db.run("UPDATE tasks SET dispatched_at = '2000-01-01 00:00:00' WHERE id = 932");
       await runDispatcher(db, 86);
     }
-    const exhausted = await db.get<{ retry_count: number; paused_at: string | null; status: string }>(
+    const retrying = await db.get<{ retry_count: number; paused_at: string | null; status: string }>(
       'SELECT retry_count, paused_at, status FROM tasks WHERE id = 932',
     );
-    expect(exhausted).toMatchObject({ retry_count: 3, status: 'ready', paused_at: expect.any(String) });
-    await db.run("UPDATE tasks SET dispatched_at = '2000-01-01 00:00:00' WHERE id = 932");
+    expect(retrying).toEqual({ retry_count: 6, status: 'ready', paused_at: null });
+    // A second dispatcher pass must honor the persisted cooldown.
     expect((await runDispatcher(db, 86)).dispatched).toBe(0);
-    expect((await db.get('SELECT count(*) AS n FROM task_notes WHERE task_id = 932') as { n: number }).n).toBe(3);
+    expect((await db.get('SELECT count(*) AS n FROM task_notes WHERE task_id = 932') as { n: number }).n).toBe(6);
 
     await teardownTestDb();
   });
@@ -796,7 +803,9 @@ describe('runDispatcher thinking-level routing', () => {
     { attemptsBefore: 2, mapping: 'absent' },
     { attemptsBefore: 2, mapping: 'ignore' },
     { attemptsBefore: 2, mapping: 'status' },
-  ])('enforces dispatch retry budget with $mapping mapping after $attemptsBefore failures', async ({ attemptsBefore, mapping }) => {
+    { attemptsBefore: 4, mapping: 'ignore' },
+    { attemptsBefore: 20, mapping: 'ignore' },
+  ])('keeps retrying with capped backoff and $mapping mapping after $attemptsBefore failures', async ({ attemptsBefore, mapping }) => {
     jest.clearAllMocks();
 
     const db = await setupTestDb();
@@ -820,7 +829,6 @@ describe('runDispatcher thinking-level routing', () => {
       mapping, mapping === 'status' ? 'ready' : null);
     }
     const expectedAttempts = attemptsBefore + 1;
-    const exhausted = expectedAttempts >= 3;
 
     const { createTaskWorktree } = jest.requireMock('./worktreeManager') as { createTaskWorktree: jest.Mock };
     createTaskWorktree.mockReturnValue({
@@ -873,8 +881,8 @@ describe('runDispatcher thinking-level routing', () => {
     expect(task.assigned_agent_id).toBe(1);
     expect(task.active_instance_id).toBeNull();
     expect(task.retry_count).toBe(expectedAttempts);
-    expect(Boolean(task.paused_at)).toBe(exhausted);
-    if (exhausted) expect(task.pause_reason).toContain('Dispatch startup retry limit reached (3/3)');
+    expect(task.paused_at).toBeNull();
+    expect(task.pause_reason).toBeNull();
     expect(String(task.failure_detail)).toContain('Dispatcher startup failure workflow event');
     expect(String(task.failure_detail)).toContain('Matched agent: Cinder (#1)');
     expect(String(task.failure_detail)).toContain('runtime infrastructure');
@@ -885,7 +893,10 @@ describe('runDispatcher thinking-level routing', () => {
     }));
 
     const note = await db.get(`SELECT content FROM task_notes WHERE task_id = 444 ORDER BY id DESC LIMIT 1`) as { content: string };
-    expect(note.content).toContain(`Summary: Dispatch startup failed after routing matched Cinder (attempt ${expectedAttempts}/3)`);
+    expect(note.content).toContain(`Summary: Dispatch startup failed after routing matched Cinder (attempt ${expectedAttempts})`);
+    const delaySeconds = dispatchFailureBackoffSeconds(expectedAttempts);
+    expect(delaySeconds).toBe(Math.min(expectedAttempts * 120, 600));
+    expect(note.content).toContain(`Automatic dispatch can retry after ${delaySeconds} seconds`);
     expect(note.content).toContain('Result: partial');
     expect(note.content).toContain('Evidence: workflow_event=dispatch_startup_failed');
     expect(note.content).toContain('legacy_outcome=infra_failed');
@@ -895,12 +906,31 @@ describe('runDispatcher thinking-level routing', () => {
     expect(instance.status).toBe('failed');
     expect(instance.error).toBe('Gateway connect timeout');
 
-    if (exhausted) {
-      await db.run("UPDATE tasks SET dispatched_at = '2000-01-01 00:00:00' WHERE id = 444");
+    const failure = await db.get<{ dispatched_at: string }>('SELECT dispatched_at FROM tasks WHERE id = 444');
+    const retryAt = parseTimestamp(failure!.dispatched_at)!.getTime() + delaySeconds * 1000;
+    const clock = jest.spyOn(Date, 'now');
+    try {
+      clock.mockReturnValue(retryAt - 1);
       expect((await runDispatcher(db, 86)).dispatched).toBe(0);
       expect(dispatchMock).toHaveBeenCalledTimes(1);
-      expect((await db.get('SELECT count(*) AS n FROM job_instances WHERE task_id = 444') as { n: number }).n).toBe(1);
+
+      // Being due must never override an operator pause.
+      clock.mockReturnValue(retryAt);
+      await db.run("UPDATE tasks SET paused_at = ?, pause_reason = 'Operator investigation' WHERE id = 444", timestampFromEpochMs(retryAt));
+      expect((await runDispatcher(db, 86)).dispatched).toBe(0);
+      await db.run('UPDATE tasks SET paused_at = NULL, pause_reason = NULL WHERE id = 444');
+
+      // A subsequent pass uses the stored count/timestamp, and succeeds exactly
+      // at the deadline even after far more than three startup failures.
+      dispatchMock.mockResolvedValue({ runId: 'recovered-run-444' });
+      expect((await runDispatcher(db, 86)).dispatched).toBe(1);
+    } finally {
+      clock.mockRestore();
     }
+    await waitFor(async () => (await db.value('SELECT retry_count FROM tasks WHERE id = 444')) === 0, 'successful dispatch resets failure streak');
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(dispatchMock).toHaveBeenCalledTimes(2);
+    expect(await db.value('SELECT count(*) FROM job_instances WHERE task_id = 444')).toBe(2);
     await teardownTestDb();
   });
 

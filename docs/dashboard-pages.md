@@ -12,7 +12,8 @@ Sections contain one to four independently stacked columns. Drag a block by its 
 
 ## Data behavior
 
-- Layout changes do not recalculate metrics. Shared bindings and identical query requests reuse a result, with at most three metric queries in flight. Source/filter changes are debounced and obsolete responses are ignored.
+- Layout changes do not recalculate metrics. Shared bindings and identical query requests reuse a result. Up to ten distinct metric requests are sent to `/queries/batch`; compatible reads share one database snapshot and request-local raw-data cache, while each binding retains its own result and contributor proof. Source/filter changes are debounced and obsolete responses are ignored.
+- Refreshing the same queries keeps existing values visible with a refresh indicator. Refresh failures are displayed alongside the previous value; changing the scope or pinned queries clears it immediately.
 - Metric definitions, scope enforcement, ratios, exact decimal values, and evidence retention remain the existing telemetry engine's responsibility. Rounding affects only dashboard display. Missing and zero-denominator values remain unavailable.
 - Comparison tables align exact group keys and refuse incompatible group, time-basis, attribution, scope, or time-window combinations. Each metric keeps its own population; the UI labels this explicitly. Columns never average ratios together.
 - Snapshot pages omit historical date controls. Historical metrics support saved dates, relative range shortcuts, and explicit UTC boundaries. Viewing filters are temporary; editing changes the page's saved defaults.
@@ -22,6 +23,12 @@ Sections contain one to four independently stacked columns. Drag a block by its 
 ## Storage, API, and rollout
 
 Migration `35-dashboard-pages.sql` permits `kind=dashboard` in the existing telemetry revision store. It does not rewrite saved reports or metrics. Apply the migration and deploy the API before the new UI. A migration regression test verifies existing report revisions and metric pins remain identical.
+
+Migration `41-telemetry-outcome-evidence.sql` adds a compact, trigger-maintained outcome-evidence projection to observations. Current task metrics that only inspect historical outcomes read this projection; other historical expressions keep the full loader. Observation identities, correction chains, causal outcomes and project authorization remain intact. During upgrades, old rows use an equivalent computed projection until `node api/dist/tooling/backfillTelemetryOutcomeEvidence.js` completes its 500-row batches. Run that backfill before measuring dashboard latency. Interactive SQL statements retain a five-second timeout; background statements retain thirty seconds. Rollback application releases must carry the applied migration file, even though the extra column is backward compatible.
+
+`POST /api/v1/telemetry/v2/queries/batch` accepts `{queries:[{binding_id,query}]}` with unique binding IDs and at most ten interactive metric-revision queries. It returns `{as_of,results:[{binding_id,response|error}]}`. Each response has its own retained query ID, so existing contributor and recovery APIs remain unchanged. Metric errors and SQL timeouts are isolated with savepoints; successful cards remain available. No query cache survives the request.
+
+Migration `42-telemetry-invalidation-scan.sql` checks affected source manifests together and materializes canonical source access once per mutation. This prevents repeated full-context scans under the tenant publication lock when tasks change agents. Same-project changes preserve proofs; moves and deletions still revoke them. The five-second budget is per SQL statement, including lock waits, not an overall HTTP deadline. Carry this migration in rollback releases as well.
 
 Dashboard endpoints are under `/api/v1/telemetry/v2/dashboards`: list, create, read, revise (`/:id/revisions`), and archive. They use `telemetry.read` and `telemetry.manage_reports`. Equivalent MCP tools and the catalog's `dashboard` JSON schema expose the same contract. Export accepts `dashboard_ids` and includes pinned metric dependencies; import remaps dependencies using the existing scope and reference validation.
 

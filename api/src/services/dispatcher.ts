@@ -2,7 +2,6 @@ import fs from 'fs';
 import path from 'path';
 import { notifyTaskStatusChange } from '../lib/taskNotifications';
 import { recordDispatchStartupFailureNotification } from '../lib/dispatchStartupFailureNotifications';
-import { DISPATCH_RETRY_PAUSE_PREFIX } from '../lib/dispatchRetryPause';
 import { recordSkillMaterializationIssues } from '../lib/skillMaterializationNotifications';
 import { resolveRepoConfig } from '../lib/repoConfig';
 import { writeTaskHistory, writeTaskStatusChange } from '../domains/tasks/history';
@@ -28,7 +27,7 @@ import { getSkillMaterializationAdapter } from '../runtimes/skillMaterialization
 import { syncAssignedMcpForAgent } from '../runtimes/mcpMaterialization';
 import { getDb } from '../db/client';
 import { loadTaskRecurrenceMetadata } from '../domains/tasks/recurrence';
-import { nowTimestamp, timestampFromEpochMs } from '../lib/timestamps';
+import { nowTimestamp, parseTimestamp } from '../lib/timestamps';
 import { buildHookSessionKey, resolveRuntimeAgentSlug } from '../lib/sessionKeys';
 import { createDurableRunId, ensureJobInstanceDurableRunId, tableHasColumn as durableTableHasColumn } from '../lib/durableRunIdentity';
 import { insertRuntimeLog, resolveRuntimeTenantId, tenantInsertColumns } from '../lib/runtimeTenantScope';
@@ -142,22 +141,34 @@ function requiredOpenClawMcpToolsByServerName(serverNames: string[]): Record<str
   return Object.fromEntries(entries);
 }
 
-// ── Dispatch failure backoff (task #355) ─────────────────────────────────────
-//
-// When a dispatch attempt fails (gateway down, Anthropic overloaded, etc.),
-// the dispatcher sets dispatched_at = now on the task and increments retry_count
-// before resetting it back to its eligible status. This creates a cooldown window
-// during which the reconciler's next tick(s) will NOT re-dispatch the task.
-//
-// The backoff duration (seconds) is read from the DISPATCH_FAILURE_BACKOFF_SECONDS
-// env var or falls back to 120s (2 minutes). This means after a failure the task
-// won't be re-dispatched for at least 2 minutes — enough to survive short outages
-// without spinning, while still recovering quickly when the gateway comes back up.
-//
-// Admins can tune this at runtime by setting DISPATCH_FAILURE_BACKOFF_SECONDS
-// before restarting the API.
+// Startup failures retry indefinitely: 2, 4, 6, 8, then 10 minutes by default.
+// The configured base interval is also the increment; the cap is always 10 minutes.
+// retry_count and dispatched_at persist the cooldown across API restarts.
+export const MAX_DISPATCH_FAILURE_BACKOFF_SECONDS = 600;
+const configuredDispatchBackoff = Number(process.env.DISPATCH_FAILURE_BACKOFF_SECONDS ?? 120);
 export const DISPATCH_FAILURE_BACKOFF_SECONDS: number =
-  parseInt(process.env.DISPATCH_FAILURE_BACKOFF_SECONDS ?? '120', 10) || 120;
+  Number.isFinite(configuredDispatchBackoff) && configuredDispatchBackoff >= 1
+    ? Math.min(Math.floor(configuredDispatchBackoff), MAX_DISPATCH_FAILURE_BACKOFF_SECONDS)
+    : 120;
+
+export function dispatchFailureBackoffSeconds(retryCount: number): number {
+  return Math.min(
+    DISPATCH_FAILURE_BACKOFF_SECONDS * Math.max(1, retryCount),
+    MAX_DISPATCH_FAILURE_BACKOFF_SECONDS,
+  );
+}
+
+interface DispatchRetryState {
+  retry_count: number;
+  dispatched_at: string | null;
+}
+
+function dispatchBackoffElapsed(task: DispatchRetryState, now = Date.now()): boolean {
+  if (!task.dispatched_at) return true;
+  const lastDispatch = parseTimestamp(task.dispatched_at)?.getTime();
+  return lastDispatch != null
+    && now >= lastDispatch + dispatchFailureBackoffSeconds(task.retry_count) * 1000;
+}
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -412,25 +423,19 @@ async function persistDispatchStartupFailure(
     taskType?: string | null;
     reason: string;
     retryCount?: number;
-    maxRetries?: number;
-    keepAutoRetry?: boolean;
     tenantId?: number | null;
   },
 ): Promise<string> {
   // Repository preparation can fail before a job instance exists. Count those
-  // failures too, otherwise they can loop forever while workflow status stays put.
+  // failures too so they receive the same increasing cooldown as runtime failures.
   if (params.retryCount == null && await tableHasColumn(db, 'tasks', 'retry_count')) {
-    const retryState = await db.get<{ retry_count: number; max_retries: number }>(
-      'SELECT retry_count, max_retries FROM tasks WHERE id = ?', params.taskId,
+    const retryState = await db.get<{ retry_count: number }>(
+      'SELECT retry_count FROM tasks WHERE id = ?', params.taskId,
     );
-    params = { ...params, retryCount: (retryState?.retry_count ?? 0) + 1, maxRetries: retryState?.max_retries ?? 3 };
+    params = { ...params, retryCount: (retryState?.retry_count ?? 0) + 1 };
   }
   const classification = classifyDispatchStartupFailure(params.reason);
   const fallbackStatus = deriveDispatchFailureFallbackStatus(params.priorStatus);
-  const terminalFailureStatus = classification.failureOutcome === 'env_blocked' ? 'stalled' : 'failed';
-  const legacySafeStatus = classification.failureOutcome === 'env_blocked'
-    ? terminalFailureStatus
-    : (params.keepAutoRetry ? fallbackStatus : terminalFailureStatus);
   const hasWorkflowEventMappings = await tableHasColumn(db, 'external_event_mappings', 'event_name');
   const mapping = hasWorkflowEventMappings
     ? await resolveWorkflowEventMapping(db, {
@@ -446,12 +451,11 @@ async function persistDispatchStartupFailure(
     : null;
   const nextStatus = mapping?.action_kind === 'status' && mapping.action_target
     ? mapping.action_target
-    : (hasWorkflowEventMappings ? params.priorStatus : legacySafeStatus);
-  // Workflow mappings own the visible status; they must not override the runtime retry budget.
-  // A pause also covers mappings that ignore the event or route failures back to an eligible status.
-  const retryLimitReached = params.retryCount != null && params.maxRetries != null
-    && params.retryCount >= params.maxRetries;
-  const retryPauseReason = `${DISPATCH_RETRY_PAUSE_PREFIX} (${params.retryCount}/${params.maxRetries}). Fix the runtime startup failure, then resume this task to retry.`;
+    : (hasWorkflowEventMappings ? params.priorStatus : fallbackStatus);
+  // Workflow mappings still own visible status. Failures never create a runtime
+  // pause; operator pauses and routing gates continue to control eligibility.
+  const retryDelaySeconds = dispatchFailureBackoffSeconds(params.retryCount ?? 1);
+  const nextAction = `${classification.nextAction} Automatic dispatch can retry after ${retryDelaySeconds} seconds when routing is eligible and the task is not paused.`;
 
   const failureDetail = [
     'Dispatcher startup failure workflow event',
@@ -508,23 +512,14 @@ async function persistDispatchStartupFailure(
     assignments.push('retry_count = ?');
     values.push(params.retryCount);
   }
-  if (retryLimitReached) {
-    assignments.push("paused_at = COALESCE(paused_at, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))");
-    assignments.push('pause_reason = CASE WHEN paused_at IS NULL THEN ? ELSE pause_reason END');
-    values.push(retryPauseReason);
-  }
 
   await db.run(`
     UPDATE tasks
     SET ${assignments.join(',\n        ')}
     WHERE id = ?
   `, ...values, params.taskId);
-  if (retryLimitReached) {
-    await writeTaskHistory(db, params.taskId, 'dispatcher', 'dispatch_retry_limit', null, retryPauseReason, false);
-  }
-
-  const attemptSuffix = params.retryCount != null && params.maxRetries != null
-    ? ` (attempt ${params.retryCount}/${params.maxRetries})`
+  const attemptSuffix = params.retryCount != null
+    ? ` (attempt ${params.retryCount})`
     : '';
   const resultLabel = nextStatus === 'stalled' ? 'blocked' : (nextStatus === params.priorStatus ? 'partial' : 'failed');
 
@@ -542,7 +537,7 @@ async function persistDispatchStartupFailure(
           `Failure or issue observed: ${params.reason}`,
           `Root cause assessment: ${classification.rootCauseAssessment}`,
           `Evidence: workflow_event=${DISPATCH_STARTUP_FAILED_EVENT}; source=${AGENT_HQ_DISPATCHER_SOURCE}; mapping=${mapping ? `#${mapping.id}` : 'none'}; action=${mapping?.action_kind ?? 'legacy_safe_default'}${mapping?.action_target ? `→${mapping.action_target}` : ''}; legacy_outcome=${classification.failureOutcome}; status=${nextStatus}; routing_reason=${params.routingReason}`,
-          `Next action: ${retryLimitReached ? retryPauseReason : classification.nextAction}`,
+          `Next action: ${nextAction}`,
           `Next owner: ${classification.nextOwner}`,
         ].join('\n'));
 
@@ -557,7 +552,7 @@ async function persistDispatchStartupFailure(
         mappingId: mapping?.id ?? null,
         mappingActionKind: mapping?.action_kind ?? (hasWorkflowEventMappings ? null : 'legacy_safe_default'),
         mappingActionTarget: mapping?.action_target ?? (hasWorkflowEventMappings ? null : nextStatus),
-        nextAction: retryLimitReached ? retryPauseReason : classification.nextAction,
+        nextAction,
         nextOwner: classification.nextOwner,
         priorStatus: params.priorStatus,
         resolvedStatus: nextStatus,
@@ -904,9 +899,8 @@ export async function getNonDispatchableTaskStatusPredicate(
  * project) that are ready to dispatch, ordered by priority then creation time.
  * Used by the task-first routing path.
  *
- * Dispatch failure backoff (task #355): tasks with a recent dispatched_at value
- * (set by the failure handler) are excluded until DISPATCH_FAILURE_BACKOFF_SECONDS
- * have elapsed, preventing a spin-loop when the gateway/API is down.
+ * The persisted failure count increases the cooldown after each startup failure,
+ * up to ten minutes. Filtering parsed UTC timestamps also supports legacy ISO dates.
  */
 async function getAllDispatchableTasks(db: Db, projectId?: number | null): Promise<CandidateTask[]> {
   const assignmentColumn = await tableHasColumn(db, 'tasks', 'assigned_agent_id') ? 'assigned_agent_id' : 'agent_id';
@@ -915,9 +909,7 @@ async function getAllDispatchableTasks(db: Db, projectId?: number | null): Promi
   if (relationshipEligibility) {
     await annotateRelationshipDispatchBlocks(db, relationshipEligibility.blockedByTaskId);
   }
-  const dispatchFailureCutoff = timestampFromEpochMs(
-    Date.now() - DISPATCH_FAILURE_BACKOFF_SECONDS * 1000,
-  ) ?? nowTimestamp();
+  const now = Date.now();
 
   const legacyBlockingCountSelect = relationshipEligibility
     ? '0 as blocking_count'
@@ -941,23 +933,19 @@ async function getAllDispatchableTasks(db: Db, projectId?: number | null): Promi
            t.${assignmentColumn} as agent_id,
            ${await tableHasColumn(db, 'tasks', 'tenant_id') ? 't.tenant_id' : 'NULL'} AS tenant_id,
            t.project_id, t.task_type, t.workflow_id, s.name as workflow_name, s.workflow_type,
-           t.created_at, t.story_points, t.active_instance_id,
+           t.created_at, t.story_points, t.active_instance_id, t.retry_count, t.dispatched_at,
            ${legacyBlockingCountSelect}
     FROM tasks t
     LEFT JOIN workflows s ON s.id = t.workflow_id
     WHERE ${statusEligibility.sql}
       AND t.active_instance_id IS NULL
       AND t.paused_at IS NULL
-      AND (
-        t.dispatched_at IS NULL
-        OR t.dispatched_at < ?
-      )
       AND (t.workflow_id IS NULL OR EXISTS (
         SELECT 1 FROM workflows sp WHERE sp.id = t.workflow_id AND sp.status = 'active'
       ))
       ${legacyBlockerEligibilityClause}
   `;
-  const params: unknown[] = [...statusEligibility.params, dispatchFailureCutoff];
+  const params: unknown[] = [...statusEligibility.params];
   if (projectId != null) {
     sql += ` AND t.project_id = ?`;
     params.push(projectId);
@@ -967,7 +955,8 @@ async function getAllDispatchableTasks(db: Db, projectId?: number | null): Promi
       CASE t.priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END ASC,
       t.created_at ASC
   `;
-  const candidates = await db.all(sql, ...params) as CandidateTask[];
+  const rows = await db.all(sql, ...params) as Array<CandidateTask & DispatchRetryState>;
+  const candidates = rows.filter(task => dispatchBackoffElapsed(task, now));
   if (!relationshipEligibility) return candidates;
   return candidates
     .filter(task => !relationshipEligibility.blockedByTaskId.has(task.id))
@@ -1781,6 +1770,9 @@ async function fireAgentRun(
       ` — sessionKey=${sessionKey} model=${model ?? 'gateway-default'}${runId ? ` runId=${runId}` : ''}`
     );
 
+    // A successful startup ends the failure streak. Only touch the task while
+    // this instance still owns it; a later run must retain its own retry state.
+    await db.run(`UPDATE tasks SET retry_count = 0 WHERE active_instance_id = ? AND retry_count > 0`, instanceId);
     // Store run handle for audit / future abort
     await db.run(`UPDATE job_instances SET response = ? WHERE id = ?`, JSON.stringify({ runId }), instanceId);
 
@@ -1801,73 +1793,36 @@ async function fireAgentRun(
       WHERE id = ? AND status IN ('dispatched', 'running')
     `, errorMsg, instanceId);
 
-    // Reset linked task back to the correct workflow status, but apply retry backoff
-    // to prevent a spin-loop when the gateway/API is persistently down.
-    //
-    // Strategy (Option 1 from task #355):
-    //  - Increment retry_count on each dispatch failure.
-    //  - If retry_count >= max_retries → pause dispatch, independently of workflow status.
-    //  - Otherwise → reset to fallback status AND set dispatched_at = now so the
-    //    dispatcher's eligibility gate (dispatched_at + backoff check) prevents
-    //    immediate re-dispatch on the next reconciler tick.
+    // Keep retrying startup failures with increasing, capped waits. Persist the
+    // count and failure timestamp so restarting the API cannot bypass the wait.
     const taskRoutingReasonSelect = await tableHasColumn(db, 'tasks', 'routing_reason')
       ? 'routing_reason'
       : 'NULL AS routing_reason';
-    const taskRow = await db.get(`SELECT id, retry_count, max_retries, ${taskRoutingReasonSelect},
+    const taskRow = await db.get(`SELECT id, retry_count, ${taskRoutingReasonSelect},
               ${await tableHasColumn(db, 'tasks', 'tenant_id') ? 'tenant_id' : 'NULL'} AS tenant_id,
-              project_id, task_type
+              project_id, workflow_id, task_type
        FROM tasks
-       WHERE active_instance_id = ?`, instanceId) as { id: number; retry_count: number; max_retries: number; routing_reason: string | null; tenant_id: number | null; project_id: number | null; task_type: string | null } | undefined;
+       WHERE active_instance_id = ?`, instanceId) as { id: number; retry_count: number; routing_reason: string | null; tenant_id: number | null; project_id: number | null; workflow_id: number | null; task_type: string | null } | undefined;
 
     const newRetryCount = (taskRow?.retry_count ?? 0) + 1;
-    const maxRetries = taskRow?.max_retries ?? 3;
-
-    if (newRetryCount >= maxRetries) {
-      // Too many dispatch failures — pause dispatch even if the mapping retains an eligible status.
-      console.error(
-        `[dispatcher] Task (active_instance_id=${instanceId}) exhausted dispatch retries` +
-        ` (retry_count=${newRetryCount}, max_retries=${maxRetries}) — pausing automatic dispatch.`
-      );
-      if (taskRow?.id != null) {
-        await persistDispatchStartupFailure(db, {
-                    taskId: taskRow.id,
-                    matchedAgentId: job.agent_id,
-                    matchedAgentLabel: job.agent_name ?? job.title,
-                    routingReason: taskRow.routing_reason ?? `Dispatch launched for ${job.agent_name ?? job.title}`,
-                    priorStatus: taskStatusAtDispatch,
-                    tenantId: taskRow.tenant_id ?? null,
-                    projectId: taskRow.project_id ?? null,
-                    taskType: taskRow.task_type ?? null,
-                    reason: errorMsg,
-                    retryCount: newRetryCount,
-                    maxRetries,
-                    keepAutoRetry: false,
-                  });
-      }
-    } else {
-      // Increment retry_count and keep dispatched_at = now as the backoff timestamp.
-      // The dispatcher's eligibility gate will skip this task until the backoff window
-      // has elapsed (see DISPATCH_FAILURE_BACKOFF_SECONDS filter in query helpers).
-      console.warn(
-        `[dispatcher] Task (active_instance_id=${instanceId}) dispatch failure` +
-        ` — retry_count=${newRetryCount}/${maxRetries}, resetting to ${deriveDispatchFailureFallbackStatus(taskStatusAtDispatch)} with backoff.`
-      );
-      if (taskRow?.id != null) {
-        await persistDispatchStartupFailure(db, {
-                    taskId: taskRow.id,
-                    matchedAgentId: job.agent_id,
-                    matchedAgentLabel: job.agent_name ?? job.title,
-                    routingReason: taskRow.routing_reason ?? `Dispatch launched for ${job.agent_name ?? job.title}`,
-                    priorStatus: taskStatusAtDispatch,
-                    tenantId: taskRow.tenant_id ?? null,
-                    projectId: taskRow.project_id ?? null,
-                    taskType: taskRow.task_type ?? null,
-                    reason: errorMsg,
-                    retryCount: newRetryCount,
-                    maxRetries,
-                    keepAutoRetry: true,
-                  });
-      }
+    console.warn(
+      `[dispatcher] Task (active_instance_id=${instanceId}) dispatch failure` +
+      ` — retry_count=${newRetryCount}, retry backoff=${dispatchFailureBackoffSeconds(newRetryCount)}s.`
+    );
+    if (taskRow?.id != null) {
+      await persistDispatchStartupFailure(db, {
+        taskId: taskRow.id,
+        matchedAgentId: job.agent_id,
+        matchedAgentLabel: job.agent_name ?? job.title,
+        routingReason: taskRow.routing_reason ?? `Dispatch launched for ${job.agent_name ?? job.title}`,
+        priorStatus: taskStatusAtDispatch,
+        tenantId: taskRow.tenant_id ?? null,
+        projectId: taskRow.project_id ?? null,
+        workflowId: taskRow.workflow_id ?? null,
+        taskType: taskRow.task_type ?? null,
+        reason: errorMsg,
+        retryCount: newRetryCount,
+      });
     }
   }
 }
@@ -2358,6 +2313,12 @@ export async function runDispatcher(db: Db, projectId?: number): Promise<Dispatc
           dispatched = true;
           break;
         }
+        // Preparation may have failed before an instance existed. Do not let
+        // another matching route bypass the new cooldown in this same pass.
+        const retryState = await db.get<DispatchRetryState>(
+          'SELECT retry_count, dispatched_at FROM tasks WHERE id = ?', task.id,
+        );
+        if (retryState && !dispatchBackoffElapsed(retryState)) break;
       }
 
       if (!dispatched) result.skipped++;

@@ -225,3 +225,35 @@ it('metadata entity counts do not expand over related task populations',async()=
   const {data,result}=await calculate(definition);
   expect(data.taskIds).toEqual([]);expect(result.value).toBe(2);
 });
+
+it('compact current outcome evidence matches full history across corrections, causation and project moves',async()=>{
+  await task();
+  await db.run("INSERT INTO task_history(id,tenant_id,task_id,field,new_value) VALUES(1,1,1,'lifecycle_outcome','approved')");
+  await db.run("UPDATE tasks SET description=? WHERE id=1",'large history '.repeat(5000));
+  await db.run("UPDATE task_history SET new_value='rejected' WHERE id=1");
+  const definition:MetricDefinition={version:1,key:'outcomes',name:'Outcomes',grain:'task',time_basis:'current',missing_policy:'exclude_and_report',measure:{kind:'aggregate',aggregate:'count'},population:{left:{event_exists:{field:'event.outcome',op:'eq',value:'rejected'}},op:'eq',right:{literal:true}}};
+  await drainTelemetryOutbox(db,{batchSize:1000});
+  const catalog=await getTelemetryCatalog(db,operator,{project_id:1});
+  const asOf=new Date().toISOString();
+  const fullDb=new Proxy(db,{get(target,property){
+    if(property==='all')return (sql:string,...params:unknown[])=>target.all(sql.replace(/SELECT o\.id,o\.tenant_id,[\s\S]*? AS payload FROM telemetry_observations o/, 'SELECT o.* FROM telemetry_observations o'),...params);
+    const value=Reflect.get(target,property);return typeof value==='function'?value.bind(target):value;
+  }});
+  const compact=await loadMetricData(db,operator,{project_id:1},definition,catalog.fields,asOf,1000);
+  const full=await loadMetricData(fullDb,operator,{project_id:1},definition,catalog.fields,asOf,1000);
+  const evaluate=(data:typeof full)=>evaluateMetric({definition,entities:data.entities,observations:data.observations,catalog:catalog.fields,as_of:asOf});
+  expect(evaluate(compact)).toEqual(evaluate(full));
+  expect(evaluate(compact).value).toBe(1);
+  expect(compact.sources).toEqual(full.sources);
+  expect(compact.observations.map(row=>row.id)).toEqual(full.observations.map(row=>row.id));
+  // A superseder after as_of still retracts the earlier outcome.
+  await db.run('UPDATE task_history SET created_at=? WHERE id=1',new Date(Date.parse(asOf)+3600000).toISOString());
+  await drainTelemetryOutbox(db,{batchSize:1000});
+  const future=await loadMetricData(db,operator,{project_id:1},definition,catalog.fields,asOf,1000);
+  expect(evaluate(future).value).toBe(0);
+  // A task move cannot turn redacted history into proof of absence.
+  await db.run("UPDATE tasks SET project_id=3,workflow_id=3 WHERE id=1");
+  const scoped=await loadMetricData(db,{...operator,projectId:3},{project_id:3},definition,catalog.fields,new Date().toISOString(),1000);
+  expect(scoped.observations).toEqual([]);
+  expect(scoped.entities[0].coverage?.complete).toBe(false);
+});

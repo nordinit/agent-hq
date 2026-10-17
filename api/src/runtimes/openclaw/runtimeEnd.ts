@@ -372,6 +372,8 @@ export async function handleOpenClawRuntimeEnd(
             instanceId,
             priorTaskStatus: taskRow.task_status ?? existing.status,
             projectId: taskRow.project_id,
+            workflowId: taskRow.workflow_id,
+            workflowType: taskRow.workflow_type,
             taskType: taskRow.task_type,
             agentId: taskRow.task_agent_id,
             summary: failureSummary ?? 'OpenClaw runtime failed',

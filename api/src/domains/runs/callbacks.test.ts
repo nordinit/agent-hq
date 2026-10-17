@@ -163,7 +163,7 @@ describe('completeRunInstance runtime failure workflow event', () => {
     await teardownTestDb();
   });
 
-  async function seedInProgressRun(actionKind: 'status' | 'ignore', actionTarget: string | null): Promise<void> {
+  async function seedInProgressRun(actionKind: 'status' | 'ignore' | 'outcome', actionTarget: string | null): Promise<void> {
     await seedReadyTaskRun(db, INSTANCE_ID);
     await db.run(`UPDATE tasks SET status = 'in_progress' WHERE id = ?`, TASK_ID);
     await db.run(`UPDATE job_instances SET session_key = 'run:3461' WHERE id = ?`, INSTANCE_ID);
@@ -231,5 +231,25 @@ describe('completeRunInstance runtime failure workflow event', () => {
       { field: 'workflow_event_action_target', new_value: null },
     ]));
     expect(history.some((entry) => entry.field === 'status' && entry.new_value === 'failed')).toBe(false);
+  });
+
+  it('finishes the failed run and audits an outcome mapping the workflow does not allow', async () => {
+    await seedInProgressRun('outcome', 'runtime_failed');
+    await db.run(`INSERT INTO workflow_task_transitions
+      (tenant_id, workflow_id, task_type, from_status, outcome, to_status, enabled, priority)
+      VALUES (?, ?, 'backend', 'in_progress', 'blocked', 'blocked', 1, 100)`, TENANT_ID, WORKFLOW_ID);
+
+    await expect(completeRunInstance(db, INSTANCE_ID, {
+      status: 'failed',
+      summary: 'OpenClaw state-lifecycle coordinator contention',
+    })).resolves.toEqual({ ok: true, id: INSTANCE_ID, status: 'failed' });
+
+    expect(await db.get('SELECT status FROM job_instances WHERE id = ?', INSTANCE_ID))
+      .toEqual({ status: 'failed' });
+    expect(await db.get('SELECT status, failure_detail FROM tasks WHERE id = ?', TASK_ID))
+      .toEqual({ status: 'in_progress', failure_detail: expect.stringContaining('Rejected mapping #') });
+    expect(await db.get(`SELECT new_value FROM task_history
+      WHERE task_id = ? AND field = 'workflow_event_mapping_rejected'`, TASK_ID))
+      .toEqual({ new_value: expect.stringContaining('Cannot apply outcome "runtime_failed"') });
   });
 });

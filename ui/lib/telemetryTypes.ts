@@ -125,6 +125,13 @@ export interface TelemetryQueryResponse extends Partial<TelemetryResult> {
   unbound?: number;
   disabled?: number;
 }
+export interface TelemetryBatchRequest {
+  queries: Array<{ binding_id: string; query: TelemetryQuery }>;
+}
+export interface TelemetryBatchResponse {
+  as_of: string;
+  results: Array<{ binding_id: string; response?: TelemetryQueryResponse; error?: { code: string; message: string } }>;
+}
 export interface TelemetryContributors {
   contributors: Contribution[];
   total: number;

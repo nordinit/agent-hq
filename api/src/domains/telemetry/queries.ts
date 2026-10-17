@@ -5,6 +5,8 @@ import { TelemetryError, type TelemetryAccess, type TelemetryScope, scopeSchema,
 import { contentHash, getTelemetryCatalog, type TelemetryField } from './catalog';
 import { compileDefinition, getRevision, listBindings, winningBinding, validateComparison, getDefinition } from './definitions';
 import { loadMetricData, isoTimestamp } from './data';
+import { cachedTelemetryReads, type TelemetryReadCache } from './readCache';
+import { TelemetryDefinitionError } from './contracts';
 import { drainTelemetryOutbox } from './capture';
 import { compileSignalPredicates } from './signals';
 import { enforceTelemetryRetention } from './retention';
@@ -42,13 +44,15 @@ function temporalQuery(input:TelemetryQuery):TelemetryQuery & {as_of:string;time
   if(Date.parse(asOf)>Date.now()+5000)throw new TelemetryError('invalid_definition','as_of cannot be in the future.');
   return {...input,from,to,as_of:asOf,timezone};
 }
-async function planQuery(db:Db,access:TelemetryAccess,input:TelemetryQuery):Promise<{plans:QueryPlan[];input:TelemetryQuery;scope:TelemetryScope;comparison?:any;unbound?:number;disabled?:number}>{
+async function planQuery(db:Db,access:TelemetryAccess,input:TelemetryQuery,catalogs=new Map<string,Awaited<ReturnType<typeof getTelemetryCatalog>>>()):Promise<{plans:QueryPlan[];input:TelemetryQuery;scope:TelemetryScope;comparison?:any;unbound?:number;disabled?:number}>{
   let scope=await resolveScope(db,access,input.scope??{});
   const plans:QueryPlan[]=[];
   async function add(raw:any,metricScope:TelemetryScope,revision?:any,profileId?:string,extra?:Partial<QueryPlan>,view?:any){
     const settings={...input,...view,filter:input.filter&&view?.filter?{all:[input.filter,view.filter]}:view?.filter??input.filter};
     const merged=await resolveScope(db,access,intersectScopes(scope,metricScope));
-    const catalog=await getTelemetryCatalog(db,access,merged);
+    const catalogKey=contentHash({access,scope:merged});
+    let catalog=catalogs.get(catalogKey);
+    if(!catalog){catalog=await getTelemetryCatalog(db,access,merged);catalogs.set(catalogKey,catalog);}
     const fields=[...catalog.fields];
     // A saved revision retains descriptors even if the live field was retired.
     for(const descriptor of revision?.dependencies?.catalog??[]){
@@ -56,7 +60,7 @@ async function planQuery(db:Db,access:TelemetryAccess,input:TelemetryQuery):Prom
       if(index<0)fields.push({...descriptor,retired:true});
       else fields[index]={...descriptor};
     }
-    const compiled=await compileDefinition(db,access,raw,merged,profileId,revision?[revision.id]:[],fields,revision?.dependencies?.signals);
+    const compiled=await compileDefinition(db,access,raw,merged,profileId,revision?[revision.id]:[],fields,revision?.dependencies?.signals,catalog);
     const definition={...compiled.definition};
     if(settings.filter){
       // An ad-hoc filter is pinned for this calculation independently of the
@@ -149,17 +153,19 @@ const publicResult=(result:any):any=>{
   const {contributors,...visible}=result;
   return {...visible,...(Array.isArray(result.results)?{results:result.results.map(publicResult)}:{})};
 };
-async function evaluatePlans(db:Db,access:TelemetryAccess,planned:Awaited<ReturnType<typeof planQuery>>,input:ReturnType<typeof temporalQuery>,entityLimit:number){
+async function evaluatePlans(db:Db,access:TelemetryAccess,planned:Awaited<ReturnType<typeof planQuery>>,input:ReturnType<typeof temporalQuery>,entityLimit:number,options:{reads?:TelemetryReadCache;currentValidated?:boolean}={}){
   const results:any[]=[],tasks=new Set<number>(),projects=new Set<number>();
   const sources=new Map<string,SourceReference>();
+  if(!options.currentValidated&&planned.plans.some(plan=>plan.definition.time_basis==='current')&&Date.now()-Date.parse(input.as_of)>5000)throw new TelemetryError('unsupported_operation','Historical as_of is unavailable for current inventory. Query recorded milestones or open the retained result.');
+  const reads=options.reads??new Map();
   // One snapshot for all cards; the workload is bounded before proof retention.
   await db.withTransaction(async tx=>{
     if(!db.inTransaction)await tx.exec('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
     await tx.get('SELECT set_config(?, ?, true)','statement_timeout',input.background?'30000':'5000');
+    const dataDb=cachedTelemetryReads(tx,reads);
     for(const plan of planned.plans){
       const period=plan.window??input;
-      if(plan.definition.time_basis==='current'&&input.as_of&&Date.now()-Date.parse(input.as_of)>5000)throw new TelemetryError('unsupported_operation','Historical as_of is unavailable for current inventory. Query recorded milestones or open the retained result.');
-      const data=await loadMetricData(tx,access,plan.scope,plan.definition,plan.fields,input.as_of,entityLimit,plan.allowed_task_ids);
+      const data=await loadMetricData(dataDb,access,plan.scope,plan.definition,plan.fields,input.as_of,entityLimit,plan.allowed_task_ids);
       const result=evaluateMetric({definition:plan.definition,entities:data.entities,observations:data.observations,catalog:plan.fields,as_of:input.as_of,from:period.from,to:period.to,timezone:period.timezone??input.timezone,data_revision:data.dataRevision,max_samples:entityLimit,max_observations:Math.min(250000,entityLimit*20),filter:data.scopePredicate});
       // A positive observed event is usable evidence, but an empty projection
       // during an outage (or an uncovered old interval) cannot establish zero.
@@ -208,6 +214,10 @@ export async function queryTelemetry(db:Db,access:TelemetryAccess,raw:unknown,op
   await drainTelemetryOutbox(db,{tenantId:access.tenantId,batchSize:1000});
   const planned=await planQuery(db,access,input);input=planned.input;
   const temporal=temporalQuery(input),settings=await getTelemetrySettings(db,access.tenantId);
+  return executeQuery(db,access,planned,temporal,settings,options);
+}
+async function executeQuery(db:Db,access:TelemetryAccess,planned:Awaited<ReturnType<typeof planQuery>>,temporal:ReturnType<typeof temporalQuery>,settings:Awaited<ReturnType<typeof getTelemetrySettings>>,options:{preview?:boolean;reads?:TelemetryReadCache;currentValidated?:boolean}={}) {
+  const input=planned.input;
   const id=randomUUID(),expiresAt=new Date(Date.now()+settings.query_retention_hours*3600000).toISOString();
   if(input.background&&!options.preview){
     // Persist the resolved bundle before scheduling so later binding edits cannot
@@ -225,7 +235,7 @@ export async function queryTelemetry(db:Db,access:TelemetryAccess,raw:unknown,op
       return {query_id:id,state:'queued',status:'queued',expires_at:expiresAt};
     });
   }
-  const evaluated=await evaluatePlans(db,access,planned,temporal,settings.interactive_entities);
+  const evaluated=await evaluatePlans(db,access,planned,temporal,settings.interactive_entities,options);
   const result={...evaluated.result,query_id:id,state:'complete',status:'complete',expires_at:expiresAt,query_hash:contentHash({input:temporal,plans:planned.plans.map(({fields,...p})=>p)})};
   if(Buffer.byteLength(JSON.stringify(result),'utf8')>32*1024*1024)throw new TelemetryError('query_limit_exceeded','Contribution evidence exceeds the 32 MB retained result limit. Narrow the query.',413);
   await publishWithSources(db,access.tenantId,evaluated.sources,access.projectId,async tx=>{
@@ -233,6 +243,51 @@ export async function queryTelemetry(db:Db,access:TelemetryAccess,raw:unknown,op
     await retainSources(tx,access.tenantId,id,evaluated.sources);
   });
   return publicResult(result);
+}
+const batchSchema=z.object({queries:z.array(z.object({binding_id:z.string().min(1).max(200),query:telemetryQuerySchema}).strict()).min(1).max(10)}).strict();
+function batchError(error:unknown) {
+  if(error instanceof TelemetryError)return {code:error.code,message:error.message};
+  if(error instanceof TelemetryDefinitionError)return {code:error.code,message:error.message};
+  if(error instanceof z.ZodError)return {code:'invalid_definition',message:'The telemetry request is invalid.'};
+  if((error as any)?.code==='57014')return {code:'query_limit_exceeded',message:'The query exceeded its time budget. Narrow the scope or request a background evaluation.'};
+  throw error;
+}
+/** One snapshot and raw-read cache; each binding retains its own result/proof ID. */
+export async function queryTelemetryBatch(db:Db,access:TelemetryAccess,raw:unknown) {
+  const input=batchSchema.parse(raw);
+  if(new Set(input.queries.map(item=>item.binding_id)).size!==input.queries.length)throw new TelemetryError('invalid_definition','Batch binding IDs must be unique.');
+  if(input.queries.some(({query})=>!query.metric_revision_id||query.background))throw new TelemetryError('invalid_definition','Dashboard batches require interactive metric revisions.');
+  await drainTelemetryOutbox(db,{tenantId:access.tenantId,batchSize:1000});
+  const catalogs=new Map<string,Awaited<ReturnType<typeof getTelemetryCatalog>>>();
+  const planned:Array<{binding_id:string;plan?:Awaited<ReturnType<typeof planQuery>>;error?:ReturnType<typeof batchError>}>=[];
+  for(const item of input.queries){
+    try{planned.push({binding_id:item.binding_id,plan:await planQuery(db,access,item.query,catalogs)});}
+    catch(error){planned.push({binding_id:item.binding_id,error:batchError(error)});}
+  }
+  const settings=await getTelemetrySettings(db,access.tenantId),asOf=new Date().toISOString();
+  const results:Array<{binding_id:string;response?:any;error?:ReturnType<typeof batchError>}>=[];
+  await db.withTransaction(async tx=>{
+    if(!db.inTransaction)await tx.exec('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
+    const reads:TelemetryReadCache=new Map();
+    // Validate requested current timestamps once, before any card waits behind
+    // another. All implicit timestamps use this batch's common snapshot time.
+    const temporals=planned.map(item=>{
+      if(!item.plan)return undefined;
+      try{
+        const temporal=temporalQuery({...item.plan.input,as_of:item.plan.input.as_of??asOf});
+        if(item.plan.plans.some(plan=>plan.definition.time_basis==='current')&&Date.now()-Date.parse(temporal.as_of)>5000)throw new TelemetryError('unsupported_operation','Historical as_of is unavailable for current inventory. Query recorded milestones or open the retained result.');
+        return temporal;
+      }catch(error){item.error=batchError(error);return undefined;}
+    });
+    for(const [index,item] of planned.entries()){
+      if(item.error){results.push({binding_id:item.binding_id,error:item.error});continue;}
+      try{
+        const response=await tx.withTransaction(savepoint=>executeQuery(savepoint,access,item.plan!,temporals[index]!,settings,{reads,currentValidated:true}));
+        results.push({binding_id:item.binding_id,response});
+      }catch(error){results.push({binding_id:item.binding_id,error:batchError(error)});}
+    }
+  });
+  return {as_of:asOf,results};
 }
 export async function getQueryRecord(db:Db,access:TelemetryAccess,id:string){
   const row=await db.get<any>('SELECT * FROM telemetry_query_results WHERE tenant_id=? AND id=?',access.tenantId,id);

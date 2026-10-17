@@ -2,7 +2,7 @@ import { getApiBase } from './http';
 import { isUiSessionExpired, redirectToLogin } from '../sessionExpiry';
 import type { DashboardDocument, SavedDashboard } from '../dashboardTypes';
 import { telemetryScopeQuery } from '../telemetryPresentation';
-import type { DefinitionValidation, MetricDefinition, TelemetryBinding, TelemetryBindingPreview, TelemetryBindingPreviewRequest, TelemetryCatalog, TelemetryContributors, TelemetryMetric, TelemetryProfile, TelemetryQuery, TelemetryQueryResponse, TelemetryReport, TelemetryReportDefinition, TelemetryResource, TelemetryScope } from '../telemetryTypes';
+import type { DefinitionValidation, MetricDefinition, TelemetryBinding, TelemetryBindingPreview, TelemetryBindingPreviewRequest, TelemetryBatchRequest, TelemetryBatchResponse, TelemetryCatalog, TelemetryContributors, TelemetryMetric, TelemetryProfile, TelemetryQuery, TelemetryQueryResponse, TelemetryReport, TelemetryReportDefinition, TelemetryResource, TelemetryScope } from '../telemetryTypes';
 
 const BASE = '/api/v1/telemetry/v2';
 export class TelemetryApiError extends Error {
@@ -31,6 +31,7 @@ export const telemetryClient = {
   getTelemetryCatalog: (scope?: TelemetryScope, signal?: AbortSignal) => request<TelemetryCatalog>(`/catalog${scopeQuery(scope)}`, { signal }),
   validateTelemetryDefinition: (definition: MetricDefinition, scope: TelemetryScope) => post<DefinitionValidation & { description?: string }>('/definitions/validate', { definition, scope }),
   previewTelemetry: (query: TelemetryQuery, signal?: AbortSignal) => post<TelemetryQueryResponse>('/queries/preview', query, signal),
+  queryTelemetryBatch: (batch: TelemetryBatchRequest, signal?: AbortSignal) => post<TelemetryBatchResponse>('/queries/batch', batch, signal),
   queryTelemetry: (query: TelemetryQuery, signal?: AbortSignal) => post<TelemetryQueryResponse>('/queries', query, signal),
   getTelemetryQuery: (id: string, signal?: AbortSignal) => request<TelemetryQueryResponse>(`/queries/${encodeURIComponent(id)}`, { signal }),
   cancelTelemetryQuery: (id: string) => request<{ cancelled: boolean }>(`/queries/${encodeURIComponent(id)}`, { method: 'DELETE' }),

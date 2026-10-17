@@ -6,7 +6,7 @@ import { getTelemetryCatalog } from '../domains/telemetry/catalog';
 import { recipeCatalog, coreRuntimeRecipes } from '../domains/telemetry/recipes';
 import { TelemetryDefinitionError } from '../domains/telemetry/contracts';
 import { compileDefinition, createDefinition, reviseDefinition, getDefinition, listDefinitions, archiveDefinition, listBindings, previewBinding, saveBinding, type DefinitionKind } from '../domains/telemetry/definitions';
-import { queryTelemetry, readQuery, queryContributors, cancelQuery, freezeReport, listSnapshots, getTelemetrySettings, updateTelemetrySettings } from '../domains/telemetry/queries';
+import { queryTelemetry, queryTelemetryBatch, readQuery, queryContributors, cancelQuery, freezeReport, listSnapshots, getTelemetrySettings, updateTelemetrySettings } from '../domains/telemetry/queries';
 import { backfillTelemetry, getTelemetryCoverage, TELEMETRY_BACKFILL_SOURCES } from '../domains/telemetry/capture';
 import { exportTelemetry, importTelemetry } from '../domains/telemetry/portability';
 import { getTelemetryDefinitionContract } from '../domains/telemetry/definitionContract';
@@ -41,6 +41,7 @@ router.get('/bindings',handle(async(req,res)=>{const db=getDb(),access=await tel
 router.post('/bindings/preview',handle(async(req,res)=>{const db=getDb();res.json(await previewBinding(db,await telemetryAccess(db,req),req.body));}));
 router.put('/bindings',handle(async(req,res)=>{const db=getDb();res.json(await saveBinding(db,await telemetryAccess(db,req),req.body));}));
 router.post('/queries/preview',handle(async(req,res)=>{const db=getDb();res.json(await queryTelemetry(db,await telemetryAccess(db,req),req.body,{preview:true}));}));
+router.post('/queries/batch',handle(async(req,res)=>{res.json(await queryTelemetryBatch(getDb(),await telemetryAccess(getDb(),req),req.body));}));
 router.post('/queries',handle(async(req,res)=>{const db=getDb(),result=await queryTelemetry(db,await telemetryAccess(db,req),req.body);res.status(result.state==='queued'?202:200).json(result);}));
 router.get('/queries/:id',handle(async(req,res)=>{const db=getDb();res.json(await readQuery(db,await telemetryAccess(db,req),req.params.id));}));
 router.delete('/queries/:id',handle(async(req,res)=>{const db=getDb();res.json(await cancelQuery(db,await telemetryAccess(db,req),req.params.id));}));

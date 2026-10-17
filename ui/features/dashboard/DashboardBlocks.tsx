@@ -33,15 +33,16 @@ function MetricBlock({ block, page, data, catalog, inspect }: Props & { block: E
   const title = block.title || binding?.title || state?.definition?.name || 'Metric';
   const surface = `${styles.panel} ${block.surface === 'plain' ? styles.plain : ''}`;
   if (!binding) return <div className={surface}><h3 className={styles.blockTitle}>{title}</h3><p className={styles.error}>This metric binding is unavailable.</p></div>;
-  if (!state || state.busy) return <div className={`${surface} ${styles.stat}`} aria-busy="true"><p className={styles.statLabel}>{title}</p><p className={`${styles.statValue} ${styles.loading}`}>—</p><p className={styles.muted}>Loading metric…</p></div>;
-  if (state.error || !state.result) return <div className={surface}><h3 className={styles.blockTitle}>{title}</h3><p className={styles.error} role="alert">{state.error || 'No result available.'}</p></div>;
+  if (!state || (state.busy && !state.result)) return <div className={`${surface} ${styles.stat}`} aria-busy="true"><p className={styles.statLabel}>{title}</p><p className={`${styles.statValue} ${styles.loading}`}>—</p><p className={styles.muted}>Loading metric…</p></div>;
+  if (!state.result) return <div className={surface}><h3 className={styles.blockTitle}>{title}</h3><p className={styles.error} role="alert">{state.error || 'No result available.'}</p></div>;
   const result = state.result, precision = block.precision ?? 2;
   const override = binding.view?.from || binding.view?.to || binding.view?.timezone || Object.keys(binding.view?.scope ?? {}).some(key => key !== 'include_archived');
   const caption = [result.denominator != null ? `${formatDashboardValue(result.numerator)} / ${formatDashboardValue(result.denominator)} eligible` : `${result.sample_count} contributing ${result.sample_count === 1 ? 'record' : 'records'}`,
     !['percent', 'count', 'number', 'dimensionless'].includes(result.unit) ? result.unit : '', override ? 'Custom filters' : ''].filter(Boolean).join(' · ');
   const open = (group?: Scalar[]) => inspect({ bindingId: binding.id, title, group });
-  if (!block.display || block.display === 'card') return <DashboardStat title={title} value={formatDashboardValue(result.value, result.unit, precision)} caption={caption} icon={block.icon} accent={block.accent} plain={block.surface === 'plain'} onClick={() => open()} warning={<Quality result={result}/>}/>;
-  return <div className={surface}><div className={styles.sectionHeader}><h3 className={styles.blockTitle}>{title}</h3><button className={styles.button} type="button" onClick={() => open()}>Details <ArrowUpRight/></button></div><TelemetryVisualization result={result} catalog={catalog} display={block.display} sort={binding.view?.sort} onSelectGroup={open}/><Quality result={result}/></div>;
+  const quality = <>{state.busy ? <span className={styles.muted} role="status">Refreshing…</span> : state.error ? <span className={styles.warning} role="alert">Refresh failed; showing previous result. {state.error}</span> : null}<Quality result={result}/></>;
+  if (!block.display || block.display === 'card') return <DashboardStat title={title} value={formatDashboardValue(result.value, result.unit, precision)} caption={caption} icon={block.icon} accent={block.accent} plain={block.surface === 'plain'} onClick={() => open()} warning={quality}/>;
+  return <div className={surface}><div className={styles.sectionHeader}><h3 className={styles.blockTitle}>{title}</h3><button className={styles.button} type="button" onClick={() => open()}>Details <ArrowUpRight/></button></div><TelemetryVisualization result={result} catalog={catalog} display={block.display} sort={binding.view?.sort} onSelectGroup={open}/>{quality}</div>;
 }
 function ComparisonBlock({ block, page, data, catalog, inspect }: Props & { block: Extract<DashboardBlock, { type: 'comparison' }> }) {
   const [all, setAll] = useState(false);

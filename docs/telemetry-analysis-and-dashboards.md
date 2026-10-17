@@ -8,7 +8,7 @@ The number, horizontal bars, and table support current snapshots. Time charts re
 
 Dashboards are configurable pages; see [Configurable dashboard pages](dashboard-pages.md) for layout editing, filters, and storage. While editing a page, **+ Add block** offers saved views alongside metrics. Adding a view copies its pinned configuration into the page's metric bindings, so later changes to the source view do not alter existing dashboards.
 
-Page project and time filters apply to its metric blocks. A binding can narrow scope and override its time range; overrides are labeled. Current snapshots ignore historical dashboard dates and continue to describe current inventory. Each block reports its own errors, and a saved, unchanged binding opens in Analyze from its detail drawer.
+Page project and time filters apply to its metric blocks. A binding can narrow scope and override its time range; overrides are labeled. Current snapshots ignore historical dashboard dates and continue to describe current inventory. Dashboard metrics are fetched in a bounded batch with shared compatible database reads and independent formulas. Each block reports its own errors, and a saved, unchanged binding opens in Analyze from its detail drawer.
 
 ## Validation and attribution
 

@@ -368,6 +368,8 @@ describe('OpenClawRuntime terminal failure handling', () => {
       taskId: 383,
       instanceId: 1757,
       projectId: 86,
+      workflowId: 9,
+      workflowType: 'enhancement',
       agentId: 42,
       runtimeEndError: expect.stringContaining('rate limit exceeded'),
     }));
