@@ -100,6 +100,27 @@ describe('materializeAgentMcpConfig', () => {
     expect(fs.existsSync(files[2])).toBe(true);
   });
 
+  it('launches the OpenClaw Agent HQ client from the running release instead of a stale registry path', async () => {
+    await createRegistryTables();
+    await getDb().run(`INSERT INTO agents (id,tenant_id,name,session_key,runtime_type) VALUES (1,1,'Agent','agent:test-1:main','openclaw')`);
+    await getDb().run(`INSERT INTO mcp_servers (id,tenant_id,name,slug,command,args,cwd)
+      VALUES (40,1,'HQ','agent-hq','/old/node','["/old/api/dist/mcp/server.js"]','/old/api')`);
+    await getDb().run(`INSERT INTO agent_mcp_assignments (agent_id,mcp_server_id) VALUES (1,40)`);
+    const workspace = makeTempDir('ahq-release-client-');
+    const result = await materializeAgentMcpConfig({ db: getDb(), agentId: 1, workingDirectory: workspace,
+      runIdentity: { instanceId: 42, durableRunId: 'run-42' } });
+    expect(result.ok).toBe(true);
+    const published = readBundleConfig(workspace).mcpServers['agent-hq__agent-1'];
+    expect(published).toMatchObject({
+      command: process.execPath,
+      args: [path.resolve(__dirname, '../mcp/server.js')],
+      cwd: path.resolve(__dirname, '../..'),
+      env: { AGENT_HQ_INSTANCE_ID: '42', AGENT_HQ_DURABLE_RUN_ID: 'run-42' },
+    });
+    expect(JSON.stringify(published)).not.toContain('/old/');
+    expect(JSON.parse(fs.readFileSync(result.path, 'utf8')).mcpServers['agent-hq__agent-1']).toEqual(published);
+  });
+
   it.each(['list', 'entries'])('denies foreign namespaces and preserves manual policies with agents.%s', shape => {
     const configPath = process.env.OPENCLAW_CONFIG_PATH!;
     const first = makeTempDir('ahq-scope-a-'); const second = makeTempDir('ahq-scope-b-');

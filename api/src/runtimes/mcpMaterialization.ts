@@ -1128,7 +1128,7 @@ function resolveAgentHqServerRuntimePaths(
   return next;
 }
 
-function resolveHermesAgentHqServerPaths(
+function resolveAgentHqServerPaths(
   servers: Record<string, Record<string, unknown>>,
 ): Record<string, Record<string, unknown>> {
   return Object.fromEntries(
@@ -1148,7 +1148,7 @@ function resolveHermesAgentHqServerPaths(
 export function resolveMcpServerRuntimePaths(
   servers: Record<string, Record<string, unknown>>,
 ): Record<string, Record<string, unknown>> {
-  return resolveHermesServerPaths(resolveHermesAgentHqServerPaths(servers));
+  return resolveHermesServerPaths(resolveAgentHqServerPaths(servers));
 }
 
 export async function materializeHermesMcpConfig(params: {
@@ -1181,7 +1181,7 @@ export async function materializeHermesMcpConfig(params: {
 
   const existingServers = readExistingMcpJsonServers(params.hermesHome);
   const desiredServers = resolveHermesServerPaths(
-    resolveHermesAgentHqServerPaths(
+    resolveAgentHqServerPaths(
       await fetchAssignedMcpServers(params.db, params.agentId, existingServers),
     ),
   );
@@ -1331,7 +1331,11 @@ export async function materializeAgentMcpConfig(params: {
       );
     }
   }
-  const desiredServers = await fetchAssignedMcpServers(params.db, params.agentId, existingServers);
+  // OpenClaw must launch the MCP client from this release too. Registry paths
+  // may still point at an older checkout, whose client drops recurrence/run IDs.
+  const desiredServers = resolveAgentHqServerPaths(
+    await fetchAssignedMcpServers(params.db, params.agentId, existingServers),
+  );
   for (const [name, server] of Object.entries(desiredServers)) {
     const runIdentity = params.runIdentity ?? runIdentityFromEnv(
       (existingServers[name]?.env ?? {}) as NodeJS.ProcessEnv);
