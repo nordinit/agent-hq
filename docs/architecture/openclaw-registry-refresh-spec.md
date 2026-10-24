@@ -2,6 +2,18 @@
 
 Status: as of October 12, 2026, production is the only running Agent HQ environment and uses `on-change` reconciliation with `AGENT_HQ_OPENCLAW_MCP_MAINTENANCE_OWNER=1`. Development 1 is preserved offline; development 2 is retired. Cross-process ownership enforcement is still not implemented, so do not restart another API against this OpenClaw state without first establishing maintenance isolation. Earlier rollout history is retained below.
 
+## Configuration edits resync only affected agents — October 24
+
+Migration 37's statement-level triggers enqueued every OpenClaw agent whenever any MCP server, assignment, capability policy, team or agent field changed. After an API restart or gateway reconnect, the in-memory applied-revision cache is empty, so every queued agent then costs a `plugins.reload`. OpenClaw applies each reload gateway-wide: it publishes a new plugin generation that supersedes every agent's prepared session, replaces provider auth, and retains heap. On October 24 a single credential edit on one QA server reloaded about 18 agents, failed several in-flight dispatches, and added about 700 MB to the gateway heap.
+
+Migration 45 replaces those triggers with row-level ones that enqueue only the agents an edit can affect:
+- **Assignment, capability policy or membership rows:** the named agent.
+- **A server:** agents assigned to it directly, plus members of enabled teams that have it.
+- **A team assignment, or a team's `enabled` or `deleted_at`:** the team's members.
+- **An agent:** the agent itself, plus any agent on its old or new workspace, because MCP credentials require a single-owner workspace.
+
+Updates that change nothing enqueue nothing. Deleted agents and other runtimes are still excluded.
+
 ## Escalation no longer ends recovery — October 24
 
 On October 21 a gateway hang outlasted Casper's thirty-minute window, and the recovery moved to `attention`. When the gateway came back, nothing retried it. Dispatch, the sync queue and the recovery worker all skip an agent with an open recovery, so the agent stayed benched for three days, along with seven agents that had escalated on October 18.
