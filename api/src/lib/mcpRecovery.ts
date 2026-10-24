@@ -10,23 +10,41 @@ export interface McpRecovery {
   started_at: string | Date; deadline_at: string | Date;
   attempts: number; last_error: string;
 }
+/** Must outlast a gateway restart: boots took 6-9 minutes under memory pressure, then a reload backlog. */
+export function mcpRecoveryDeadlineMinutes(env: NodeJS.ProcessEnv = process.env): number {
+  const minutes = Number(env.AGENT_HQ_MCP_RECOVERY_DEADLINE_MINUTES);
+  return Number.isSafeInteger(minutes) && minutes > 0 ? minutes : 30;
+}
+/**
+ * Escalation alerts but never stops recovery: a gateway outage can outlast any deadline. After the
+ * deadline, attempts back off to every 5 minutes for half an hour, then every 10 minutes.
+ */
+const ATTENTION_RETRY_INTERVAL_SQL = `CASE WHEN now() - deadline_at < interval '30 minutes'
+  THEN interval '5 minutes' ELSE interval '10 minutes' END`;
+/** Evaluated against the row's state before the update; attempts inside the deadline are a minute apart. */
+export const NEXT_RECOVERY_ATTEMPT_SQL = `now() + CASE WHEN state = 'recovering' THEN interval '1 minute'
+  ELSE ${ATTENTION_RETRY_INTERVAL_SQL} END`;
 export function recoveryLabel(recovery: McpRecovery): string {
   return recovery.state === 'attention' ? 'Recovery failed — needs attention' : 'Recovering tool configuration';
 }
 export async function assertRecoveryActive(db: Db, recoveryId?: number): Promise<number> {
   if (recoveryId == null) return 90_000;
-  const remaining = await db.value<number>(`SELECT EXTRACT(EPOCH FROM (deadline_at - clock_timestamp())) * 1000
-    FROM openclaw_mcp_recovery WHERE id = ? AND state = 'recovering' AND deadline_at > clock_timestamp()`, recoveryId);
-  if (remaining == null || remaining <= 0) throw new Error('Recovery deadline reached; operator attention is required');
+  const recovery = await db.get<{ state: McpRecovery['state']; remaining: number | string }>(`SELECT state,
+    EXTRACT(EPOCH FROM (deadline_at - clock_timestamp())) * 1000 AS remaining
+    FROM openclaw_mcp_recovery WHERE id = ? AND resolved_at IS NULL`, recoveryId);
+  // An escalated incident has no deadline left; each retry gets the budget of an ordinary apply.
+  if (recovery?.state === 'attention') return 90_000;
+  const remaining = Number(recovery?.remaining);
+  if (recovery?.state !== 'recovering' || !(remaining > 0)) throw new Error('Recovery deadline reached; operator attention is required');
   return Math.max(1, Math.floor(remaining));
 }
 /** Also covers a process dying before its failure handler could create an incident. */
 export async function restoreMcpRecoveries(db: Db): Promise<void> {
   await db.run(`INSERT INTO openclaw_mcp_recovery (target_key, agent_id, started_at, deadline_at, last_error)
-    SELECT target_key, agent_id, updated_at, updated_at + interval '10 minutes',
+    SELECT target_key, agent_id, updated_at, updated_at + make_interval(mins => ?),
       COALESCE(error, 'MCP configuration update was interrupted') FROM openclaw_mcp_reconciliation
     WHERE state = 'failed' OR (state = 'pending' AND operation_phase IN ('refresh', 'reload'))
-    ON CONFLICT (target_key, agent_id) WHERE resolved_at IS NULL DO NOTHING`);
+    ON CONFLICT (target_key, agent_id) WHERE resolved_at IS NULL DO NOTHING`, mcpRecoveryDeadlineMinutes());
 }
 export async function getAgentMcpRecovery(db: Db, agentId: number): Promise<McpRecovery | null> {
   return await db.get<McpRecovery>(`SELECT * FROM openclaw_mcp_recovery
@@ -58,44 +76,37 @@ async function recoveryTaskNote(db: Db, recovery: McpRecovery, taskId: number, s
     + `Started: ${new Date(recovery.started_at).toISOString()}\nDeadline: ${new Date(recovery.deadline_at).toISOString()}\n`
     + `Attempts: ${recovery.attempts}\nLatest error: ${recovery.last_error}\n`
     + (recovery.state === 'resolved' ? 'Next action: Normal dispatch eligibility checks apply.'
-      : recovery.state === 'attention' ? 'Next owner: Operator. Inspect the agent recovery details and retry recovery.'
+      : recovery.state === 'attention' ? 'Next owner: Operator. HQ keeps retrying every 5-10 minutes; inspect the agent recovery details or retry recovery now.'
         : 'Next action: HQ is recovering the configuration; task dispatch is waiting.');
   await db.run(`INSERT INTO task_notes (tenant_id, task_id, author, content)
     SELECT tenant_id, id, 'Agent HQ', ? FROM tasks WHERE id = ?`, content, taskId);
   await writeTaskHistory(db, taskId, 'Agent HQ', 'mcp_recovery', null,
     JSON.stringify({ recovery_id: recovery.id, state: recovery.state, summary }));
 }
+/**
+ * Tasks are linked only when a dispatch path holds them back (attachRecoveryTask), so the incident
+ * lists work that was actually ready to run rather than every open task the agent owns.
+ */
 export async function beginMcpRecovery(db: Db, target: string, agentId: number, error: string): Promise<McpRecovery> {
   return db.withTransaction(async tx => {
     // Same row lock as dispatch: registering a blocker and reserving work cannot race.
     await tx.get('SELECT id FROM agents WHERE id = ? FOR UPDATE', agentId);
-    const recovery = await tx.get<McpRecovery>(`INSERT INTO openclaw_mcp_recovery (target_key, agent_id, last_error)
-      VALUES (?, ?, ?) ON CONFLICT (target_key, agent_id) WHERE resolved_at IS NULL
-      DO UPDATE SET last_error = EXCLUDED.last_error RETURNING *`, target, agentId, redactSensitiveRuntimeText(error).slice(0, 4000));
+    const recovery = await tx.get<McpRecovery>(`INSERT INTO openclaw_mcp_recovery (target_key, agent_id, last_error, deadline_at)
+      VALUES (?, ?, ?, now() + make_interval(mins => ?)) ON CONFLICT (target_key, agent_id) WHERE resolved_at IS NULL
+      DO UPDATE SET last_error = EXCLUDED.last_error RETURNING *`, target, agentId, redactSensitiveRuntimeText(error).slice(0, 4000),
+    mcpRecoveryDeadlineMinutes());
     if (!recovery) throw new Error('Could not record MCP recovery');
-    await attachAssignedTasks(tx, recovery);
     return recovery;
   });
-}
-async function attachAssignedTasks(db: Db, recovery: McpRecovery) {
-  const tasks = await db.all<{ id: number; status: string; tenant_id: number; workflow_id: number | null }>(`
-    SELECT t.id, t.status, t.tenant_id, t.workflow_id FROM tasks t JOIN agents a ON a.id = ? AND a.tenant_id = t.tenant_id
-    WHERE COALESCE(t.assigned_agent_id, t.agent_id) = a.id`, recovery.agent_id);
-  const terminalByWorkflow = new Map<string, string[]>();
-  for (const task of tasks) {
-    const key = `${task.tenant_id}:${task.workflow_id}`;
-    const terminal = terminalByWorkflow.get(key) ?? await listConfiguredTerminalStatuses(db, { workflowId: task.workflow_id, tenantId: task.tenant_id });
-    terminalByWorkflow.set(key, terminal);
-    if (!terminal.includes(task.status)) await attachRecoveryTask(db, recovery, task.id);
-  }
 }
 async function notifyRecovery(db: Db, recovery: McpRecovery, resolved: boolean) {
   const agent = await db.get<{ name: string; tenant_id: number }>('SELECT name, tenant_id FROM agents WHERE id = ?', recovery.agent_id);
   if (!agent?.tenant_id) return null;
   const tasks = await db.all<{ id: number }>('SELECT task_id AS id FROM openclaw_mcp_recovery_tasks WHERE recovery_id = ? ORDER BY task_id', recovery.id);
-  const title = resolved ? `${agent.name}'s tool configuration recovered` : `${agent.name}'s recovery has failed for 10 minutes`;
+  const minutes = Math.round((new Date(recovery.deadline_at).getTime() - new Date(recovery.started_at).getTime()) / 60_000);
+  const title = resolved ? `${agent.name}'s tool configuration recovered` : `${agent.name}'s recovery has failed for ${minutes} minutes`;
   const body = `${title}.\nAffected tasks: ${tasks.map(t => `#${t.id}`).join(', ') || 'None yet'}.\n`
-    + (resolved ? 'Configuration verified. Eligible tasks can resume.' : `Attempts: ${recovery.attempts}. Latest error: ${recovery.last_error}\nTask dispatch is waiting. Operator: inspect the failure and retry recovery.`);
+    + (resolved ? 'Configuration verified. Eligible tasks can resume.' : `Attempts: ${recovery.attempts}. Latest error: ${recovery.last_error}\nTask dispatch is waiting. HQ keeps retrying every 5-10 minutes. Operator: inspect the failure, or retry now with POST /api/v1/agents/${recovery.agent_id}/mcp-recovery/retry.`);
   const record = await createNotificationRecord(db, { tenantId: agent.tenant_id,
     type: resolved ? 'mcp_recovery_resolved' : 'mcp_recovery_failed', title, body,
     source: 'agent_hq_mcp_recovery', outlet: 'agent_hq', metadata: {
@@ -113,8 +124,8 @@ export async function escalateMcpRecoveries(db: Db): Promise<void> {
       ORDER BY deadline_at FOR UPDATE SKIP LOCKED LIMIT 32`);
     for (const row of rows) {
       const recovery: McpRecovery = { ...row, state: 'attention' };
-      await tx.run("UPDATE openclaw_mcp_recovery SET state = 'attention' WHERE id = ?", row.id);
-      await attachAssignedTasks(tx, recovery);
+      await tx.run(`UPDATE openclaw_mcp_recovery SET state = 'attention', next_attempt_at = now() + ${ATTENTION_RETRY_INTERVAL_SQL}
+        WHERE id = ?`, row.id);
       const notificationId = await notifyRecovery(tx, recovery, false);
       await tx.run('UPDATE openclaw_mcp_recovery SET escalation_notification_id = ? WHERE id = ?', notificationId, row.id);
       const tasks = await tx.all<{ task_id: number }>('SELECT task_id FROM openclaw_mcp_recovery_tasks WHERE recovery_id = ?', row.id);
@@ -131,5 +142,22 @@ export async function resolveMcpRecovery(db: Db, target: string, agentId: number
     await tx.run('UPDATE openclaw_mcp_recovery SET resolution_notification_id = ? WHERE id = ?', notificationId, recovery.id);
     const tasks = await tx.all<{ task_id: number }>('SELECT task_id FROM openclaw_mcp_recovery_tasks WHERE recovery_id = ?', recovery.id);
     for (const task of tasks) await recoveryTaskNote(tx, recovery, task.task_id, 'Tool configuration recovered');
+  });
+}
+/**
+ * Operator retry of an escalated incident: an attempt now instead of at the next 5-10 minute retry,
+ * and a fresh window whose failure alerts again. started_at and attempts keep the full history.
+ */
+export async function retryMcpRecovery(db: Db, agentId: number): Promise<McpRecovery[]> {
+  return db.withTransaction(async tx => {
+    const recoveries = await tx.all<McpRecovery>(`UPDATE openclaw_mcp_recovery SET state = 'recovering',
+      deadline_at = now() + make_interval(mins => ?), next_attempt_at = now(), escalation_notification_id = NULL
+      WHERE agent_id = ? AND resolved_at IS NULL AND (state = 'attention' OR deadline_at <= now()) RETURNING *`,
+    mcpRecoveryDeadlineMinutes(), agentId);
+    for (const recovery of recoveries) {
+      const tasks = await tx.all<{ task_id: number }>('SELECT task_id FROM openclaw_mcp_recovery_tasks WHERE recovery_id = ?', recovery.id);
+      for (const task of tasks) await recoveryTaskNote(tx, recovery, task.task_id, 'Operator retried tool configuration recovery');
+    }
+    return recoveries;
   });
 }

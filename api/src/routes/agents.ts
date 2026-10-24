@@ -1,5 +1,5 @@
 import { getAgentResolution } from '../domains/agents/resolution';
-import { getAgentMcpRecovery } from '../lib/mcpRecovery';
+import { getAgentMcpRecovery, retryMcpRecovery } from '../lib/mcpRecovery';
 import { describeToolAccess } from '../mcp/accessView';
 import { Router, Request, Response } from 'express';
 import * as fs from 'fs';
@@ -2853,6 +2853,29 @@ router.post('/:id/mcp/sync', async (req: Request, res: Response) => {
       warnings: result.warnings,
       skipped: result.skipped ?? null,
       ...(result.error ? { error: result.error } : {}),
+    });
+  } catch (err) {
+    return res.status(500).json({ error: String(err) });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/v1/agents/:id/mcp-recovery/retry — operator retry of an escalated
+// tool configuration recovery. Returns at once; the recovery worker makes the
+// attempts and resolves or re-escalates the incident as usual.
+// ---------------------------------------------------------------------------
+router.post('/:id/mcp-recovery/retry', async (req: Request, res: Response) => {
+  try {
+    const db = getDb();
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    if (!await requireAgentVisibleForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Agent not found' });
+    const retried = await retryMcpRecovery(db, Number(req.params.id));
+    if (retried.length) return res.status(202).json({ ok: true, runtime_recovery: retried[0] });
+    const current = await getAgentMcpRecovery(db, Number(req.params.id));
+    return res.status(409).json({
+      error: current ? 'Recovery is already in progress' : 'Agent has no open tool configuration recovery',
+      code: current ? 'mcp_recovery_in_progress' : 'mcp_recovery_not_found',
+      runtime_recovery: current,
     });
   } catch (err) {
     return res.status(500).json({ error: String(err) });

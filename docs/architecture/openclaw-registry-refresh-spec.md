@@ -2,6 +2,28 @@
 
 Status: as of October 12, 2026, production is the only running Agent HQ environment and uses `on-change` reconciliation with `AGENT_HQ_OPENCLAW_MCP_MAINTENANCE_OWNER=1`. Development 1 is preserved offline; development 2 is retired. Cross-process ownership enforcement is still not implemented, so do not restart another API against this OpenClaw state without first establishing maintenance isolation. Earlier rollout history is retained below.
 
+## Escalation no longer ends recovery — October 24
+
+On October 21 a gateway hang outlasted Casper's thirty-minute window, and the recovery moved to `attention`. When the gateway came back, nothing retried it. Dispatch, the sync queue and the recovery worker all skip an agent with an open recovery, so the agent stayed benched for three days, along with seven agents that had escalated on October 18.
+
+Escalation now only sends the alert. The worker keeps attempting `attention` recoveries every 5 minutes for the first half hour past the deadline, then every 10 minutes, until a reconcile succeeds and resolves the incident. Each such attempt has the 90-second budget of an ordinary apply. An attempt checks gateway health before it mutates anything, so retries during an outage do not reload plugins. `POST /api/v1/agents/:id/mcp-recovery/retry` runs an attempt at once and opens a fresh window whose failure alerts again.
+
+Recoveries no longer link every non-terminal task the agent owns. A task is linked, with a task note, only when a dispatch path holds it back, so alerts list work that was ready to run. Casper's October 21 incident had linked 150 tasks.
+
+## Stable workspace bundles and a thirty-minute recovery window — October 19
+
+Dispatch previously pinned `AGENT_HQ_INSTANCE_ID` and `AGENT_HQ_DURABLE_RUN_ID` into the OpenClaw workspace bundle. Every dispatch therefore changed the bundle revision and forced a gateway `plugins.reload`. Each reload retained roughly 50-77 MB of gateway heap, and the default 4 GB V8 limit was reached after 30-40 dispatches. This produced 54 out-of-memory crashes between September 29 and October 18.
+
+OpenClaw bundles now carry a stable `AGENT_HQ_RUN_IDENTITY_FILE` pointing to `<workspace>/.agent-hq/mcp-run-identity.json`, which sits outside the bundle directory. Dispatch rewrites that file atomically, and the stdio Agent HQ MCP client re-reads it on every request. This keeps the watchdog's `first_agent_call_at` and `last_agent_call_at` evidence. The bundle revision changes only when assigned servers or credentials change, so an ordinary dispatch reuses the applied revision without a reload.
+
+Two cases keep different behavior:
+- Remote (URL) servers still take pinned headers.
+- Claude Code, Codex and Hermes still pin per-process environment, because their configuration does not outlive a run.
+
+The first ordinary sync after the upgrade moves an identity pinned by an older release into the file, unless dispatch has already written one.
+
+The recovery deadline is now `AGENT_HQ_MCP_RECOVERY_DEADLINE_MINUTES`, defaulting to 30. On October 18 a crash during a reload left 14 agents in `attention` for about 4.5 hours, because the gateway took 6-9 minutes to boot under memory pressure and every retry ran out of the ten-minute window. The deadline remains durable per episode, and escalation still stops automatic mutation.
+
 ## Automatic recovery and ten-minute escalation — October 17 implementation
 
 Migration 44 adds a durable recovery episode per gateway configuration and agent. The first failure fixes a ten-minute deadline; retries, restarts and configuration edits preserve it. Startup reconstructs interrupted refresh/reload work using its persisted timestamp, so an already-overdue failure escalates immediately. This section describes the implementation; deployment must be verified separately.
