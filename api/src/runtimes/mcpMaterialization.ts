@@ -1,5 +1,7 @@
 import { stableJson } from './openclaw/stableJson';
-import { pinMcpRunIdentity, runIdentityFromEnv, type AgentRunIdentity } from '../lib/agentRunIdentity';
+import {
+  pinMcpRunIdentity, pinMcpRunIdentityFile, runIdentityFromEnv, writeRunIdentityFile, type AgentRunIdentity,
+} from '../lib/agentRunIdentity';
 import { openClawBundleRevision } from './openclaw/mcpAdmission';
 import { createHash, randomUUID } from 'crypto';
 import fs from 'fs';
@@ -27,6 +29,11 @@ const FAIL_CLOSED_MCP_TOOL_INCLUDE = '__agent_hq_no_allowed_mcp_tools__';
 /** Stable workspace identity prevents config-wide discovery from merging different agents. */
 export function openClawMcpBundleId(workingDirectory: string): string {
   return `agent-hq-mcp-${createHash('sha256').update(path.resolve(workingDirectory)).digest('hex').slice(0, 16)}`;
+}
+
+/** Outside the bundle directory, so rewriting it per dispatch is not a plugin change. */
+export function openClawRunIdentityPath(workingDirectory: string): string {
+  return path.join(path.resolve(workingDirectory), '.agent-hq', 'mcp-run-identity.json');
 }
 
 export function openClawMcpServerPrefix(workingDirectory: string): string {
@@ -1337,10 +1344,18 @@ export async function materializeAgentMcpConfig(params: {
   const desiredServers = resolveAgentHqServerPaths(
     await fetchAssignedMcpServers(params.db, params.agentId, existingServers),
   );
+  // The OpenClaw bundle serves every dispatch in this workspace. Keeping the
+  // run out of it keeps its revision stable, so dispatch needs no plugin reload.
+  const runIdentityFile = isOpenClawRuntime ? openClawRunIdentityPath(params.workingDirectory) : null;
+  let publishedIdentity: AgentRunIdentity | null = null;
   for (const [name, server] of Object.entries(desiredServers)) {
     const runIdentity = params.runIdentity ?? runIdentityFromEnv(
       (existingServers[name]?.env ?? {}) as NodeJS.ProcessEnv);
-    if (runIdentity) pinMcpRunIdentity({ [name]: server }, runIdentity);
+    // Remote servers take run identity as headers, which a file cannot supply.
+    if (runIdentityFile && !server.url) {
+      pinMcpRunIdentityFile({ [name]: server }, runIdentityFile);
+      publishedIdentity ??= runIdentity;
+    } else if (runIdentity) pinMcpRunIdentity({ [name]: server }, runIdentity);
   }
   const desiredKeys = Object.keys(desiredServers);
   result.serverNames = desiredKeys;
@@ -1371,6 +1386,10 @@ export async function materializeAgentMcpConfig(params: {
 
   try {
     fs.mkdirSync(params.workingDirectory, { recursive: true });
+    // Ordinary sync only migrates a run pinned by an older release; it never replaces a dispatch's file.
+    if (runIdentityFile && publishedIdentity && (params.runIdentity || !fs.existsSync(runIdentityFile))) {
+      writeRunIdentityFile(runIdentityFile, publishedIdentity);
+    }
 
     if (shouldMaterializeOpenClawGlobalConfig) {
       const globalConfig = materializeOpenClawGlobalMcpConfig({

@@ -7,6 +7,7 @@ import {
   ensureOpenClawMcpWorkspaceBundleEnabled,
   openClawMcpBundleId,
   openClawMcpServerName,
+  openClawRunIdentityPath,
   openClawMcpServerPrefix,
   materializeAgentMcpConfig,
   materializeHermesMcpConfig,
@@ -14,6 +15,7 @@ import {
   syncAssignedMcpForAgent,
   syncAssignedMcpForServer,
 } from './mcpMaterialization';
+import { readRunIdentityFile } from '../lib/agentRunIdentity';
 
 const ORIGINAL_OPENCLAW_CONFIG_PATH = process.env.OPENCLAW_CONFIG_PATH;
 const ORIGINAL_DISABLE_OPENCLAW_PLUGIN_REGISTRY_REFRESH = process.env.AGENT_HQ_DISABLE_OPENCLAW_PLUGIN_REGISTRY_REFRESH;
@@ -55,25 +57,49 @@ describe('materializeAgentMcpConfig', () => {
     if (registryFixtureReady) await teardownTestDb();
   });
 
-  it('pins a dispatch identity and preserves it during ordinary MCP sync', async () => {
+  it('publishes each OpenClaw dispatch through the identity file without changing the bundle', async () => {
     await createRegistryTables();
     await getDb().run(`INSERT INTO agents (id,tenant_id,name,session_key) VALUES (1,1,'Agent','agent:test-1:main')`);
     await getDb().run(`INSERT INTO mcp_servers (id,tenant_id,name,slug,command,args) VALUES (40,1,'HQ','agent-hq','node','["server.js"]')`);
     await getDb().run(`INSERT INTO agent_mcp_assignments (agent_id,mcp_server_id) VALUES (1,40)`);
     const workspace = makeTempDir('ahq-run-identity-');
+    const identityFile = openClawRunIdentityPath(workspace);
     const first = await materializeAgentMcpConfig({ db: getDb(), agentId: 1, workingDirectory: workspace,
       runIdentity: { instanceId: 42, durableRunId: 'run-42' } });
-    const before = readBundleConfig(workspace).mcpServers['agent-hq__agent-1'].env;
-    expect(before).toMatchObject({ AGENT_HQ_INSTANCE_ID: '42', AGENT_HQ_DURABLE_RUN_ID: 'run-42' });
+    expect(first.ok).toBe(true);
+    const bundle = fs.readFileSync(first.bundlePath, 'utf8');
+    const env = readBundleConfig(workspace).mcpServers['agent-hq__agent-1'].env;
+    expect(env).toMatchObject({ AGENT_HQ_RUN_IDENTITY_FILE: identityFile, AGENT_HQ_MCP_API_KEY: expect.any(String) });
+    expect(env).not.toHaveProperty('AGENT_HQ_INSTANCE_ID');
+    expect(env).not.toHaveProperty('AGENT_HQ_DURABLE_RUN_ID');
+    expect(readRunIdentityFile(identityFile)).toEqual({ instanceId: 42, durableRunId: 'run-42' });
     const sync = await materializeAgentMcpConfig({ db: getDb(), agentId: 1, workingDirectory: workspace });
     expect(sync.changed).toBe(false);
-    expect(sync.bundleRevision).toBe(first.bundleRevision);
-    await materializeAgentMcpConfig({ db: getDb(), agentId: 1, workingDirectory: workspace,
+    expect(readRunIdentityFile(identityFile)).toEqual({ instanceId: 42, durableRunId: 'run-42' });
+    const next = await materializeAgentMcpConfig({ db: getDb(), agentId: 1, workingDirectory: workspace,
       runIdentity: { instanceId: 43, durableRunId: 'run-43' } });
-    expect(readBundleConfig(workspace).mcpServers['agent-hq__agent-1'].env).toMatchObject({
-      AGENT_HQ_INSTANCE_ID: '43', AGENT_HQ_DURABLE_RUN_ID: 'run-43', AGENT_HQ_MCP_API_KEY: before.AGENT_HQ_MCP_API_KEY,
-    });
-    expect(before.AGENT_HQ_INSTANCE_ID).toBe('42');
+    expect(next.changed).toBe(false);
+    expect(fs.readFileSync(next.bundlePath, 'utf8')).toBe(bundle);
+    expect(readRunIdentityFile(identityFile)).toEqual({ instanceId: 43, durableRunId: 'run-43' });
+  });
+
+  it('moves a run pinned by an older release into the identity file during ordinary sync', async () => {
+    await createRegistryTables();
+    await getDb().run(`INSERT INTO agents (id,tenant_id,name,session_key) VALUES (1,1,'Agent','agent:test-1:main')`);
+    await getDb().run(`INSERT INTO mcp_servers (id,tenant_id,name,slug,command,args) VALUES (40,1,'HQ','agent-hq','node','["server.js"]')`);
+    await getDb().run(`INSERT INTO agent_mcp_assignments (agent_id,mcp_server_id) VALUES (1,40)`);
+    const workspace = makeTempDir('ahq-run-identity-legacy-');
+    const first = await materializeAgentMcpConfig({ db: getDb(), agentId: 1, workingDirectory: workspace });
+    const legacy = JSON.parse(fs.readFileSync(first.path, 'utf8'));
+    const server = legacy.mcpServers['agent-hq__agent-1'];
+    delete server.env.AGENT_HQ_RUN_IDENTITY_FILE;
+    server.env = { ...server.env, AGENT_HQ_INSTANCE_ID: '41', AGENT_HQ_DURABLE_RUN_ID: 'run-41' };
+    fs.writeFileSync(first.path, JSON.stringify(legacy));
+    await materializeAgentMcpConfig({ db: getDb(), agentId: 1, workingDirectory: workspace });
+    expect(readRunIdentityFile(openClawRunIdentityPath(workspace))).toEqual({ instanceId: 41, durableRunId: 'run-41' });
+    const env = readBundleConfig(workspace).mcpServers['agent-hq__agent-1'].env;
+    expect(env).not.toHaveProperty('AGENT_HQ_INSTANCE_ID');
+    expect(env.AGENT_HQ_MCP_API_KEY).toBe(server.env.AGENT_HQ_MCP_API_KEY);
   });
 
   it('preserves nonempty files, mtimes and credentials across ten unchanged publications', async () => {
@@ -115,7 +141,7 @@ describe('materializeAgentMcpConfig', () => {
       command: process.execPath,
       args: [path.resolve(__dirname, '../mcp/server.js')],
       cwd: path.resolve(__dirname, '../..'),
-      env: { AGENT_HQ_INSTANCE_ID: '42', AGENT_HQ_DURABLE_RUN_ID: 'run-42' },
+      env: { AGENT_HQ_RUN_IDENTITY_FILE: openClawRunIdentityPath(workspace) },
     });
     expect(JSON.stringify(published)).not.toContain('/old/');
     expect(JSON.parse(fs.readFileSync(result.path, 'utf8')).mcpServers['agent-hq__agent-1']).toEqual(published);

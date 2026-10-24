@@ -1,4 +1,8 @@
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import { AgentHqApiClient, AgentHqApiError, shapeTaskDetail } from './apiClient';
+import { writeRunIdentityFile } from '../lib/agentRunIdentity';
 import { formatMcpToolError } from './registrar';
 
 function jsonResponse(body: unknown): Response {
@@ -47,6 +51,32 @@ describe('task recurrence through the final MCP client response', () => {
       else process.env.AGENT_HQ_INSTANCE_ID = prior.instance;
       if (prior.durable === undefined) delete process.env.AGENT_HQ_DURABLE_RUN_ID;
       else process.env.AGENT_HQ_DURABLE_RUN_ID = prior.durable;
+    }
+  });
+
+  it('follows the identity file that a shared OpenClaw bundle points at', async () => {
+    const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'ahq-run-file-')), 'mcp-run-identity.json');
+    const prior = process.env.AGENT_HQ_RUN_IDENTITY_FILE;
+    try {
+      process.env.AGENT_HQ_RUN_IDENTITY_FILE = file;
+      const api = new AgentHqApiClient('http://test', 'agent-key');
+      const fetchMock = jest.fn(async () => jsonResponse({ id: 1 }));
+      global.fetch = fetchMock as unknown as typeof fetch;
+      await api.getTask(1);
+      expect(fetchMock.mock.calls[0]).toEqual([expect.any(String), expect.objectContaining({
+        headers: expect.not.objectContaining({ 'x-agent-hq-instance-id': expect.anything() }),
+      })]);
+      writeRunIdentityFile(file, { instanceId: 42, durableRunId: 'run-42' });
+      await api.getTask(1);
+      writeRunIdentityFile(file, { instanceId: 43, durableRunId: 'run-43' });
+      await api.getTask(1);
+      expect(fetchMock.mock.calls.slice(1).map(call => (call as unknown[])[1])).toEqual([
+        expect.objectContaining({ headers: expect.objectContaining({ 'x-agent-hq-instance-id': '42', 'x-agent-hq-durable-run-id': 'run-42' }) }),
+        expect.objectContaining({ headers: expect.objectContaining({ 'x-agent-hq-instance-id': '43', 'x-agent-hq-durable-run-id': 'run-43' }) }),
+      ]);
+    } finally {
+      if (prior === undefined) delete process.env.AGENT_HQ_RUN_IDENTITY_FILE;
+      else process.env.AGENT_HQ_RUN_IDENTITY_FILE = prior;
     }
   });
 });

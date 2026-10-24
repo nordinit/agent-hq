@@ -1,6 +1,6 @@
 import type { EnvironmentSetup } from '../lib/environmentSetup';
 import { taskRecurrenceMetadata, type TaskRecurrenceMetadata } from '../domains/tasks/recurrence';
-import { agentRunHeaders, runIdentityFromEnv, type AgentRunIdentity } from '../lib/agentRunIdentity';
+import { agentRunHeaders, runIdentitySourceFromEnv, type AgentRunIdentity } from '../lib/agentRunIdentity';
 /**
  * Agent HQ MCP Server — API Client
  *
@@ -503,11 +503,15 @@ export const VALID_TASK_TYPES = [
 export const VALID_TASK_STATUSES = TASK_STATUSES;
 
 export class AgentHqApiClient {
+  private readonly runIdentity: () => AgentRunIdentity | null;
+
   constructor(
     private readonly baseUrl: string,
     private readonly apiKey?: string | null,
-    private readonly runIdentity: AgentRunIdentity | null = runIdentityFromEnv(process.env),
-  ) {}
+    runIdentity: AgentRunIdentity | null | (() => AgentRunIdentity | null) = runIdentitySourceFromEnv(process.env),
+  ) {
+    this.runIdentity = typeof runIdentity === 'function' ? runIdentity : () => runIdentity;
+  }
 
   private async request<T>(
     method: string,
@@ -518,7 +522,7 @@ export class AgentHqApiClient {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       'x-agent-hq-mcp-client': 'agent-hq-mcp',
-      ...agentRunHeaders(this.runIdentity),
+      ...agentRunHeaders(this.runIdentity()),
     };
     if (this.apiKey) headers.Authorization = `Bearer ${this.apiKey}`;
     const opts: RequestInit = {
@@ -565,7 +569,7 @@ export class AgentHqApiClient {
     const url = `${this.baseUrl}${path}`;
     const headers: Record<string, string> = {
       'x-agent-hq-mcp-client': 'agent-hq-mcp',
-      ...agentRunHeaders(this.runIdentity),
+      ...agentRunHeaders(this.runIdentity()),
     };
     if (this.apiKey) headers.Authorization = `Bearer ${this.apiKey}`;
 
@@ -592,7 +596,7 @@ export class AgentHqApiClient {
     const url = `${this.baseUrl}${path}`;
     const headers: Record<string, string> = {
       'x-agent-hq-mcp-client': 'agent-hq-mcp',
-      ...agentRunHeaders(this.runIdentity),
+      ...agentRunHeaders(this.runIdentity()),
     };
     if (this.apiKey) headers.Authorization = `Bearer ${this.apiKey}`;
 
