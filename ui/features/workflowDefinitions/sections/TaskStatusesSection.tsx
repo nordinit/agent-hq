@@ -23,6 +23,7 @@ function WorkflowDefinitionStatusRow({
   const [label, setLabel] = useState(status.label);
   const [emoji, setEmoji] = useState(getTaskStatusEmoji(status));
   const [color, setColor] = useState(status.color);
+  const [terminal, setTerminal] = useState(Boolean(status.terminal));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
@@ -32,6 +33,7 @@ function WorkflowDefinitionStatusRow({
     setLabel(status.label);
     setEmoji(getTaskStatusEmoji(status));
     setColor(status.color);
+    setTerminal(Boolean(status.terminal));
     setError(null);
     setEditing(true);
   };
@@ -40,7 +42,7 @@ function WorkflowDefinitionStatusRow({
     setSaving(true);
     setError(null);
     try {
-      await api.updateWorkflowTypeStatus(workflowTypeKey, status.name, { label, color, emoji: normalizeTaskStatusEmojiInput(emoji) ?? '' });
+      await api.updateWorkflowTypeStatus(workflowTypeKey, status.name, { label, color, terminal, emoji: normalizeTaskStatusEmojiInput(emoji) ?? '' });
       setEditing(false);
       onSaved();
     } catch (err) {
@@ -128,7 +130,9 @@ function WorkflowDefinitionStatusRow({
         )}
       </td>
       <td className="px-3 py-3 text-center">
-        {status.terminal ? <span className="text-xs text-green-400">yes</span> : <span className="text-xs text-slate-600">no</span>}
+        {editing ? (
+          <input type="checkbox" checked={terminal} onChange={event => setTerminal(event.target.checked)} aria-label={`Terminal status ${status.name}`} />
+        ) : status.terminal ? <span className="text-xs text-green-400">yes</span> : <span className="text-xs text-slate-600">no</span>}
       </td>
       <td className="px-3 py-3">
         <div className="flex flex-wrap gap-1">
@@ -181,6 +185,7 @@ function NewWorkflowTypeStatusRow({
   const [label, setLabel] = useState('');
   const [emoji, setEmoji] = useState('');
   const [color, setColor] = useState('slate');
+  const [terminal, setTerminal] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -196,6 +201,7 @@ function NewWorkflowTypeStatusRow({
         name: name.trim().toLowerCase().replace(/\s+/g, '_'),
         label: label.trim(),
         color,
+        terminal,
         ...(normalizeTaskStatusEmojiInput(emoji) ? { emoji: normalizeTaskStatusEmojiInput(emoji) } : {}),
       });
       onCreated();
@@ -235,7 +241,9 @@ function NewWorkflowTypeStatusRow({
           ))}
         </div>
       </td>
-      <td className="px-3 py-3 text-center"><span className="text-xs text-slate-600">no</span></td>
+      <td className="px-3 py-3 text-center">
+        <input type="checkbox" checked={terminal} onChange={event => setTerminal(event.target.checked)} aria-label="New status is terminal" />
+      </td>
       <td className="px-3 py-3"><span className="text-xs text-slate-600">No automatic destinations</span></td>
       <td className="px-3 py-3 text-right">
         <div className="flex justify-end gap-1">
