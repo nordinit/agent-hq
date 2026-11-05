@@ -23,7 +23,7 @@ beforeEach(async () => {
     INSERT INTO projects (id, tenant_id, name) VALUES (1, 1, 'Test');
     INSERT INTO workflows (id, tenant_id, project_id, name) VALUES (1, 1, 1, 'Test');
     INSERT INTO agents (id, tenant_id, name, session_key, runtime_type)
-      VALUES (91, 1, 'Harlow', 'agent:tooling-pm:main', 'openclaw');
+      VALUES (91, 1, 'Orion', 'agent:tooling-pm:main', 'openclaw');
     INSERT INTO tasks (id, tenant_id, project_id, workflow_id, title, status, agent_id)
       VALUES (1792, 1, 1, 1, 'Test stop', 'in_progress', 91);
     INSERT INTO job_instances (id, tenant_id, agent_id, task_id, status, session_key, response)
@@ -37,7 +37,7 @@ beforeEach(async () => {
 });
 afterEach(async () => { await teardownTestDb(); });
 
-it('cancels legacy Harlow runs using response.runId and the agent-scoped session key', async () => {
+it('cancels legacy Orion runs using response.runId and the agent-scoped session key', async () => {
   const result = await stopInstanceExecution(db, 700, 1, 'stop');
   expect(result).toMatchObject({ result: 'confirmed_stopped', runtimeUncertain: false });
   expect(rpc.mock.calls[0][0].rpcParams).toEqual({ runId: 'gateway-old', sessionKey: target.sessionKey });

@@ -6,7 +6,7 @@ describe('durable MCP recovery incidents', () => {
   beforeEach(async () => {
     await setupTestDb();
     await getDb().run("INSERT INTO tenants (id,name,slug,is_default) VALUES (1,'Test','test',1),(2,'Other','other',0)");
-    await getDb().run("INSERT INTO agents (id,tenant_id,name,session_key) VALUES (1,1,'James','agent:james:main')");
+    await getDb().run("INSERT INTO agents (id,tenant_id,name,session_key) VALUES (1,1,'Mira','agent:mira:main')");
     await getDb().run("INSERT INTO projects (id,tenant_id,name) VALUES (1,1,'Agency'),(2,2,'Other')");
     await getDb().run("INSERT INTO workflows (id,tenant_id,project_id,name) VALUES (1,1,1,'Lead gen'),(2,2,2,'Other')");
     await getDb().run("INSERT INTO task_statuses (name,label,terminal) VALUES ('done','Done',1) ON CONFLICT (name) DO UPDATE SET terminal=1");
@@ -67,7 +67,7 @@ describe('durable MCP recovery incidents', () => {
     expect((await getAgentMcpRecovery(db, 1))?.state).toBe('attention');
     expect(await db.value('SELECT count(*) FROM notification_records')).toBe(1);
     expect(await db.value('SELECT count(*) FROM notification_deliveries')).toBe(1);
-    expect(await db.value('SELECT title FROM notification_records')).toBe("James's recovery has failed for 30 minutes");
+    expect(await db.value('SELECT title FROM notification_records')).toBe("Mira's recovery has failed for 30 minutes");
     expect(await db.value('SELECT body FROM notification_records')).toContain('POST /api/v1/agents/1/mcp-recovery/retry');
     const metadata = JSON.parse((await db.value<string>('SELECT metadata_json FROM notification_records'))!);
     expect(metadata.taskIds).toEqual([1, 2]);

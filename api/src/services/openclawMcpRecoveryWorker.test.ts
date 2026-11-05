@@ -9,7 +9,7 @@ describe('automatic MCP recovery worker', () => {
   beforeEach(async () => {
     await setupTestDb();
     await getDb().run("INSERT INTO tenants (id,name,slug,is_default) VALUES (1,'Test','test',1)");
-    await getDb().run("INSERT INTO agents (id,tenant_id,name,session_key) VALUES (1,1,'James','agent:james:main')");
+    await getDb().run("INSERT INTO agents (id,tenant_id,name,session_key) VALUES (1,1,'Mira','agent:mira:main')");
     await beginMcpRecovery(getDb(), '/gateway', 1, 'interrupted'); mockSync.mockReset();
   });
   afterEach(teardownTestDb);

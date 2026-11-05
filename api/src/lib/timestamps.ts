@@ -25,9 +25,9 @@
  *
  * 15 columns in production are written by BOTH paths and hold both encodings
  * concurrently. A bare `::timestamptz` cast during the Postgres migration reads
- * the offset-less form in the *server's local zone* (this host is UTC-4) while
- * reading the 'Z' form correctly — silently shifting some rows of a column by
- * four hours and leaving others alone, with no error raised.
+ * the offset-less form in the *server's local zone* while reading the 'Z' form
+ * correctly — silently shifting some rows of a column by the server's UTC offset
+ * and leaving others alone, with no error raised.
  *
  * Offset-less UTC is the canonical form because:
  *

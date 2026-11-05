@@ -28,7 +28,7 @@ describe('POST /api/v1/agents/:id/mcp-recovery/retry', () => {
     const db = getDb();
     await db.run("INSERT INTO tenants (id,name,slug,is_default) VALUES (1,'Default Tenant','default',1),(2,'Other','other',0)");
     await db.run("INSERT INTO app_settings (key,value) VALUES ('default_tenant_id','1'),('active_tenant_id','1')");
-    await db.run("INSERT INTO agents (id,tenant_id,name,session_key,enabled) VALUES (1,1,'Casper','agent:casper:main',1),(2,2,'Elsewhere','agent:elsewhere:main',1)");
+    await db.run("INSERT INTO agents (id,tenant_id,name,session_key,enabled) VALUES (1,1,'Juno','agent:juno:main',1),(2,2,'Elsewhere','agent:elsewhere:main',1)");
     ({ server, baseUrl } = await startTestServer());
   });
   afterEach(async () => {

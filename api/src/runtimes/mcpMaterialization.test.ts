@@ -1013,8 +1013,8 @@ describe('materializeAgentMcpConfig', () => {
   it('retires scoped global MCP config for assigned OpenClaw agents outside dispatch', async () => {
     await createRegistryTables();
     const root = makeTempDir('agent-hq-openclaw-routed-bundle-');
-    const openClawWorkspace = path.join(root, 'ws-harlow');
-    const storedWorkspace = path.join(root, 'stored-harlow');
+    const openClawWorkspace = path.join(root, 'ws-orion');
+    const storedWorkspace = path.join(root, 'stored-orion');
     fs.mkdirSync(openClawWorkspace, { recursive: true });
     fs.mkdirSync(storedWorkspace, { recursive: true });
     const configPath = process.env.OPENCLAW_CONFIG_PATH!;

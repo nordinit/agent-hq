@@ -8,7 +8,7 @@ it('adds nullable abort targets without rewriting legacy run identity or respons
   try {
     await db.exec(`
       INSERT INTO tenants (id, name, slug) VALUES (1, 'Migration', 'migration');
-      INSERT INTO agents (id, tenant_id, name, session_key) VALUES (1, 1, 'Harlow', 'agent:harlow:main');
+      INSERT INTO agents (id, tenant_id, name, session_key) VALUES (1, 1, 'Orion', 'agent:orion:main');
       INSERT INTO job_instances (id, tenant_id, agent_id, session_key, response, status)
         VALUES (1, 1, 1, 'run:1:durable', '{"runId":"gateway-run"}', 'running');
     `);

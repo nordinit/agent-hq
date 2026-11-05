@@ -5,8 +5,6 @@
  * This file is the keystone: every other module in this directory imports its
  * types from here so the leaf modules (config, args, errors, mcpConfig) stay
  * independently testable and free of circular imports.
- *
- * Design reference: docs/archive/claude-code-runtime-v2.md
  */
 
 // ── Runtime config ───────────────────────────────────────────────────────────

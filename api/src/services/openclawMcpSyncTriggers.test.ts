@@ -13,13 +13,13 @@ describe('MCP configuration edits enqueue only the agents they affect', () => {
     // 1-3 OpenClaw; 4 another runtime; 5 deleted; 6 shares agent 1's workspace.
     await db.run(`INSERT INTO agents (id,tenant_id,name,session_key,workspace_path,runtime_type,deleted_at) VALUES
       (1,1,'Selene','agent:selene:main','/ws/selene','openclaw',NULL),
-      (2,1,'Casper','agent:casper:main','/ws/casper','openclaw',NULL),
-      (3,1,'James','agent:james:main','/ws/james','openclaw',NULL),
-      (4,1,'Julian','agent:julian:main','/ws/julian','claude-code',NULL),
+      (2,1,'Juno','agent:juno:main','/ws/juno','openclaw',NULL),
+      (3,1,'Mira','agent:mira:main','/ws/mira','openclaw',NULL),
+      (4,1,'Sol','agent:sol:main','/ws/sol','claude-code',NULL),
       (5,1,'Gone','agent:gone:main','/ws/gone','openclaw','2026-10-01 00:00:00'),
       (6,1,'Twin','agent:twin:main','/ws/selene','openclaw',NULL)`);
     await db.run(`INSERT INTO mcp_servers (id,tenant_id,name,slug,command) VALUES
-      (10,1,'QA','agency-crm-qa','run-mcp.sh'),(11,1,'CRM','agency-crm','run-mcp.sh'),(12,1,'Team tools','team-tools','run-mcp.sh')`);
+      (10,1,'QA','crm-qa','run-mcp.sh'),(11,1,'CRM','crm','run-mcp.sh'),(12,1,'Team tools','team-tools','run-mcp.sh')`);
     await db.run(`INSERT INTO agent_mcp_assignments (agent_id,mcp_server_id) VALUES (1,10),(2,11),(3,11),(4,10),(5,10)`);
     await db.run(`INSERT INTO teams (id,tenant_id,name,slug) VALUES (20,1,'Sales','sales')`);
     await db.run(`INSERT INTO team_members (team_id,agent_id) VALUES (20,2),(20,3)`);
@@ -63,10 +63,10 @@ describe('MCP configuration edits enqueue only the agents they affect', () => {
   });
 
   it('resyncs agents that share the old or new workspace when an agent moves', async () => {
-    await getDb().run("UPDATE agents SET workspace_path = '/ws/casper' WHERE id = 1");
+    await getDb().run("UPDATE agents SET workspace_path = '/ws/juno' WHERE id = 1");
     expect(await queued()).toEqual([1, 2, 6]);
     await clear();
-    await getDb().run("INSERT INTO agents (id,tenant_id,name,session_key,workspace_path) VALUES (7,1,'New','agent:new:main','/ws/james')");
+    await getDb().run("INSERT INTO agents (id,tenant_id,name,session_key,workspace_path) VALUES (7,1,'New','agent:new:main','/ws/mira')");
     expect(await queued()).toEqual([3, 7]);
   });
 

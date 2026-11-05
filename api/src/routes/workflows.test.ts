@@ -405,7 +405,7 @@ describe('workflows API create clone support', () => {
 
       const response = await fetch(`${baseUrl}/api/v1/workflows/10/complete`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-actor': 'agent:casper' },
+        headers: { 'Content-Type': 'application/json', 'x-actor': 'agent:juno' },
         body: JSON.stringify({ note: 'Objectives met.' }),
       });
       expect(response.status).toBe(200);
@@ -419,7 +419,7 @@ describe('workflows API create clone support', () => {
         WHERE entity_type = 'workflow' AND entity_id = 10 AND action = 'updated'
         ORDER BY id DESC LIMIT 1
       `) as { actor: string; changes: string };
-      expect(audit.actor).toBe('agent:casper');
+      expect(audit.actor).toBe('agent:juno');
       expect(JSON.parse(audit.changes)).toEqual(expect.objectContaining({
         status: { old: 'active', new: 'complete' },
         note: 'Objectives met.',

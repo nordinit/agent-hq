@@ -169,8 +169,8 @@ function normalizeTimestamp(raw: unknown, fallback: Date): string {
 
 function timestampMs(value: string | null | undefined): number | null {
   // NB: must NOT use Date.parse() directly — it reads the offset-less
-  // 'YYYY-MM-DD HH:MM:SS' form stored in the DB as *local* time, which on a
-  // UTC-4 host makes every such value compare four hours later than it is.
+  // 'YYYY-MM-DD HH:MM:SS' form stored in the DB as *local* time, which on any
+  // host west of UTC makes every such value compare later than it is.
   return parseTimestamp(value)?.getTime() ?? null;
 }
 
