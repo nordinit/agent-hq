@@ -79,7 +79,7 @@ it('keeps unresolved telemetry as drafts and warnings while completing the proje
 
 it.each([false,true])('maps a selected external event mapping to its cloned identity (tenant default: %s)',async tenantDefault=>{
   await db.run("INSERT INTO external_event_mappings(id,tenant_id,project_id,workflow_id,workflow_type,event_name,action_kind,action_target) VALUES(901,1,?,?,?,'submitted','status','submitted_instance')",tenantDefault?null:101,tenantDefault?null:102,tenantDefault?null:'delivery');
-  const signal=(await getTelemetryCatalog(db,access,scope)).event_mappings[0];
+  const signal=(await getTelemetryCatalog(db,access,scope,{includeRouting:true})).event_mappings[0];
   const definition=milestoneRecipe({key:'selected_mapping',name:'Selected mapping',milestone:signal.predicate});
   await createDefinition(db,access,'metric',{key:definition.key,name:definition.name,scope,definition});
   const manifest=(await exportProjectManifest(db,101,false)).manifest;
