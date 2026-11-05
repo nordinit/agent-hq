@@ -13,7 +13,7 @@ Follow the workflow in this file. When the bundled references are available, use
 
 ### Name
 
-Choose a short, distinctive, realistic name such as `Kepler`, `Atlas`, `Rook`, `Nova`, or `Cinder`.
+Choose a short, distinctive, realistic name such as `Kepler`, `Rook`, `Nova`, or `Vega`.
 
 - Check existing agents before choosing the name.
 - Use one memorable name, not a role label such as `Backend Bot` or a project-role identifier such as `acme-backend`.

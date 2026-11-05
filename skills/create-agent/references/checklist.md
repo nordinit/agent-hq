@@ -13,7 +13,7 @@ Follow this checklist in order. Use Agent HQ MCP tools for Agent HQ state change
 
 Choose:
 
-- **Name:** short, distinctive, and realistic, such as `Kepler`, `Atlas`, `Rook`, `Nova`, or `Cinder`.
+- **Name:** short, distinctive, and realistic, such as `Kepler`, `Rook`, `Nova`, or `Vega`.
 - **Role:** the durable job or function, such as `Project Manager`, `Backend Engineer`, `QA Engineer`, or `XYZ System Administrator`.
 - **Project:** the Agent HQ `project_id`, unless the agent is intentionally project-independent.
 

@@ -62,7 +62,7 @@ The remaining non-compat `lib/` files fall into two buckets:
 - **Intentional shared utilities** such as auth helpers, workspace/runtime adapters, shared vocabularies, and gateway/OpenClaw integration helpers.
 - **Follow-up domain moves** such as `taskOutcome.ts`, `taskRelease.ts`, `taskLifecycle.ts`, `taskStop.ts`, `taskNotifications.ts`, `canonicalSessions.ts`, `reflectionContext.ts`, `gatewayTranscriptCapture.ts`, `projectAudit.ts`, and `workflowModel.ts`.
 
-Those follow-up files are intentionally left in place for this cleanup pass so task #482 does not become another broad migration.
+Those follow-up files were intentionally left in place so this cleanup did not become another broad migration.
 
 ## Audit reference
 

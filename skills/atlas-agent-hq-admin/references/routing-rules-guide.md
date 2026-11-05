@@ -108,7 +108,7 @@ After creating rules, create or inspect one sample task per major task type and 
 
 ```text
 Sample: backend task, 3 points, status ready
-Expected route: backend + ready -> Cinder
+Expected route: backend + ready -> Backend Engineer agent
 Expected model route: provider/model/thinking
 Expected next transition: completed_for_review -> review
 Required evidence: review_branch, review_commit

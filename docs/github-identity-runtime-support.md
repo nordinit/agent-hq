@@ -23,8 +23,8 @@ The other three runtimes spawn a child process per dispatch, so Agent HQ builds 
 environment directly (`buildAgentRuntimeEnv` in `api/src/runtimes/environment.ts`).
 
 OpenClaw does not work that way. `OpenClawRuntime.dispatch()` sends `chat.send` over the gateway
-websocket to a long-lived daemon that Agent HQ did not start and does not own — on this host, a
-launchd service (`ai.openclaw.gateway`). There is no child process being created whose environment
+websocket to a long-lived daemon that Agent HQ did not start and does not own (typically a launchd or
+systemd service). There is no child process being created whose environment
 we control, so there is nothing to inject into. `OpenClawRuntime` has no `buildEnv` method and never
 reads `runtime_config.env`; both are inert for this runtime.
 

@@ -41,7 +41,7 @@ hermes --profile agent-hq-example model
 hermes --profile agent-hq-example -z "Say ready"
 ```
 
-Use a profile name that clearly belongs to Agent HQ, such as `agent-hq-cinder-backend`. Do not point scheduled Agent HQ agents at a developer's personal default Hermes profile unless state bleed is explicitly acceptable.
+Use a profile name that clearly belongs to Agent HQ, such as `agent-hq-backend-developer`. Do not point scheduled Agent HQ agents at a developer's personal default Hermes profile unless state bleed is explicitly acceptable.
 
 For stronger state isolation, configure `hermesHome` to a directory owned by the Agent HQ service account (under `~/.hermes`, `~/.hermes-*`, `$HERMES_HOME`, the Agent HQ data directory, or a root listed in `AGENT_HQ_ALLOWED_RUNTIME_HOME_ROOTS`). Agent HQ exports that value as `HERMES_HOME` and also materializes the agent MCP config there.
 
@@ -51,11 +51,11 @@ Store Hermes settings on the agent as `runtime_config`.
 
 ```json
 {
-  "profile": "agent-hq-cinder-backend",
+  "profile": "agent-hq-backend-developer",
   "invocationMode": "z",
   "sessionMode": "fresh",
   "hermesBin": "hermes",
-  "hermesHome": "/var/lib/agent-hq/hermes/cinder-backend",
+  "hermesHome": "/var/lib/agent-hq/hermes/backend-developer",
   "provider": "openai",
   "model": "openai/gpt-5",
   "ignoreUserConfig": false,
@@ -275,4 +275,3 @@ Fix:
 - `api/src/routes/agents.hermesRuntime.test.ts`
 - `api/src/services/contracts/transportAdapters.ts`
 - `api/src/domains/runs/transcriptProvider.ts`
-- `docs/archive/hermes-runtime-adapter-v1.md` (superseded V1 design)

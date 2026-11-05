@@ -78,8 +78,6 @@ adds a one-shot migration container that must succeed before the API starts.
 | OpenClaw gateway | `127.0.0.1:18789` | `OPENCLAW_GATEWAY_URL`, or the port in `~/.openclaw/openclaw.json` |
 
 Compose publishes the UI and API ports on `AGENT_HQ_BIND_ADDRESS` (default `127.0.0.1`).
-`ecosystem.dev.config.js` runs a second instance on 3510/3511 against
-`AGENT_HQ_DEV_DATABASE_URL`, for installs that keep a development copy beside production.
 
 The API process also runs the background loops. They start only after the startup schema
 check passes:

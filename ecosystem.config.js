@@ -23,17 +23,20 @@ function parseEnvFile(filePath) {
   return env;
 }
 
+/**
+ * PM2 config for running Agent HQ from a built checkout (`npm run build` in api/ and ui/).
+ *
+ * Reads the repository .env, then the process environment. `pm2 start ecosystem.config.js`.
+ * Set AGENT_HQ_NODE_BIN to pin the API to a specific Node binary; otherwise it uses the Node
+ * running PM2.
+ */
 const repoRoot = __dirname;
 const rootEnv = parseEnvFile(path.join(repoRoot, '.env'));
 const env = { ...rootEnv, ...process.env };
 const apiPort = env.PORT || env.AGENT_HQ_API_PORT || '3501';
 const uiPort = env.UI_PORT || env.AGENT_HQ_UI_PORT || '3500';
-const nodeBin = [
-  env.AGENT_HQ_NODE_BIN,
-  '/opt/homebrew/opt/node@24/bin/node',
-  '/usr/local/opt/node@24/bin/node',
-  process.execPath,
-].find(candidate => candidate && fs.existsSync(candidate)) || 'node';
+const nodeBin = [env.AGENT_HQ_NODE_BIN, process.execPath]
+  .find(candidate => candidate && fs.existsSync(candidate)) || 'node';
 
 module.exports = {
   apps: [

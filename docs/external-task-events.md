@@ -89,7 +89,7 @@ Compatibility aliases still work:
   "environment_id": "review-1",
   "queue_id": "queue-123",
   "lease_id": "lease-123",
-  "branch": "cinder-backend/task-449-external-task-events",
+  "branch": "developer/task-449-external-task-events",
   "commit_sha": "1234567890abcdef1234567890abcdef12345678",
   "review_url": "https://review-1.example.com",
   "message": "Lease-backed deploy completed and is ready for QA."

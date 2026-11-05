@@ -216,10 +216,10 @@ Super-admin MCP keys with `admin.cross_tenant` may pass `tenant_id` to workflow 
 
 Use `agent_hq_search_project_tasks` when a runtime agent must reuse an existing follow-up task before creating another one. The tool requires the explicit `tasks.search_project_tasks` capability, which is disabled by default for scoped runtime agents. The server resolves `project_id` from the authenticated MCP agent identity; the tool does not accept a caller-supplied project scope and cannot mutate tasks, relationships, lifecycle state, notes, evidence, proposals, or messages.
 
-Safe replay pattern for recurring task #959:
-1. Call `agent_hq_search_project_tasks` with `workflow_id`, `task_type`, `nonterminal_only: true`, and `custom_fields` containing an exact `crm_lead_id` or `external_project_id`.
+Safe replay pattern for a recurring task:
+1. Call `agent_hq_search_project_tasks` with `workflow_id`, `task_type`, `nonterminal_only: true`, and `custom_fields` containing an exact external identifier such as `external_project_id`.
 2. If a result is returned, reuse the returned task ID and do not create a duplicate follow-up.
-3. If no result is returned, create the follow-up with the typed task creation tool. Do not take external bid, proposal, or message actions as part of this dedupe check.
+3. If no result is returned, create the follow-up with the typed task creation tool. Do not take external actions (sending messages, submitting forms) as part of this dedupe check.
 
 ### Recurring task series over MCP
 
@@ -307,7 +307,7 @@ Preferred task lifecycle transition path:
     "outcome": "completed_for_review",
     "summary": "Implemented docs and deployed to Dev for review.",
     "payload": {
-      "review_branch": "forge-fullstack/task-864-mcp-settings-docs-add-dynamic-workflow-r",
+      "review_branch": "developer/task-864-mcp-settings-docs",
       "review_commit": "abc1234"
     },
     "dry_run": true

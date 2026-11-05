@@ -1,18 +1,8 @@
 {
   "name": "agent-hq-monorepo",
   "private": true,
-  "version": "0.1.26",
-  "description": "Agent HQ repository root — the published npm package lives in cli/",
+  "description": "Agent HQ repository root. The published npm package lives in cli/.",
   "license": "MIT",
-  "bin": {
-    "agent-hq": "cli/bin/cli.js",
-    "agenthq": "cli/bin/cli.js"
-  },
-  "files": [
-    "cli/",
-    "README.md",
-    "LICENSE"
-  ],
   "scripts": {
     "test:cli": "node --test cli/lib/*.test.mjs",
     "start": "node cli/bin/cli.js start",
@@ -23,13 +13,6 @@
   "engines": {
     "node": ">=22"
   },
-  "keywords": [
-    "agent-hq",
-    "task-management",
-    "ai-agents",
-    "docker",
-    "cli"
-  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/nordinit/agent-hq.git"

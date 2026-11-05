@@ -20,7 +20,7 @@ When a document and the code disagree, the code is right; please open an issue o
 - [architecture/agent-runtime-boundary-v1.md](architecture/agent-runtime-boundary-v1.md) — the run contract and acceptance gates for local CLI runtimes (Claude Code, Codex).
 - [architecture/backend-domain-architecture.md](architecture/backend-domain-architecture.md) — where backend business logic lives.
 - [architecture/frontend-ui-folder-architecture.md](architecture/frontend-ui-folder-architecture.md) — frontend folder ownership boundaries.
-- [agent-teams-plan.md](agent-teams-plan.md) — design, decisions, and as-built notes for agent teams.
+- [agent-teams-plan.md](agent-teams-plan.md) — how agent teams work: membership, capability defaults, and routing templates.
 
 ## Runtimes and integrations
 
@@ -43,6 +43,4 @@ When a document and the code disagree, the code is right; please open an issue o
 
 ## Archive
 
-[archive/](archive/) holds finished or superseded plans, audits, migration handoffs, design
-records, and validation results. They are kept for history and are not maintained, so they
-describe the system as it was when they were written.
+Finished or superseded plans, audits, and migration handoffs are not kept here; see git history.

@@ -181,16 +181,16 @@ PORT=3500 AGENT_HQ_INTERNAL_BASE_URL=http://127.0.0.1:3501 AGENT_HQ_OPERATOR_TOK
 ```
 
 The UI does not read the repository `.env`. Set `AGENT_HQ_INTERNAL_BASE_URL` to the API address;
-the built-in fallback is `http://127.0.0.1:3551`. Both processes listen on `127.0.0.1` unless `HOST` (API) or
+the built-in fallback is `http://127.0.0.1:3501`. Both processes listen on `127.0.0.1` unless `HOST` (API) or
 `AGENT_HQ_UI_HOST` (UI) says otherwise.
 
-Alternatively, use the checked-in PM2 ecosystem files, which read the repository `.env` and pass
-`AGENT_HQ_OPERATOR_TOKEN`, `AGENT_HQ_AUTH_MODE`, and the API address to both processes.
-`ecosystem.production.config.js` reads `DATABASE_URL`; `ecosystem.dev.config.js` maps the
-deliberately scoped `AGENT_HQ_DEV_DATABASE_URL` to the API process so a copied production
-environment cannot silently attach dev to production.
+Alternatively, use the checked-in PM2 file, `ecosystem.config.js`, which reads the repository
+`.env` and passes `DATABASE_URL`, `AGENT_HQ_OPERATOR_TOKEN`, `AGENT_HQ_AUTH_MODE`, and the API
+address to both processes. To run a second instance beside it, start a copy with different
+`PORT`/`UI_PORT`, process names (`AGENT_HQ_API_PROCESS_NAME`, `AGENT_HQ_UI_PROCESS_NAME`), and its
+own `DATABASE_URL`.
 
-The production and development APIs use PM2 exponential restart backoff, starting at one second
+The API uses PM2 exponential restart backoff, starting at one second
 and increasing to 15 seconds. This keeps a PostgreSQL outage from causing a tight
 process restart loop. When updating an existing PM2 process, apply the same policy
 with `pm2 restart agent-hq-api --exp-backoff-restart-delay=1000`, then run `pm2 save`
