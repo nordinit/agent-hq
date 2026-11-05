@@ -152,7 +152,6 @@ function portableAgent(row: Row): ProjectManifest['agents'][number] {
     preferred_provider: (row.preferred_provider as string | null) ?? null,
     skill_names: parseJson(row.skill_names, []),
     dispatch_mode: String(row.dispatch_mode ?? 'agentTurn'),
-    schedule: String(row.schedule ?? ''),
     timeout_seconds: Number(row.timeout_seconds ?? 900),
     startup_grace_seconds: row.startup_grace_seconds == null ? null : Number(row.startup_grace_seconds),
     heartbeat_stale_seconds: row.heartbeat_stale_seconds == null ? null : Number(row.heartbeat_stale_seconds),
@@ -225,7 +224,6 @@ export interface ProjectManifest {
     preferred_provider: string | null;
     skill_names: unknown;
     dispatch_mode: string;
-    schedule: string;
     timeout_seconds: number;
     startup_grace_seconds: number | null;
     heartbeat_stale_seconds: number | null;
@@ -620,7 +618,6 @@ export async function importProjectManifest(
               system_role: agent.system_role ?? null,
               skill_names: stringifyStable(agent.skill_names ?? []),
               dispatch_mode: agent.dispatch_mode ?? 'agentTurn',
-              schedule: agent.schedule ?? '',
               timeout_seconds: agent.timeout_seconds ?? 900,
               startup_grace_seconds: agent.startup_grace_seconds ?? null,
               heartbeat_stale_seconds: agent.heartbeat_stale_seconds ?? null,

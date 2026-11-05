@@ -191,7 +191,6 @@ async function archiveAgentForDeletion(db: ReturnType<typeof getDb>, agent: Reco
       UPDATE agents
       SET enabled = 0,
           status = 'idle',
-          schedule = '',
           openclaw_agent_id = NULL,
           session_key = ?,
           deleted_at = COALESCE(deleted_at, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
@@ -341,8 +340,6 @@ interface ProvisionFullRequest {
   github_identity_id?: number | null;
   /** Legacy compatibility column; no longer active agent configuration. */
   job_title?: string;
-  /** Deprecated legacy agent-run schedule. Ignored on writes; recurring task series are authoritative. */
-  schedule?: string;
   job_instructions?: string | null;
   skill_names?: string[];
   timeout_seconds?: number | null;
@@ -360,11 +357,6 @@ interface ProvisionFullRequest {
   }>;
   tool_ids?: number[];
   mcp_server_ids?: number[];
-  /** Deprecated legacy reflection schedule payload. Ignored; recurring task series are authoritative. */
-  reflection?: {
-    enabled?: boolean;
-    schedule?: string;
-  };
   restart_gateway?: boolean;
 }
 
@@ -393,8 +385,6 @@ interface AgentInsertParams {
   githubIdentityId: number | null;
   /** Legacy compatibility column; new agent configuration stores this blank. */
   jobTitle: string;
-  /** Deprecated legacy agent-run schedule. Kept blank for compatibility with the agents table. */
-  schedule: string;
   jobInstructions: string;
   skillNames: string[];
   timeoutSeconds: number;
@@ -574,7 +564,7 @@ async function insertProvisionedAgent(db: ReturnType<typeof getDb>, params: Agen
     'tenant_id',
     'name', 'role', 'session_key', 'workspace_path', 'repo_path', 'repo_url', 'repo_access_mode', 'status', 'openclaw_agent_id',
     'runtime_type', 'runtime_config', 'project_id', 'preferred_provider', 'model', 'system_role', 'provider_connection_id',
-    'hooks_url', 'hooks_auth_header', 'os_user', 'enabled', 'github_identity_id', 'job_title', 'schedule',
+    'hooks_url', 'hooks_auth_header', 'os_user', 'enabled', 'github_identity_id', 'job_title',
     'job_instructions', 'skill_names', 'timeout_seconds', 'startup_grace_seconds', 'heartbeat_stale_seconds',
     'stall_threshold_min', 'max_retries', 'sort_rules',
   ];
@@ -603,7 +593,6 @@ async function insertProvisionedAgent(db: ReturnType<typeof getDb>, params: Agen
     params.enabled,
     params.githubIdentityId,
     params.jobTitle,
-    params.schedule,
     params.jobInstructions,
   ];
   values.push(
@@ -815,7 +804,6 @@ router.post('/provision-full', async (req: Request, res: Response) => {
         },
       });
     }
-    const schedule = '';
     const connectedProviders = await getConnectedProviderSlugs(tenantId);
     const modelInput = normalizeAgentModelInput(body.model);
     if (!modelInput.ok) {
@@ -969,7 +957,6 @@ router.post('/provision-full', async (req: Request, res: Response) => {
                 enabled: body.enabled === undefined ? 1 : (body.enabled ? 1 : 0),
                 githubIdentityId: body.github_identity_id ?? null,
                 jobTitle: '',
-                schedule,
                 jobInstructions: requestedJobInstructions,
                 skillNames: normalizeJsonArray(body.skill_names),
                 timeoutSeconds: body.timeout_seconds ?? 900,
@@ -1478,7 +1465,7 @@ router.post('/', async (req: Request, res: Response) => {
       name, role, session_key, workspace_path, repo_path, repo_url, repo_access_mode, status, provision_openclaw,
       runtime_type, runtime_config, project_id, preferred_provider, provider_connection_id, model, system_role,
       hooks_url, hooks_auth_header, os_user, enabled, github_identity_id,
-      schedule: _legacySchedule, skill_names, timeout_seconds,
+      skill_names, timeout_seconds,
       startup_grace_seconds, heartbeat_stale_seconds, stall_threshold_min, max_retries, sort_rules,
     } = req.body as {
       name: string;
@@ -1502,8 +1489,6 @@ router.post('/', async (req: Request, res: Response) => {
       os_user?: string | null;
       enabled?: number | boolean;
       github_identity_id?: number | null;
-      /** Deprecated legacy agent-run schedule. Ignored on create; recurring task series are authoritative. */
-      schedule?: string;
       job_instructions?: string | null;
       skill_names?: string[];
       timeout_seconds?: number | null;
@@ -1667,7 +1652,6 @@ router.post('/', async (req: Request, res: Response) => {
           enabled: enabled === undefined ? 1 : (enabled ? 1 : 0),
           githubIdentityId: github_identity_id ?? null,
           jobTitle: '',
-          schedule: '',
           jobInstructions: requestedJobInstructions,
           skillNames: normalizeJsonArray(skill_names),
           timeoutSeconds: timeout_seconds ?? 900,
@@ -1720,7 +1704,7 @@ router.put('/:id', async (req: Request, res: Response) => {
       name, role, session_key, workspace_path, repo_path, repo_url, repo_access_mode, status, model,
       runtime_type, runtime_config, hooks_url, hooks_auth_header,
       preferred_provider, provider_connection_id, os_user, enabled, github_identity_id,
-      schedule: _legacySchedule, skill_names, timeout_seconds,
+      skill_names, timeout_seconds,
       // Watchdog per-agent timeout overrides (T#681)
       startup_grace_seconds, heartbeat_stale_seconds,
       // Routing config fields (T#594/T#596): absorbed from former routing_config_legacy
@@ -1764,8 +1748,6 @@ router.put('/:id', async (req: Request, res: Response) => {
       enabled?: number | boolean;
       /** github_identity_id — FK to github_identities for per-agent GitHub credentials (task #613) */
       github_identity_id?: number | null;
-      /** Deprecated legacy agent-run schedule. Ignored on update; recurring task series are authoritative. */
-      schedule?: string;
       /** job_instructions — canonical pre-task instructions appended to dispatch payload (T#619/T#407) */
       job_instructions?: string | null;
       /** skill_names — JSON array of skill names (T#619) */
@@ -1907,7 +1889,6 @@ router.put('/:id', async (req: Request, res: Response) => {
       'os_user = ?',
       'enabled = ?',
       'github_identity_id = ?',
-      'schedule = ?',
       'job_instructions = ?',
       'skill_names = ?',
       'timeout_seconds = ?',
@@ -1938,7 +1919,6 @@ router.put('/:id', async (req: Request, res: Response) => {
       os_user !== undefined ? os_user : (agent.os_user ?? null),
       enabled !== undefined ? (enabled ? 1 : 0) : agent.enabled,
       github_identity_id !== undefined ? github_identity_id : (agent.github_identity_id ?? null),
-      '',
       resolvedJobInstructions,
       resolvedSkillNames,
       timeout_seconds !== undefined ? timeout_seconds : (agent.timeout_seconds as number | null) ?? 900,

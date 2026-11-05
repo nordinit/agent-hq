@@ -162,7 +162,6 @@ export interface Agent {
 
   project_id: number | null;
   project_name: string | null;
-  schedule: string | null;
   dispatch_mode?: 'agentTurn' | 'systemEvent' | null;
   job_instructions: string | null;
   skill_name: string | null;

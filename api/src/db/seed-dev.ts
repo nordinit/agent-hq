@@ -144,7 +144,7 @@ async function main(): Promise<void> {
 
   // ── Job Templates (removed — Task #579) ────────────────────────────────────
   // job_templates table has been dropped. Agent execution config now lives on
-  // the agents table via job_instructions, schedule, routing rules, etc.
+  // the agents table via job_instructions, routing rules, etc.
 
   // ── Routing: task statuses ──────────────────────────────────────────────────
   // Routing configuration is installation/operator data; this dev fixture does not reconcile it.

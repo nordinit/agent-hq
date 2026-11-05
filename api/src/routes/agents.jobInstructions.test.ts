@@ -154,7 +154,8 @@ describe('agents job_instructions canonical paths', () => {
     }
   });
 
-  it('ignores legacy schedule payloads on create and update', async () => {
+  it('still accepts and ignores legacy schedule payloads after the column was dropped', async () => {
+    // agents.schedule was removed in migration 48; older clients may still send it.
     const { server, baseUrl } = await startTestServer();
     try {
       const createResponse = await fetch(`${baseUrl}/api/v1/agents`, {
@@ -172,14 +173,10 @@ describe('agents job_instructions canonical paths', () => {
       const createBody = await createResponse.json() as Record<string, unknown>;
 
       expect(createResponse.status).toBe(201);
-      expect(createBody.schedule).toBe('');
+      expect(createBody).not.toHaveProperty('schedule');
 
       const db = getDb();
-      const created = await db.get(`SELECT id, schedule FROM agents WHERE session_key = 'agent:legacy-schedule-payload:main'`) as { id: number; schedule: string };
-      expect(created.schedule).toBe('');
-
-      await db.run(`UPDATE agents SET schedule = '*/5 * * * *' WHERE id = ?`, created.id);
-
+      const created = await db.get(`SELECT id FROM agents WHERE session_key = 'agent:legacy-schedule-payload:main'`) as { id: number };
       const updateResponse = await fetch(`${baseUrl}/api/v1/agents/${created.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -188,10 +185,7 @@ describe('agents job_instructions canonical paths', () => {
       const updateBody = await updateResponse.json() as Record<string, unknown>;
 
       expect(updateResponse.status).toBe(200);
-      expect(updateBody.schedule).toBe('');
-
-      const updated = await db.get(`SELECT schedule FROM agents WHERE id = ?`, created.id) as { schedule: string };
-      expect(updated.schedule).toBe('');
+      expect(updateBody).not.toHaveProperty('schedule');
     } finally {
       await stopTestServer(server);
     }

@@ -254,6 +254,20 @@ it('previews missing dependencies and imports equivalent portable config with re
   expect(JSON.parse(audit.changes)).toMatchObject({ import: true, schema_version: 'agent_hq.project_manifest.v1' });
 });
 
+it('still imports manifests exported with the removed legacy agents.schedule field', async () => {
+  const db = getDb();
+  const projectId = await seedPortableProject();
+  const manifest = (await exportProjectManifest(db, projectId, false)).manifest;
+  expect(manifest.agents[0]).not.toHaveProperty('schedule');
+  // Manifests exported before migration 48 carry the per-agent cron schedule.
+  const legacyManifest = { ...manifest, agents: manifest.agents.map((agent) => ({ ...agent, schedule: '0 9 * * 1-5' })) };
+
+  expect((await validateProjectManifest(db, legacyManifest)).valid).toBe(true);
+  const imported = await importProjectManifest(db, legacyManifest, { projectName: 'Legacy schedule copy', tenantId: 1, actor: 'test' });
+  const agents = await db.all('SELECT name FROM agents WHERE project_id = ?', imported.project_id) as Array<{ name: string }>;
+  expect(agents.map((agent) => agent.name)).toEqual(manifest.agents.map((agent) => agent.name));
+});
+
 it('preserves workflow environment preparation across export and import', async () => {
   const db = getDb();
   const projectId = await seedPortableProject();

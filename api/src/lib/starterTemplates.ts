@@ -738,10 +738,10 @@ async function insertAgent(db: Db, tenantId: number, projectId: number, projectN
   const result = await db.run(`
     INSERT INTO agents (
       tenant_id, name, role, session_key, workspace_path, status, runtime_type, runtime_config,
-      project_id, preferred_provider, model, system_role, enabled, job_title, schedule,
+      project_id, preferred_provider, model, system_role, enabled, job_title,
       job_instructions, skill_names, timeout_seconds, stall_threshold_min, max_retries, sort_rules
     )
-    VALUES (?, ?, ?, ?, '', 'idle', ?, NULL, ?, ?, ?, NULL, 1, ?, '', ?, ?, 900, 30, 3, '[]')
+    VALUES (?, ?, ?, ?, '', 'idle', ?, NULL, ?, ?, ?, NULL, 1, ?, ?, ?, 900, 30, 3, '[]')
   `, tenantId, agent.name, agent.role, sessionKey, agent.runtime_type, projectId, agent.preferred_provider, agent.model, agent.job_title, `Starter owner role: ${agent.owner_role}`, JSON.stringify(agent.skill_names));
   return Number(result.lastInsertId);
 }

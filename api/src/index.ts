@@ -21,7 +21,6 @@ import instancesRouter from './routes/instances';
 import externalTaskEventsRouter from './routes/external-task-events';
 import { WebSocketServer } from 'ws';
 import * as http from 'http';
-import { startScheduler } from './scheduler';
 import { startWatchdog } from './scheduler/watchdog';
 import { startReconciler } from './scheduler/reconciler';
 import projectFilesRouter from './routes/project-files';
@@ -589,7 +588,6 @@ async function startServer(): Promise<void> {
   if (automationDisabled) {
     console.warn('[boot] Background automation disabled by AGENT_HQ_DISABLE_AUTOMATION=1');
   } else {
-    startScheduler();
     startWatchdog();
     startReconciler();
   }
