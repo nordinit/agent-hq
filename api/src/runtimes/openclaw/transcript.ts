@@ -172,10 +172,6 @@ async function isInstanceStillActive(instanceId: number): Promise<boolean> {
   }
 }
 
-export function stopOpenClawTerminalSignalCapture(sessionKey: string): void {
-  activeTerminalSignalCaptures.get(sessionKey)?.stop();
-}
-
 export function stopOpenClawRawSessionTerminalPoll(instanceId: number): void {
   const poll = activeRawSessionTerminalPolls.get(instanceId);
   if (poll) poll.stop();

@@ -1,7 +1,7 @@
 import {
   isRunCompletedFallbackMessage,
   resolveChatTerminalEvent,
-} from '../OpenClawRuntime';
+} from './';
 
 describe('OpenClaw terminal event parsing', () => {
   const sessionKey = 'session-123';

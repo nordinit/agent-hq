@@ -13,7 +13,6 @@ import { createTaskWorktree } from './worktreeManager';
 import { ensureTaskClone, type RepoAccessMode } from './repoWorkspaceManager';
 import { prepareRepoWorkspaceDependencies, type RepoWorkspaceDependencySetupResult } from './repoWorkspaceDependencies';
 import { normalizeEnvironmentSetup } from '../lib/environmentSetup';
-import { isSafeSkillName } from '../lib/skillNames';
 import { acquireWorkspaceLease } from './workspaceLease';
 import {
   resolveGitHubIdentity,
@@ -32,7 +31,6 @@ import { nowTimestamp, parseTimestamp } from '../lib/timestamps';
 import { buildHookSessionKey, resolveRuntimeAgentSlug } from '../lib/sessionKeys';
 import { createDurableRunId, ensureJobInstanceDurableRunId, tableHasColumn as durableTableHasColumn } from '../lib/durableRunIdentity';
 import { insertRuntimeLog, resolveRuntimeTenantId, tenantInsertColumns } from '../lib/runtimeTenantScope';
-import { TASK_STATUSES, DEFAULT_TERMINAL_TASK_STATUS_SEEDS } from '../lib/taskStatuses';
 import { AGENT_HQ_DISPATCHER_SOURCE, DISPATCH_STARTUP_FAILED_EVENT, resolveWorkflowEventMapping } from '../domains/routing/externalEventMappings';
 import type { AgentRuntime, DispatchParams } from '../runtimes/types';
 import type { RuntimeExecutionTargetV1 } from '../runtimes/runtimeBoundary';
@@ -79,7 +77,7 @@ import {
 import { persistDispatchContextBundle } from './dispatch/contextBundleStore';
 import { afterCommit, type Db } from "../db/adapter/types";
 import { resolveTeamContextForDispatch } from '../domains/teams/context';
-import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../db/introspection";
+import { tableExists as sharedTableExists, columnExists as sharedColumnExists } from "../db/introspection";
 
 /**
  * Resolve local runtime binaries while the dispatcher is still constructing
@@ -804,15 +802,6 @@ function buildDispatchRuntimeConfig(
   };
 }
 
-/**
- * Static convenience list built from seed defaults. It is not the terminality
- * authority — dispatch eligibility resolves that from configuration via
- * buildResolvedTaskTerminalityExpression.
- */
-export const DISPATCHABLE_ROUTED_STATUSES = TASK_STATUSES.filter(
-  (status): status is typeof TASK_STATUSES[number] => !(DEFAULT_TERMINAL_TASK_STATUS_SEEDS as readonly string[]).includes(status),
-);
-
 async function buildResolvedTaskTerminalityExpression(
   db: Db,
   taskAlias: string,
@@ -1293,14 +1282,15 @@ export function generateClaudeMd(params: {
   console.log(`[dispatcher] generateClaudeMd: wrote CLAUDE.md to ${workingDirectory}`);
 }
 
-// ── Skill symlink sync ────────────────────────────────────────────────────────
+// ── OpenClaw skills path ─────────────────────────────────────────────────────
 
 /**
  * OPENCLAW_SKILLS_PATH — the skills directory shipped with the OpenClaw package.
  *
  * Resolved once at module load time from the `openclaw` binary location so it
- * works regardless of NVM node version or install prefix.  Falls back to the
- * well-known default path when the binary cannot be located.
+ * works regardless of NVM node version or install prefix. Falls back to the
+ * global node_modules of the Node running Agent HQ when the binary cannot be
+ * located.
  *
  * Override with the OPENCLAW_SKILLS_PATH env var in tests or non-standard installs.
  */
@@ -1325,77 +1315,11 @@ function resolveOpenClawSkillsPath(): string {
     // which / realpathSync failed — fall through to default
   }
 
-  // Hard-coded fallback matching the standard NVM install used in production
-  return path.join(
-    process.env.HOME ?? '/root',
-    '.nvm/versions/node/v24.14.0/lib/node_modules/openclaw/skills',
-  );
+  // <prefix>/bin/node → <prefix>/lib/node_modules/openclaw/skills
+  return path.join(path.dirname(path.dirname(process.execPath)), 'lib', 'node_modules', 'openclaw', 'skills');
 }
 
 export const OPENCLAW_SKILLS_PATH = resolveOpenClawSkillsPath();
-
-/**
- * syncSkillDirs — create `.claude/skills/<name>` symlinks in workingDirectory
- * for each skill assigned to the job template.
- *
- * Steps:
- *   1. Ensure {workingDirectory}/.claude/skills/ directory exists (mkdirSync recursive).
- *   2. For each skill name, resolve the source dir in OPENCLAW_SKILLS_PATH.
- *   3. If the source dir does not exist, log a warning and skip.
- *   4. If a symlink already exists and points to the correct target, skip (idempotent).
- *   5. If a symlink exists but points elsewhere, replace it.
- *   6. Create the symlink.
- *
- * No error is thrown for an empty skillNames array — it is a valid no-op.
- */
-export function syncSkillDirs(params: {
-  workingDirectory: string;
-  skillNames: string[];
-  skillsBasePath?: string;
-}): void {
-  const { workingDirectory, skillNames, skillsBasePath = OPENCLAW_SKILLS_PATH } = params;
-
-  if (skillNames.length === 0) return;
-
-  const skillsDir = path.join(workingDirectory, '.claude', 'skills');
-  fs.mkdirSync(skillsDir, { recursive: true });
-
-  for (const name of skillNames) {
-    if (!isSafeSkillName(name)) {
-      console.warn(`[dispatcher] syncSkillDirs: skill name ${JSON.stringify(name)} is not a safe path segment — skipping`);
-      continue;
-    }
-    const source = path.join(skillsBasePath, name);
-
-    if (!fs.existsSync(source) || !fs.statSync(source).isDirectory()) {
-      console.warn(`[dispatcher] syncSkillDirs: skill "${name}" not found at ${source} — skipping`);
-      continue;
-    }
-
-    const link = path.join(skillsDir, name);
-
-    // lstat (not stat) so we see the symlink itself, not its target.
-    let lstat: ReturnType<typeof fs.lstatSync> | null = null;
-    try { lstat = fs.lstatSync(link); } catch { /* not present */ }
-
-    if (lstat) {
-      if (lstat.isSymbolicLink()) {
-        const existing = fs.readlinkSync(link);
-        if (existing === source) {
-          // Already correct — idempotent skip
-          continue;
-        }
-      }
-      // Stale symlink or unexpected file — remove it
-      fs.unlinkSync(link);
-    }
-
-    fs.symlinkSync(source, link);
-    console.log(`[dispatcher] syncSkillDirs: linked ${link} → ${source}`);
-  }
-}
-
-// ── End CLAUDE.md generator / skill sync ─────────────────────────────────────
 
 /**
  * fireAgentRun — dispatch an isolated agent run via the resolved AgentRuntime.

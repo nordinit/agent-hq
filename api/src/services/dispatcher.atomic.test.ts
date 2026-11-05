@@ -31,10 +31,6 @@ jest.mock('../lib/taskNotifications', () => ({
   notifyTaskStatusChange: jest.fn(),
 }));
 
-jest.mock('../lib/taskHistory', () => ({
-  writeTaskStatusChange: jest.fn(),
-}));
-
 jest.mock('../runtimes/skillMaterialization', () => ({
   getSkillMaterializationAdapter: jest.fn(() => ({
     adapterName: 'test',

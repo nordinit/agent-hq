@@ -54,10 +54,6 @@ export async function getConfiguredGatewayWsUrl(): Promise<string> {
   return normalizeGatewayUrl(stored ?? OPENCLAW_GATEWAY_WS_URL, 'ws');
 }
 
-export async function getConfiguredGatewayHttpUrl(): Promise<string> {
-  return normalizeGatewayUrl(await getConfiguredGatewayWsUrl(), 'http');
-}
-
 function readLocalGatewayTokenFromConfig(): string | null {
   try {
     const raw = fs.readFileSync(OPENCLAW_CONFIG_PATH, 'utf-8');

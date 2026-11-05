@@ -56,8 +56,3 @@ export interface RuntimeEndEvent {
 export interface RuntimeEventCallbacks {
   onRuntimeEnd?: (event: RuntimeEndEvent) => void | Promise<void>;
 }
-
-export function runtimeEndReasonFromSuccess(success: boolean, reason?: RuntimeEndReason): RuntimeEndReason {
-  if (reason) return reason;
-  return success ? 'completed' : 'error';
-}

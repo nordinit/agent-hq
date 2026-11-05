@@ -1,10 +1,5 @@
-import { getNeedsAttentionEligibleStatuses, setNeedsAttentionEligibleStatuses } from '../../lib/reconcilerConfig';
 import {
-  CONTRACT_PLACEHOLDER_DEFINITIONS,
-  getAvailableContractPlaceholders,
-  normalizeContractTemplateKey,
-  readWorkflowTypeContractTemplate,
-  writeWorkflowTypeContractTemplate,
+  normalizeContractTemplateKey
 } from '../../services/contracts';
 import { type Db } from "../../db/adapter/types";
 
@@ -15,35 +10,6 @@ function parseSortRules(value: unknown): string[] {
   } catch {
     return [];
   }
-}
-
-export async function getReconcilerRoutingConfig(db: Db) {
-  return {
-    needs_attention_eligible_statuses: await getNeedsAttentionEligibleStatuses(db),
-  };
-}
-
-export async function updateReconcilerRoutingConfig(db: Db, input: Record<string, unknown>) {
-  return {
-    needs_attention_eligible_statuses: await setNeedsAttentionEligibleStatuses(db, input.needs_attention_eligible_statuses),
-  };
-}
-
-export async function listAgentRoutingConfigs(db: Db) {
-  const configs = await db.all(`
-    SELECT a.id as agent_id, a.name as agent_name,
-           a.stall_threshold_min, a.max_retries, a.sort_rules
-    FROM agents a
-    WHERE a.enabled = 1
-    ORDER BY a.id
-  `) as Array<Record<string, unknown>>;
-
-  return {
-    configs: configs.map((config) => ({
-      ...config,
-      sort_rules: parseSortRules(config.sort_rules),
-    })),
-  };
 }
 
 export async function getAgentRoutingConfig(db: Db, rawId: unknown) {
@@ -118,36 +84,4 @@ export async function ensureWorkflowTypeExists(db: Db, workflowTypeKey: string):
     error.status = 404;
     throw error;
   }
-}
-
-export async function readAgentContract(db: Db, rawWorkflowTypeKey: unknown) {
-  const workflowTypeKey = normalizeWorkflowTypeKey(rawWorkflowTypeKey);
-  await ensureWorkflowTypeExists(db, workflowTypeKey);
-  const contract = readWorkflowTypeContractTemplate(workflowTypeKey);
-  return {
-    workflow_type: workflowTypeKey,
-    content: contract.content,
-    path: contract.path,
-    inherited_from: contract.inheritedFrom,
-    placeholders: getAvailableContractPlaceholders(),
-    placeholder_definitions: CONTRACT_PLACEHOLDER_DEFINITIONS,
-    format: 'plain_text_v1',
-  };
-}
-
-export async function writeAgentContract(
-  db: Db,
-  rawWorkflowTypeKey: unknown,
-  content: unknown,
-) {
-  const workflowTypeKey = normalizeWorkflowTypeKey(rawWorkflowTypeKey);
-  await ensureWorkflowTypeExists(db, workflowTypeKey);
-  if (typeof content !== 'string') {
-    const error = new Error('`content` (string) is required') as Error & { status?: number };
-    error.status = 400;
-    throw error;
-  }
-
-  const targetPath = writeWorkflowTypeContractTemplate(workflowTypeKey, content);
-  return { ok: true, workflow_type: workflowTypeKey, path: targetPath };
 }

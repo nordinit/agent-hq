@@ -453,45 +453,6 @@ export async function supersedeGrant(db: Db, grantId: number): Promise<void> {
   `, grantId);
 }
 
-/** Connected-apps view: one row per live grant. */
-export async function listGrants(db: Db): Promise<Array<{
-  id: number;
-  clientId: string;
-  clientName: string;
-  agentId: number;
-  agentName: string | null;
-  scopes: string[];
-  createdAt: string;
-  lastUsedAt: string | null;
-  revokedAt: string | null;
-  activeTokens: number;
-}>> {
-  const rows = await db.all(`
-    SELECT g.id, g.client_id, g.agent_id, g.scopes, g.created_at, g.last_used_at, g.revoked_at,
-           c.client_name AS client_name,
-           a.name AS agent_name,
-           (SELECT COUNT(*) FROM mcp_api_keys k
-             WHERE k.oauth_grant_id = g.id AND k.enabled = 1 AND k.revoked_at IS NULL) AS active_tokens
-    FROM mcp_oauth_grants g
-    LEFT JOIN mcp_oauth_clients c ON c.client_id = g.client_id
-    LEFT JOIN agents a ON a.id = g.agent_id
-    ORDER BY g.id DESC
-  `) as Array<Record<string, unknown>>;
-
-  return rows.map((row) => ({
-    id: Number(row.id),
-    clientId: String(row.client_id),
-    clientName: String(row.client_name ?? ''),
-    agentId: Number(row.agent_id),
-    agentName: typeof row.agent_name === 'string' ? row.agent_name : null,
-    scopes: parseJsonArray(row.scopes),
-    createdAt: String(row.created_at),
-    lastUsedAt: typeof row.last_used_at === 'string' ? row.last_used_at : null,
-    revokedAt: typeof row.revoked_at === 'string' ? row.revoked_at : null,
-    activeTokens: Number(row.active_tokens ?? 0),
-  }));
-}
-
 /** Housekeeping for consumed and expired codes. Safe to call on a timer. */
 export async function pruneExpiredAuthorizationCodes(db: Db, now = Date.now()): Promise<void> {
   await db.run(`DELETE FROM mcp_oauth_authorization_codes WHERE expires_at <= ?`, utcTimestamp(now - 60_000));

@@ -1,7 +1,7 @@
 import { setupTestDb, teardownTestDb } from '../db/testDb';
 import { stopTaskActiveInstance } from './taskStop';
-import { stopInstanceExecution } from './stopInstanceExecution';
-import { type Db } from "../db/adapter/types";
+import { stopInstanceExecution } from '../domains/runs/stopInstanceExecution';
+import { type Db } from '../db/adapter/types';
 
 jest.mock('../domains/runs/stopInstanceExecution', () => ({
   stopInstanceExecution: jest.fn(),

@@ -35,8 +35,3 @@ export async function setNeedsAttentionEligibleStatuses(db: Db, statuses: unknow
   `, NEEDS_ATTENTION_ELIGIBLE_STATUSES_SETTING_KEY, JSON.stringify(normalized));
   return normalized;
 }
-
-export async function isNeedsAttentionEligibleStatus(db: Db, status: string | null | undefined): Promise<boolean> {
-  if (!status) return false;
-  return (await getNeedsAttentionEligibleStatuses(db)).includes(status);
-}

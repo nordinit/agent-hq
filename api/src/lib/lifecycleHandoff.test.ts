@@ -1,6 +1,6 @@
 import { getDb } from '../db/client';
 import { setupTestDb, teardownTestDb } from '../db/testDb';
-import { markTaskNeedsAttentionForMissingSemanticHandoff } from './lifecycleHandoff';
+import { markTaskNeedsAttentionForMissingSemanticHandoff } from '../domains/runs/lifecycleHandoff';
 
 interface SeedInput {
   taskId: number;

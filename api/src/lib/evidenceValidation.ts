@@ -315,10 +315,3 @@ export function extractInlineEvidence(body: Record<string, unknown>, workflowFie
   const allowed = new Set<string>([...INLINE_EVIDENCE_FIELD_KEYS, ...workflowFieldKeys]);
   return Object.fromEntries(Object.entries(body).filter(([field, value]) => allowed.has(field) && value !== undefined));
 }
-
-/**
- * Returns true if the evidence object has at least one non-empty field.
- */
-export function hasAnyEvidence(ev: InlineEvidence): boolean {
-  return Object.values(ev).some(v => isNonEmpty(v));
-}

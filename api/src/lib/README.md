@@ -1,30 +1,10 @@
-# `api/src/lib` phase-0 audit
+# `api/src/lib`
 
 `api/src/lib` is no longer the default home for backend business logic.
 
 Use this directory for:
 - generic or cross-domain utilities,
-- shared vocabularies and adapters,
-- compatibility exports that preserve older import paths during the refactor.
-
-## Compatibility exports
-
-| Module | Owner path |
-| --- | --- |
-| `instanceClose.ts` | `domains/runs/instanceClose` |
-| `instanceStop.ts` | `domains/runs/instanceStop` |
-| `lifecycleHandoff.ts` | `domains/runs/lifecycleHandoff` |
-| `runObservability.ts` | `domains/runs/observability` |
-| `workflowOutcomes.ts` | `domains/workflow-definitions/outcomes` |
-| `workflowTaskPolicy.ts` | `domains/routing/policy` |
-| `workflowTypeConfig.ts` | `domains/workflow-definitions/config` |
-| `stopInstanceExecution.ts` | `domains/runs/stopInstanceExecution` |
-| `taskContext.ts` | `domains/tasks/context` |
-| `taskHistory.ts` | `domains/tasks/history` |
-| `tokenBackfill.ts` | `domains/runs/tokenBackfill` |
-| `tokenUsage.ts` | `domains/runs/tokenUsage` |
-| `transcriptProvider.ts` | `domains/runs/transcriptProvider` |
-| `workflowMetadata.ts` | `domains/workflow-definitions/workflowMetadata` |
+- shared vocabularies and adapters.
 
 ## Generic/shared utilities retained in `lib`
 
@@ -35,7 +15,6 @@ Use this directory for:
 | `chatGatewayErrors.ts` | Chat and gateway error normalization for transport layers. |
 | `chatMessageRoles.ts` | Shared role normalization for transcript persistence. |
 | `defaultProject.ts` | Shared default-project DB helper. |
-| `defectTypes.ts` | Shared defect-type vocabulary. |
 | `evidenceValidation.ts` | Shared evidence payload validation. |
 | `gatewayAuth.ts` | Gateway auth helper. |
 | `gatewayHealth.ts` | Gateway health probe helper. |
@@ -44,7 +23,7 @@ Use this directory for:
 | `githubIdentity.ts` | GitHub credential injection and identity resolution. |
 | `jsonRequestErrors.ts` | Generic Express JSON error helper. |
 | `mcpApiAuth.ts` | MCP API auth and actor resolution helper. |
-| `openclawAutoPair.ts` | OpenClaw auto-pair integration helper. |
+| `openclawAutoPair.ts` | Recognizes OpenClaw gateway pairing-required refusals. |
 | `openclawCli.ts` | OpenClaw CLI invocation helper. |
 | `openclawGatewayWs.ts` | Shared WebSocket connection options for the gateway. |
 | `openclawMessageEvents.ts` | Shared OpenClaw event extraction and parsing. |

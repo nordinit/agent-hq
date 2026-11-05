@@ -21,7 +21,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { getDb } from '../../db/client';
-import { gatewayGetHistory } from '../../runtimes/OpenClawRuntime';
+import { gatewayGetHistory } from '../../runtimes/openclaw';
 import { normalizeChatMessageRole, type PersistedChatRole } from '../../lib/chatMessageRoles';
 import { extractGatewayStructuredEvents, extractTextFromGatewayMessage } from '../../lib/openclawMessageEvents';
 import { buildGatewayRunSessionKey, parseHookSessionKey, resolveRuntimeAgentSlug } from '../../lib/sessionKeys';

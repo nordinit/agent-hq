@@ -32,7 +32,6 @@ export type StarterAgentDefinition = {
 };
 
 export const STARTER_BACKLOG_WORKFLOW_NAME = 'Backlog';
-export const STARTER_ROUTING_PRIORITY = -100;
 export const DEFAULT_PROJECT_NAME = 'Default Project';
 export const LEGACY_STARTER_PROJECT_NAME = 'Agent HQ';
 export const STARTER_AGENT_SYSTEM_ROLE_PREFIX = 'default_package.starter_agent.';

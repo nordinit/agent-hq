@@ -4,8 +4,6 @@ import { writeTaskHistory } from '../tasks/history';
 import { nowTimestamp } from '../../lib/timestamps';
 import { resolveRuntimeTenantId, tenantInsertColumns } from '../../lib/runtimeTenantScope';
 import { type Db } from "../../db/adapter/types";
-import { columnExists as sharedColumnExists } from "../../db/introspection";
-
 export const START_CHECKIN_GRACE_MS = 5 * 60 * 1000;
 export const HEARTBEAT_STALE_MS = 10 * 60 * 1000;
 export const HEARTBEAT_NOTE_MIN_MS = 15 * 60 * 1000;
@@ -377,29 +375,4 @@ export async function recordRunCheckIn(db: Db, input: RunCheckInInput): Promise<
   }
 
   return { taskId, noteCreated };
-}
-
-export async function markInstanceStale(db: Db, instanceId: number, reason: string): Promise<{ taskId: number | null; changed: boolean }> {
-  const taskId = await resolveTaskIdForInstance(db, instanceId);
-  const existing = await db.get(`SELECT stale FROM instance_artifacts WHERE instance_id = ?`, instanceId) as { stale: number } | undefined;
-  if (existing?.stale) {
-    return { taskId, changed: false };
-  }
-
-  const nowTs = nowTimestamp();
-  await db.run(`
-    INSERT INTO instance_artifacts (instance_id, task_id, current_stage, stale, stale_at, updated_at)
-    VALUES (?, ?, 'heartbeat', 1, ?, ?)
-    ON CONFLICT(instance_id) DO UPDATE SET
-      task_id = excluded.task_id,
-      stale = 1,
-      stale_at = excluded.stale_at,
-      updated_at = excluded.updated_at
-  `, instanceId, taskId, nowTs, nowTs);
-
-  if (taskId) {
-    await insertTaskNote(db, taskId, 'Agent HQ', `Agent run appears stale\nReason: ${reason}`);
-  }
-
-  return { taskId, changed: true };
 }

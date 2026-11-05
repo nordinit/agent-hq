@@ -1,8 +1,4 @@
-import { notifyTelegram } from '../integrations/telegram';
-import { writeTaskStatusChange } from '../domains/tasks/history';
 import { type Db } from "../db/adapter/types";
-import { columnExists as sharedColumnExists } from "../db/introspection";
-
 // ── Types ────────────────────────────────────────────────────────────────────
 
 export interface EligibilityResult {
@@ -37,18 +33,6 @@ interface RoutingConfigRow {
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
-
-async function getRoutingConfig(db: Db, agentId: number | null): Promise<RoutingConfigRow> {
-  // Task #596: routing_config_legacy has been removed. Read config from agents table.
-  if (agentId == null) return { stall_threshold_min: 30, max_retries: 3 };
-  try {
-    const agentRow = await db.get(`SELECT stall_threshold_min, max_retries FROM agents WHERE id = ?`, agentId) as RoutingConfigRow | undefined;
-    return agentRow ?? { stall_threshold_min: 30, max_retries: 3 };
-  } catch {
-    return { stall_threshold_min: 30, max_retries: 3 };
-  }
-}
-
 // ── Main pass ────────────────────────────────────────────────────────────────
 
 export async function runEligibilityPass(db: Db, projectId?: number): Promise<EligibilityResult> {
@@ -91,38 +75,4 @@ export async function runEligibilityPass(db: Db, projectId?: number): Promise<El
   }
 
   return result;
-}
-
-/**
- * resetFromQAFail — called by QA agent (or review endpoint) to demote a reviewed task back.
- * Increments retry_count. If retry_count >= max_retries: sets failed. Otherwise: resets to ready.
- * Returns the new status.
- */
-export async function resetFromQAFail(db: Db, taskId: number): Promise<'ready' | 'failed'> {
-  const task = await db.get(`SELECT * FROM tasks WHERE id = ?`, taskId) as TaskRow | undefined;
-  if (!task) throw new Error(`Task ${taskId} not found`);
-
-  const assignedAgentId = task.assigned_agent_id ?? task.agent_id;
-  const config = await getRoutingConfig(db, assignedAgentId);
-  const newRetryCount = task.retry_count + 1;
-  const maxRetries = config.max_retries ?? task.max_retries ?? 3;
-
-  if (newRetryCount >= maxRetries) {
-    await db.run(`
-      UPDATE tasks SET status = 'failed', retry_count = ?, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS') WHERE id = ?
-    `, newRetryCount, taskId);
-    await writeTaskStatusChange(db, taskId, 'eligibility', task.status, 'failed');
-    return 'failed';
-  } else {
-    const targetAgentId = task.review_owner_agent_id ?? assignedAgentId;
-    const hasAssignedAgentColumn = await sharedColumnExists(db, 'tasks', 'assigned_agent_id');
-    const assignmentColumn = hasAssignedAgentColumn ? 'assigned_agent_id' : 'agent_id';
-    await db.run(`
-      UPDATE tasks
-      SET status = 'ready', retry_count = ?, ${assignmentColumn} = ?, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
-      WHERE id = ?
-    `, newRetryCount, targetAgentId, taskId);
-    await writeTaskStatusChange(db, taskId, 'eligibility', task.status, 'ready');
-    return 'ready';
-  }
 }

@@ -1,12 +1,9 @@
 import { getDb } from '../db/client';
 import { getAgentMcpRecovery, attachRecoveryTask } from '../lib/mcpRecovery';
 import { loadTaskRecurrenceMetadata } from '../domains/tasks/recurrence';
-import {
-  runDispatcher, type DispatchResult,
-  buildDispatchContextBundle, loadDispatchScopeContext,
-  dispatchInstance, getDispatchTaskNotesContext, type DispatchInstanceParams,
-  getNonDispatchableTaskStatusPredicate,
-} from '../domains/runs';
+import { runDispatcher, type DispatchResult, loadDispatchScopeContext, dispatchInstance, type DispatchInstanceParams, getNonDispatchableTaskStatusPredicate } from '../services/dispatcher';
+import { buildDispatchContextBundle } from '../services/dispatch/prompt/dispatchContext';
+import { getDispatchTaskNotesContext } from '../services/dispatch/prompt/notes';
 import {
   buildInstanceCallbackContractSegmentDrafts,
   extractWorkingDirectoryFromRuntimeConfig,
@@ -28,7 +25,7 @@ import { resolveWorkflowTaskRoutingAssignment } from '../domains/routing/policy/
 import { resolveTeamContextForDispatch } from '../domains/teams/context';
 import { runRecurringTaskSchedulerTick, type RecurringTaskSchedulerSummary } from './recurringTaskScheduler';
 import { syncTaskActiveAgentFromInstance } from '../domains/tasks/ownership';
-import { type Db } from "../db/adapter/types";
+import { type Db } from '../db/adapter/types';
 import { reconcileRuntimeExecutions } from '../runtimes/runtimeExecutionReconciler';
 
 const POLL_INTERVAL_MS = 12_000; // ~12 seconds

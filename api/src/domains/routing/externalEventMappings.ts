@@ -6,7 +6,7 @@ import workflowEventDefaults from '../../config/workflow-event-defaults.json';
 import { WORKFLOW_EVENT_ACTION_KINDS } from '../../lib/workflowVocabulary';
 import { listWorkflowTaskStatuses, listWorkflowTypeTaskStatuses } from './policy';
 import { type Db } from "../../db/adapter/types";
-import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../../db/introspection";
+import { tableExists as sharedTableExists, columnExists as sharedColumnExists } from "../../db/introspection";
 
 export const AGENT_HQ_RUNTIME_SOURCE = 'agent_hq_runtime';
 export const AGENT_HQ_DISPATCHER_SOURCE = 'agent_hq_dispatcher';
@@ -998,12 +998,9 @@ export async function resolveWorkflowEventMapping(db: Db, context: ExternalEvent
   return null;
 }
 
-export const DEFAULT_EXTERNAL_EVENT_MAPPINGS = DEFAULT_WORKFLOW_EVENT_MAPPINGS;
-export const EXTERNAL_EVENT_ACTION_KINDS = WORKFLOW_EVENT_ACTION_KINDS;
 export const seedDefaultExternalEventMappings = seedDefaultWorkflowEventMappings;
 export const listExternalEventMappings = listWorkflowEventMappings;
 export const getExternalEventMapping = getWorkflowEventMapping;
 export const createExternalEventMapping = createWorkflowEventMapping;
 export const updateExternalEventMapping = updateWorkflowEventMapping;
 export const deleteExternalEventMapping = deleteWorkflowEventMapping;
-export const resolveExternalEventMapping = resolveWorkflowEventMapping;

@@ -332,14 +332,6 @@ export function tenantScopedParams(tenantId: number, params: unknown[] = []): un
   return [...params, tenantId];
 }
 
-export async function listTenantScopedRows<T = Record<string, unknown>>(db: Db, options: TenantScopedListOptions): Promise<T[]> {
-  return await db.all(`${options.sql} ${tenantScopedWhere(options)}`, ...tenantScopedParams(options.tenantId, options.params)) as T[];
-}
-
-export async function getTenantScopedRow<T = Record<string, unknown>>(db: Db, options: TenantScopedListOptions): Promise<T | undefined> {
-  return await db.get(`${options.sql} ${tenantScopedWhere(options)} LIMIT 1`, ...tenantScopedParams(options.tenantId, options.params)) as T | undefined;
-}
-
 export async function checkTenantOwnedRow(
   db: Db,
   table: string,

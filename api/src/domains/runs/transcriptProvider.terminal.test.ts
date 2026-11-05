@@ -4,8 +4,8 @@ import { setupTestDb, teardownTestDb } from '../../db/testDb';
 let db: Db;
 const mockGatewayGetHistory = jest.fn();
 
-// transcriptProvider only imports gatewayGetHistory from OpenClawRuntime.
-jest.mock('../../runtimes/OpenClawRuntime', () => ({
+// transcriptProvider only imports gatewayGetHistory from runtimes/openclaw.
+jest.mock('../../runtimes/openclaw', () => ({
   gatewayGetHistory: (...args: unknown[]) => mockGatewayGetHistory(...args),
 }));
 
@@ -16,7 +16,7 @@ jest.mock('./openclawJsonlBackfill', () => ({
 }));
 
 import { OpenClawTranscriptProvider } from './transcriptProvider';
-import { type Db } from "../../db/adapter/types";
+import { type Db } from '../../db/adapter/types';
 
 beforeEach(async () => {
   db = await setupTestDb();

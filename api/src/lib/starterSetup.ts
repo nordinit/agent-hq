@@ -1,6 +1,6 @@
 import { STARTER_BACKLOG_WORKFLOW_NAME } from './starterCatalog';
 import { type Db } from "../db/adapter/types";
-import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../db/introspection";
+import { columnExists as sharedColumnExists } from "../db/introspection";
 
 type WorkflowRow = {
   id: number;
@@ -48,9 +48,4 @@ export async function ensureProjectBacklogWorkflow(db: Db, projectId: number): P
   `, project?.tenant_id ?? null, projectId, STARTER_BACKLOG_WORKFLOW_NAME, tenantWorkflowType);
 
   return Number(result.lastInsertId);
-}
-
-export async function resolveDefaultProjectWorkflowId(db: Db, projectId: number | null | undefined): Promise<number | null> {
-  if (!projectId || !Number.isFinite(projectId)) return null;
-  return await ensureProjectBacklogWorkflow(db, projectId);
 }

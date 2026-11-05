@@ -48,11 +48,6 @@ export function normalizeDeclaredMimeType(value: unknown): string | null {
   return MIME_TYPE.test(essence) ? essence : null;
 }
 
-export function isInlineSafeMimeType(value: unknown): boolean {
-  const type = normalizeDeclaredMimeType(value);
-  return type !== null && INLINE_TYPES.has(type);
-}
-
 /** RFC 6266 value with an ASCII fallback and the exact name in filename*. */
 export function contentDispositionValue(disposition: 'inline' | 'attachment', filename: string): string {
   const name = filename.trim() || 'download';

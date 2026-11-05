@@ -492,13 +492,6 @@ export function validateRuntimeCheckpointV1(value: unknown): RuntimeContractVali
   return issues.length ? { ok: false, issues } : { ok: true, issues: [] };
 }
 
-export function assertRuntimeCheckpointV1(value: unknown): asserts value is RuntimeCheckpointV1 {
-  const result = validateRuntimeCheckpointV1(value);
-  if (!result.ok) {
-    throw new Error(`Invalid RuntimeCheckpointV1: ${result.issues.map((issue) => `${issue.path} ${issue.message}`).join('; ')}`);
-  }
-}
-
 function sortStrings(values: readonly string[]): string[] {
   return [...values].sort((a, b) => a.localeCompare(b));
 }

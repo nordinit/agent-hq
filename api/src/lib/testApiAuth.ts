@@ -26,10 +26,6 @@ export function authenticateTestApiRequest(): RequestHandler {
   return authenticateApiRequest(testApiAuthConfig(), { log: () => undefined });
 }
 
-export function operatorAuthHeaders(): Record<string, string> {
-  return { authorization: `Bearer ${testOperatorToken()}` };
-}
-
 const CREDENTIAL_HEADERS = ['authorization', 'x-api-key', 'x-agent-hq-mcp-client'];
 
 /** `fetch` as the operator, unless the request already presents a credential of its own. */

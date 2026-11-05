@@ -1,4 +1,4 @@
-import { resolveWorkflowOutcomeMap, type WorkflowOutcomeDefinition, getLegacyOutcomeMeta } from '../domains/workflow-definitions/outcomes';
+import { resolveWorkflowOutcomeMap, type WorkflowOutcomeDefinition } from '../domains/workflow-definitions/outcomes';
 import { type Db } from "../db/adapter/types";
 
 export const RUNTIME_FAILED_OUTCOME = 'runtime_failed';
@@ -75,27 +75,4 @@ export async function resolveTaskOutcomeCatalog(
     blockerLike: isBlockerLikeOutcome(entry.outcome_key, entry),
     failureLike: isFailureLikeOutcome(entry.outcome_key, entry),
   }));
-}
-
-export async function resolveTaskOutcomeCatalogEntries(
-  db: Db,
-  options: { workflowId?: number | null; workflowType?: string | null; taskType?: string | null; fallbackOutcomes?: string[] },
-): Promise<ResolvedTaskOutcomeCatalogEntry[]> {
-  return await resolveTaskOutcomeCatalog(db, options);
-}
-
-export function getOutcomeDisplayMeta(outcomeKey: string, configured?: Pick<WorkflowOutcomeDefinition, 'label' | 'description' | 'badge_variant'> | null) {
-  if (outcomeKey === RUNTIME_FAILED_OUTCOME && !configured) {
-    return {
-      label: 'Runtime Failed',
-      description: 'The runtime or control plane failed before the agent could post its own outcome.',
-      badge_variant: 'failed',
-    };
-  }
-  const legacy = getLegacyOutcomeMeta(outcomeKey);
-  return {
-    label: configured?.label || legacy.label,
-    description: configured?.description || legacy.description,
-    badge_variant: configured?.badge_variant ?? legacy.badge_variant ?? 'workspace',
-  };
 }

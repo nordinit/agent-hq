@@ -1,11 +1,11 @@
-import { OpenClawRuntime } from './OpenClawRuntime';
+import { OpenClawRuntime } from './openclaw';
 import { recordRunCheckIn } from '../domains/runs/observability';
 import { markTaskNeedsAttentionForMissingSemanticHandoff } from '../domains/runs/lifecycleHandoff';
 import { applyConfiguredRuntimeFailedEvent } from '../domains/runs/runtimeFailureEvent';
 import { evaluateOpenClawInstanceSessionState } from '../domains/runs/openclawSessionState';
 import { scheduleEndedActiveInstanceLinkageCleanup } from '../lib/taskLifecycle';
 import { ensureCanonicalSessionForInstance } from '../lib/canonicalSessions';
-import { type Db } from "../db/adapter/types";
+import { type Db } from '../db/adapter/types';
 
 jest.mock('../db/client', () => ({
   getDb: jest.fn(),

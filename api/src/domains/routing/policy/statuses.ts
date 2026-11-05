@@ -314,48 +314,6 @@ function dedupeWorkflowTaskTransitionRequirementRows(rows: WorkflowTaskTransitio
   return result;
 }
 
-export async function listWorkflowTaskTransitionRequirements(
-  db: Db,
-  workflowId?: number | null,
-  taskType?: string | null,
-  outcome?: string | null,
-): Promise<WorkflowTaskTransitionRequirementRow[]> {
-  if (typeof workflowId === 'number' && Number.isFinite(workflowId) && await tableExists(db, 'workflow_task_transition_requirements')) {
-    const hasScopeColumns = await tableHasColumn(db, 'workflow_task_transition_requirements', 'project_id')
-      && await tableHasColumn(db, 'workflow_task_transition_requirements', 'workflow_type');
-    const workflow = hasScopeColumns
-      ? await db.get(`SELECT project_id, workflow_type${await tableHasColumn(db, 'workflows', 'tenant_id') ? ', tenant_id' : ''} FROM workflows WHERE id = ? LIMIT 1`, workflowId) as { project_id: number; workflow_type: string | null; tenant_id?: number | null } | undefined
-      : undefined;
-    const tenant = await tenantPredicate(db, 'workflow_task_transition_requirements', 'workflow_task_transition_requirements', workflow?.tenant_id);
-    const seriesSelect = await tableHasColumn(db, 'workflow_task_transition_requirements', 'recurring_series_id') ? 'recurring_series_id' : 'NULL AS recurring_series_id';
-    let query = `
-      SELECT ${seriesSelect}, id, workflow_id, task_type, outcome, field_name, requirement_type, match_field,
-             severity, message, enabled, priority, created_at, updated_at
-      FROM workflow_task_transition_requirements
-      WHERE ${hasScopeColumns && workflow?.workflow_type ? 'project_id = ? AND workflow_type = ? AND (workflow_id = ? OR workflow_id IS NULL)' : 'workflow_id = ?'}
-    `;
-    const params: unknown[] = hasScopeColumns && workflow?.workflow_type ? [workflow.project_id, workflow.workflow_type, workflowId] : [workflowId];
-    if (hasScopeColumns && workflow?.workflow_type && tenant.sql) {
-      query += tenant.sql;
-      params.push(...tenant.params);
-    }
-    if (taskType) {
-      query += ` AND (task_type = ? OR task_type IS NULL)`;
-      params.push(taskType);
-    }
-    if (outcome) {
-      query += ` AND outcome = ?`;
-      params.push(outcome);
-    }
-    query += ` ORDER BY outcome ASC, task_type IS NULL ASC, CASE WHEN workflow_id IS NULL THEN 1 ELSE 0 END, priority DESC, id ASC`;
-    return await db.all(query, ...params) as WorkflowTaskTransitionRequirementRow[];
-  }
-
-  // No workflow id means no scope, and gate requirements only exist inside one. This used to
-  // list the global `transition_requirements` table instead, which migration 15 dropped.
-  return [];
-}
-
 export async function listWorkflowTaskRoutingRules(
   db: Db,
   workflowId?: number | null,

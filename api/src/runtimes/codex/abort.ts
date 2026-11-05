@@ -48,39 +48,3 @@ export function writeCodexPrompt(child: ChildProcess, prompt: string): void {
   child.stdin?.on('error', () => undefined);
   child.stdin?.end(prompt);
 }
-
-function signalTree(active: ActiveCodexRun, signal: NodeJS.Signals): boolean {
-  if (active.exited) return false;
-  const pid = active.child.pid;
-  if (pid && process.platform !== 'win32') {
-    try {
-      process.kill(-pid, signal);
-      return true;
-    } catch {
-      // Fall back when the child was not made a process-group leader.
-    }
-  }
-  try {
-    return active.child.kill(signal);
-  } catch {
-    return false;
-  }
-}
-
-function terminate(active: ActiveCodexRun): boolean {
-  const signaled = signalTree(active, 'SIGTERM');
-  setTimeout(() => {
-    if (!active.exited) signalTree(active, 'SIGKILL');
-  }, active.killGraceMs).unref();
-  return signaled;
-}
-
-export function stopCodexActiveRun(active: ActiveCodexRun): boolean {
-  if (active.exited) return false;
-  active.aborted = true;
-  return terminate(active);
-}
-
-export function terminateCodexRun(active: ActiveCodexRun): void {
-  if (!active.exited) terminate(active);
-}

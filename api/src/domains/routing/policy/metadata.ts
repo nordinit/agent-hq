@@ -214,10 +214,6 @@ export function starterWorkflowType(value: string | null | undefined): StarterWo
   return normalized === 'dev' || normalized === 'generic' || normalized === 'ops' || normalized === 'lead_generation' ? normalized : null;
 }
 
-export function isStarterPolicyWorkflowType(value: string | null | undefined): boolean {
-  return starterWorkflowType(value) != null;
-}
-
 export function genericWorkflowTransitions(): PolicyTransitionSeed[] {
   return [
     { task_type: null, from_status: 'in_progress', outcome: 'completed', to_status: 'done', enabled: 1, priority: 0 },
@@ -470,12 +466,6 @@ export async function getWorkflowSeedRow(db: Db, workflowId: number): Promise<Wo
   } catch {
     return null;
   }
-}
-
-export async function isWorkflowTaskPolicySeeded(db: Db, workflowId: number): Promise<boolean> {
-  if (!await tableHasColumn(db, 'workflows', 'task_policy_seeded_at')) return false;
-  const workflow = await getWorkflowSeedRow(db, workflowId);
-  return Boolean(workflow?.task_policy_seeded_at);
 }
 
 export async function markWorkflowTaskPolicySeeded(db: Db, workflowId: number): Promise<void> {

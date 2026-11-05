@@ -10,19 +10,7 @@ export const ATLAS_AGENT_NAME = 'Atlas';
 export const ATLAS_AGENT_SLUG = 'atlas';
 export const ATLAS_SESSION_KEY = 'agent:atlas:main';
 export const LEGACY_ATLAS_SESSION_KEY = 'agent:main:main';
-export const ATLAS_TELEGRAM_PREFIX = 'agent:atlas:telegram:direct:';
-export const LEGACY_ATLAS_TELEGRAM_PREFIX = 'agent:main:telegram:direct:';
 export const ATLAS_WORKSPACE_PATH = path.join(HOME, '.openclaw', 'workspace-atlas');
-export const LEGACY_MAIN_WORKSPACE_PATH = path.join(HOME, '.openclaw', 'workspace');
-
-export function isAtlasAgentRecord(agent: Record<string, unknown> | null | undefined): boolean {
-  if (!agent) return false;
-  return agent.system_role === ATLAS_SYSTEM_ROLE
-    || agent.openclaw_agent_id === ATLAS_AGENT_SLUG
-    || agent.session_key === ATLAS_SESSION_KEY
-    || agent.session_key === LEGACY_ATLAS_SESSION_KEY
-    || agent.name === ATLAS_AGENT_NAME;
-}
 
 export async function getAtlasAgentRecord(): Promise<Record<string, unknown> | null> {
   const db = getDb();

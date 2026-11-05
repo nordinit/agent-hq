@@ -155,7 +155,7 @@ import {
   gatewayWsPatchSession,
   gatewayWsSend,
   reloadOpenClawSecretsRuntimeForAuthSync,
-} from './OpenClawRuntime';
+} from './openclaw';
 
 function dispatchParams(overrides: Partial<Parameters<OpenClawRuntime['dispatch']>[0]> = {}): Parameters<OpenClawRuntime['dispatch']>[0] {
   return {
@@ -833,7 +833,7 @@ describe('OpenClawRuntime gateway dispatch', () => {
   });
 
   it('keeps moved gateway helpers available through the flat dynamic import path', async () => {
-    const runtimeModule = await import('./OpenClawRuntime');
+    const runtimeModule = await import('./openclaw');
 
     expect(runtimeModule.OpenClawRuntime).toBe(OpenClawRuntime);
     expect(runtimeModule.gatewayWsSend).toEqual(expect.any(Function));

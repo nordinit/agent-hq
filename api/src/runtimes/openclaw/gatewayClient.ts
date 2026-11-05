@@ -304,10 +304,6 @@ export function getGatewayAuthToken(): string {
   return process.env.OPENCLAW_GATEWAY_TOKEN ?? readGatewayTokenFromConfig() ?? '';
 }
 
-export function getHooksToken(): string {
-  return process.env.OPENCLAW_HOOKS_TOKEN ?? readHooksTokenFromConfig() ?? '';
-}
-
 function base64UrlEncode(buf: Buffer): string {
   return buf.toString('base64').replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/g, '');
 }

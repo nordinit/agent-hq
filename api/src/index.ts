@@ -1,20 +1,15 @@
 import './config/loadRootEnv';
 import { assertOpenClawMaintenanceOwner, startOpenClawMcpSyncWorker } from './services/openclawMcpSyncWorker';
-
-// Must be set after dotenv loads but before any fetch/TLS calls.
-// dotenv/config is synchronous, so process.env is populated by now.
-if (process.env.NODE_TLS_REJECT_UNAUTHORIZED === '0') {
-  // Re-affirm for Node's TLS stack (some runtimes cache this early)
-  process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
-}
 import express, { type Request } from 'express';
 import cors from 'cors';
 import { corsOptionsDelegate, parseAllowedOrigins, rejectCrossOriginRequests } from './lib/originGuard';
 import { getDb } from './db/client';
 import { recordInboundAgentActivity } from './domains/runs/agentActivity';
 import { verifyStartupSchema } from './db/startupVerifier';
-import tasksRouter from './domains/tasks';
-import routingRouter, { dispatchRouter, modelRoutingRouter } from './domains/routing';
+import tasksRouter from './routes/tasks';
+import routingRouter from './routes/routing';
+import dispatchRouter from './routes/dispatch';
+import modelRoutingRouter from './routes/model-routing';
 import agentsRouter from './routes/agents';
 import workflowsRouter, { checkWorkflowCompletion } from './routes/workflows';
 import skillsRouter from './routes/skills';

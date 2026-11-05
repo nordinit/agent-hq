@@ -59,7 +59,7 @@ jest.mock('../services/contracts/workflowContract', () => ({
   resolveWorkflow: mockResolveWorkflow,
 }));
 
-import { HermesRuntime, validateHermesRuntimeConfig } from './HermesRuntime';
+import { HermesRuntime, validateHermesRuntimeConfig } from './hermes';
 import type { DispatchParams } from './types';
 
 function createMockDb(options: {

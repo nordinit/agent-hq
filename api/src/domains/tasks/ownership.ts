@@ -19,16 +19,3 @@ export async function syncTaskActiveAgentFromInstance(db: Db, taskId: number): P
     WHERE id = ?
   `, taskId);
 }
-
-export async function syncAllTaskActiveAgentsFromInstances(db: Db): Promise<void> {
-  if (!await taskTableHasColumn(db, 'assigned_agent_id') || !await taskTableHasColumn(db, 'agent_id') || !await taskTableHasColumn(db, 'active_instance_id')) return;
-
-  await db.run(`
-    UPDATE tasks
-    SET agent_id = (
-          SELECT ji.agent_id
-          FROM job_instances ji
-          WHERE ji.id = tasks.active_instance_id
-        )
-  `);
-}

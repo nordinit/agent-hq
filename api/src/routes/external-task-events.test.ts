@@ -9,8 +9,8 @@ jest.mock('../lib/taskNotifications', () => ({
   notifyTaskStatusChange: jest.fn(),
 }));
 
-jest.mock('../lib/instanceClose', () => {
-  const actual = jest.requireActual('../lib/instanceClose') as typeof import('../lib/instanceClose');
+jest.mock('../domains/runs/instanceClose', () => {
+  const actual = jest.requireActual('../domains/runs/instanceClose') as typeof import('../domains/runs/instanceClose');
   return {
     ...actual,
     closeInstance: jest.fn(async () => ({ closed: true })),

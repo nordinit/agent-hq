@@ -3,7 +3,7 @@ import {
   STARTER_WORKFLOW_TYPE_SEEDS,
 } from './starterCatalog';
 import { type Db } from "../db/adapter/types";
-import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../db/introspection";
+import { tableExists as sharedTableExists, columnExists as sharedColumnExists } from "../db/introspection";
 
 async function tableExists(db: Db, table: string): Promise<boolean> {
     return await sharedTableExists(db, table);
@@ -32,43 +32,6 @@ async function pruneUnexpectedStarterRelationshipTypes(
       AND COALESCE(is_system, 0) = 1
       AND key NOT IN (${allowedKeys.map(() => '?').join(', ')})
   `, workflowTypeKey, ...tenantParams, ...allowedKeys);
-}
-
-export async function pruneUnexpectedStarterWorkflowRelationshipTypes(
-  db: Db,
-  options: { tenantId?: number | null } = {},
-): Promise<void> {
-  if (!await tableExists(db, 'workflow_type_relationship_types') || !await tableExists(db, 'workflow_types')) return;
-
-  const relationshipTypesHasTenantId = await tableHasColumn(db, 'workflow_type_relationship_types', 'tenant_id');
-  const workflowTypesHasTenantId = await tableHasColumn(db, 'workflow_types', 'tenant_id');
-  const tenantId = options.tenantId ?? null;
-  if (relationshipTypesHasTenantId && (!Number.isInteger(tenantId) || Number(tenantId) <= 0)) return;
-
-  const starterKeys = STARTER_WORKFLOW_TYPE_SEEDS.map((starter) => starter.key);
-  const workflowTypes = workflowTypesHasTenantId && Number.isInteger(tenantId) && Number(tenantId) > 0
-    ? await db.all(`
-      SELECT key
-      FROM workflow_types
-      WHERE tenant_id = ?
-        AND key IN (${starterKeys.map(() => '?').join(', ')})
-      ORDER BY key ASC
-    `, tenantId, ...starterKeys) as Array<{ key: string }>
-    : await db.all(`
-      SELECT key
-      FROM workflow_types
-      WHERE key IN (${starterKeys.map(() => '?').join(', ')})
-      ORDER BY key ASC
-    `, ...starterKeys) as Array<{ key: string }>;
-
-  await db.withTransaction(async (db) => {
-    for (const workflowType of workflowTypes) {
-      await pruneUnexpectedStarterRelationshipTypes(db, workflowType.key, {
-                tenantId,
-                relationshipTypesHasTenantId,
-              });
-    }
-  });
 }
 
 export async function seedStarterWorkflowRelationshipTypes(

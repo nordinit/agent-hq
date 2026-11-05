@@ -173,10 +173,6 @@ export async function listNotificationRecordsPage(
   };
 }
 
-export async function listNotificationRecords(db: Db, tenantId: number, limit = 50): Promise<NotificationRecord[]> {
-  return (await listNotificationRecordsPage(db, tenantId, { limit })).records;
-}
-
 export async function unreadNotificationCount(db: Db, tenantId: number): Promise<number> {
   const row = await db.get(`
     SELECT COUNT(*) AS n

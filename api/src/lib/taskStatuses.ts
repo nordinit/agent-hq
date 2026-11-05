@@ -39,7 +39,3 @@ export const DEFAULT_TERMINAL_TASK_STATUS_SEEDS = ['done', 'cancelled', 'failed'
 export function isTaskStatus(value: unknown): value is TaskStatus {
   return typeof value === 'string' && (TASK_STATUSES as readonly string[]).includes(value);
 }
-
-export function taskStatusesSqlList(statuses: readonly string[] = TASK_STATUSES): string {
-  return statuses.map(status => `'${status}'`).join(',');
-}

@@ -3,10 +3,10 @@ import {
   getGateRequirementFieldDefinitions,
   resolveTaskFieldSchemaForWorkflow,
   validateRequirementFieldExpression,
-} from './workflowTypeConfig';
-import { getDb } from "../db/client";
-import { setupTestDb, teardownTestDb } from "../db/testDb";
-import { type Db } from "../db/adapter/types";
+} from '../domains/workflow-definitions/config';
+import { getDb } from '../db/client';
+import { setupTestDb, teardownTestDb } from '../db/testDb';
+import { type Db } from '../db/adapter/types';
 
 async function createDb(): Promise<Db> {
   return getDb();

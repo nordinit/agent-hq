@@ -21,7 +21,3 @@ const PROVIDERS: ProviderDefinition[] = [
 export function listProviderDefinitions(): ProviderDefinition[] {
   return PROVIDERS.map(provider => ({ ...provider, authModes: [...provider.authModes] }));
 }
-
-export function getProviderDefinition(slug: string): ProviderDefinition | null {
-  return PROVIDERS.find(provider => provider.slug === slug) ?? null;
-}

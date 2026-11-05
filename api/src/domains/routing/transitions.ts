@@ -1,7 +1,5 @@
 import { isValidTaskType } from '../../lib/taskTypes';
-import { listWorkflowTaskTransitions } from './policy/statuses';
 import {
-  parseWorkflowId,
   requireProjectWorkflowTypeScope,
   requireScopedTransitionContext,
   readScopedRoutingTransition,
@@ -161,49 +159,4 @@ export async function deleteRoutingTransition(db: Db, input: { id: unknown; proj
   const deleteTenant = await tenantPredicateFor(db, 'workflow_task_transitions', 'workflow_task_transitions', scope.tenantId);
   await db.run(`DELETE FROM workflow_task_transitions WHERE id = ?${deleteTenant.sql}`, id, ...deleteTenant.params);
   return { ok: true };
-}
-
-export async function resolveLifecycleRule(db: Db, input: { project_id?: unknown; workflow_id?: unknown; task_type?: unknown; from_status?: unknown; outcome?: unknown; tenant_id?: unknown }) {
-  const { workflowId, workflowName, projectId } = await requireScopedTransitionContext(db, input.project_id, input.workflow_id, undefined, input.tenant_id);
-  const { task_type, from_status, outcome } = input;
-
-  if (!from_status || !outcome || workflowId == null) {
-    throw withStatus('project_id, workflow_id, from_status, and outcome are required', 400);
-  }
-
-  const rule = (await listWorkflowTaskTransitions(db, workflowId))
-    .filter((transition) => transition.enabled)
-    .filter((transition) => transition.from_status === String(from_status) && transition.outcome === String(outcome))
-    .filter((transition) => {
-      if (!task_type) return transition.task_type == null;
-      return transition.task_type === String(task_type) || transition.task_type == null;
-    })
-    .sort((a, b) => {
-      const typeWeightA = a.task_type ? 1 : 0;
-      const typeWeightB = b.task_type ? 1 : 0;
-      if (typeWeightA !== typeWeightB) return typeWeightB - typeWeightA;
-      if ((a.priority ?? 0) !== (b.priority ?? 0)) return (b.priority ?? 0) - (a.priority ?? 0);
-      return a.id - b.id;
-    })[0];
-
-  if (!rule) {
-    return {
-      matched: false,
-      rule: null,
-      project_id: projectId,
-      workflow_id: workflowId,
-      workflow_name: workflowName,
-      reason: `No transition for ${task_type ?? '*'}/${from_status}:${outcome}`,
-    };
-  }
-
-  return {
-    matched: true,
-    rule: {
-      ...rule,
-      project_id: projectId,
-      workflow_id: workflowId,
-      workflow_name: workflowName,
-    },
-  };
 }

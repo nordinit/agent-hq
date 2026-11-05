@@ -15,7 +15,7 @@ import {
   syncOAuthCredentialToAllOpenClawStores,
 } from '../lib/openclawOAuthProfiles';
 import type { OAuthProviderSlug } from '../lib/openclawOAuthProfiles';
-import { reloadOpenClawSecretsRuntimeForAuthSync } from '../runtimes/OpenClawRuntime';
+import { reloadOpenClawSecretsRuntimeForAuthSync } from '../runtimes/openclaw';
 import {
   CONNECTABLE_PROVIDER_SLUGS,
   PROVIDER_MODEL_SOURCES,

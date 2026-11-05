@@ -77,11 +77,6 @@ export function validateRepoConfig(config: RepoConfigRecord | null | undefined):
   return null;
 }
 
-export function hasRepoConfig(config: RepoConfigRecord | null | undefined): boolean {
-  const normalized = normalizeRepoConfig(config);
-  return Boolean(normalized.repo_access_mode);
-}
-
 export function resolveRepoConfig(params: {
   workflow?: RepoConfigRecord | null;
   agent?: RepoConfigRecord | null;

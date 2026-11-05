@@ -363,9 +363,6 @@ export async function cleanupTerminalTaskWorkspaces(db: Db, taskId: number): Pro
   return removed;
 }
 
-/** @deprecated Use cleanupTerminalTaskWorkspaces; eligibility is configured terminality. */
-export const cleanupDoneTaskWorktrees = cleanupTerminalTaskWorkspaces;
-
 // Deferred lifecycle callbacks must never retain a transaction-bound adapter.
 // This also replaces the legacy CLI abort/watchdog/session-deletion fallback.
 export function abortOrphanedInstanceAsync(

@@ -1,6 +1,6 @@
 import { getDb } from '../db/client';
 import { setupTestDb, teardownTestDb } from '../db/testDb';
-import { recordRunCheckIn } from './runObservability';
+import { recordRunCheckIn } from '../domains/runs/observability';
 
 /**
  * A completion check-in that only reports "the runtime ended without a lifecycle outcome" must not
