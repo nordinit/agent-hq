@@ -11,6 +11,7 @@ import { getRunLifecycle } from '@/lib/runLifecycle';
 import { shouldClearInvalidTaskType, useTaskTypes } from '@/lib/taskTypes';
 import { formatWorkflowLabel } from '@/lib/workflowLabel';
 import { useWorkflowMetadata } from '@/lib/useWorkflowMetadata';
+import { isTaskBlocked } from '@/lib/taskBlockers';
 import { TaskModal } from '@/features/tasks/TaskModal';
 import { resolveEffectiveModel, shortModelName, useModelRoutingRules } from './modelRouting';
 import {
@@ -510,7 +511,7 @@ export function TaskDetailPanel({ task, statuses, onClose, onSave, onDelete, onC
       }
     : null);
 
-  const isBlocked = (localTask.blockers ?? []).some(b => b.status !== 'done');
+  const isBlocked = isTaskBlocked(localTask);
 
   useEffect(() => {
     api.getTaskHistory(localTask.id).then(setHistoryEntries).catch(() => {});

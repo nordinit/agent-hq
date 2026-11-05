@@ -8,6 +8,7 @@ import type { TaskRelationship, TaskRelationshipTypeConfig } from '@/lib/api';
 import { getFailureSourceLabel, getFailureTone, isFailureBlocked } from '@/lib/taskFailure';
 import { formatFailureOutcomeBadgeLabel, type TaskOutcomeMetaMap } from '@/lib/taskOutcomeMeta';
 import { relationshipDispatchImpactLabel, relationshipTypeOptionLabel } from '@/lib/taskRelationshipDisplay';
+import { blockerStillBlocks, isTaskBlocked } from '@/lib/taskBlockers';
 import { formatWorkflowLabel } from '@/lib/workflowLabel';
 import { useDraggable, useDroppable } from '@dnd-kit/core';
 import { CSS } from '@dnd-kit/utilities';
@@ -34,6 +35,8 @@ export interface BoardTask {
   task_type?: string | null;
   active_instance_id?: number | null;
   active_instance_status?: string | null;
+  is_blocked?: boolean;
+  blocks_dispatch?: boolean;
   blockers?: BoardTask[];
   blocking?: BoardTask[];
   origin_task_id?: number | null;
@@ -56,7 +59,7 @@ export const PRIORITY_BADGE: Record<string, string> = {
 };
 
 export function isBlocked(task: BoardTask): boolean {
-  return (task.blockers ?? []).some(b => b.status !== 'done');
+  return isTaskBlocked(task);
 }
 
 export function groupByJob(list: BoardTask[]): Record<string, BoardTask[]> {
@@ -361,12 +364,13 @@ export function TaskCard({ task, allTasks, onClick, relationshipTypes, onLinkTas
             {task.spawned_defects} defect{task.spawned_defects === 1 ? '' : 's'}
           </span>
         )}
-        {failureSource && (
+        {/* A run's "blocked" outcome is history; only a blocker relationship makes the card blocked. */}
+        {failureSource && !pipelineBlocked && (
           <span className={`text-xs px-2 py-1 rounded-full font-semibold ${failureTone.pill}`} title={task.failure_detail ?? undefined}>
             {formatFailureOutcomeBadgeLabel(failureSource, pipelineBlocked)}
           </span>
         )}
-        {blocked && !failureSource && (
+        {blocked && (
           <span className="text-xs px-2 py-1 rounded-full font-semibold bg-orange-900/60 text-orange-300">
             blocked
           </span>
@@ -435,7 +439,7 @@ export function TaskCard({ task, allTasks, onClick, relationshipTypes, onLinkTas
           <div className="min-w-0 max-w-full space-y-1">
             {blockers.map(b => (
               <div key={b.id} className="flex min-w-0 max-w-full items-center justify-between gap-1 group/blocker">
-                <span className={`text-xs truncate ${b.status === 'done' ? 'text-slate-500 line-through' : 'text-slate-300'}`}>
+                <span className={`text-xs truncate ${blockerStillBlocks(b) ? 'text-slate-300' : 'text-slate-500 line-through'}`}>
                   {b.title}
                 </span>
                 <button

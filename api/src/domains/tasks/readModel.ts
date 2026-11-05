@@ -5,7 +5,7 @@ import { evaluateTaskIntegrity } from '../../lib/taskRelease';
 import { listConfiguredTerminalStatuses } from './terminality';
 import { parseCustomFields, resolveTaskFieldSchema } from './fields';
 import { getCanonicalTaskCustomFields, getCanonicalTaskRecord, stripTaskLifecycleEvidenceFields } from './evidence';
-import { getTaskRelationshipsForEnrichment } from './relationships';
+import { getTaskRelationshipsForEnrichment, type TaskRelationshipRecord } from './relationships';
 import { tableExists as sharedTableExists, columnExists as sharedColumnExists } from "../../db/introspection";
 import { nowTimestamp, timestampFromEpochMs } from '../../lib/timestamps';
 import { TASK_RECURRENCE_SELECT, taskRecurrenceMetadata, type TaskRecurrenceMetadata } from './recurrence';
@@ -137,6 +137,12 @@ export async function enrichTask(task: TaskRecord): Promise<TaskRecord> {
   const latestTaskOutcome = typeof task.latest_task_outcome === 'string' && task.latest_task_outcome.trim()
     ? task.latest_task_outcome.trim()
     : (typeof task.active_instance_task_outcome === 'string' && task.active_instance_task_outcome.trim() ? task.active_instance_task_outcome.trim() : null);
+  const relationships = await getTaskRelationshipsForEnrichment(id);
+  const blockerState = hasRelationshipTable
+    ? await resolveBlockerState(db, task, relationships)
+    // Without the relationship model dispatch gates on legacy task_dependencies
+    // rows whose blocker is not done; mirror that exactly.
+    : { activeBlockerIds: new Set(blockers.filter(b => b.status !== 'done').map(b => Number(b.id))), taskIsTerminal: false };
   return {
     ...publicTask,
     runtime_recovery: await getTaskMcpRecovery(db, task),
@@ -146,12 +152,75 @@ export async function enrichTask(task: TaskRecord): Promise<TaskRecord> {
     custom_fields: unifiedCustomFields,
     resolved_workflow_type: resolvedFieldSchema.workflow_type,
     resolved_custom_field_schema: resolvedFieldSchema.schema,
-    relationships: await getTaskRelationshipsForEnrichment(id),
+    relationships,
     assigned_agent_name: assignedAgentId == null ? null : (await agentNames).get(assignedAgentId) ?? null,
     active_agent_name: activeAgentId == null ? null : (await agentNames).get(activeAgentId) ?? null,
-    blockers: blockers.map(stripPublicTaskResponseColumns),
+    // True only while an unresolved blocker relationship holds this task back.
+    // A run outcome of "blocked" does not set it; the UI's blocked badge reads this.
+    is_blocked: !blockerState.taskIsTerminal && blockerState.activeBlockerIds.size > 0,
+    blockers: blockers.map((blocker) => ({
+      ...stripPublicTaskResponseColumns(blocker),
+      blocks_dispatch: blockerState.activeBlockerIds.has(Number(blocker.id)),
+    })),
     blocking: blocking.map(stripPublicTaskResponseColumns),
   };
+}
+
+/**
+ * Which of a task's blockers still hold it back, decided the way dispatch
+ * decides it (getRelationshipDispatchEligibility): only relationship types that
+ * affect dispatch eligibility count, and a blocker stops counting once it
+ * reaches one of the type's resolved statuses or any status its own workflow
+ * configures as terminal, e.g. cancelled. Terminal statuses are only looked up
+ * when the task has such a relationship, since most tasks on a board have none.
+ */
+async function resolveBlockerState(
+  db: ReturnType<typeof getDb>,
+  task: TaskRecord,
+  relationships: TaskRelationshipRecord[],
+): Promise<{ activeBlockerIds: Set<number>; taskIsTerminal: boolean }> {
+  const taskId = Number(task.id);
+  const tenantId = typeof task.tenant_id === 'number' ? task.tenant_id : null;
+  const candidates: Array<{ blockerId: number; status: string; workflowId: number | null; resolved: string[] }> = [];
+  for (const relationship of relationships) {
+    const type = relationship.type;
+    if (!type || Number(type.affects_dispatch_eligibility) !== 1) continue;
+    const blockerSide = type.direction_semantics === 'target_blocks_source' && relationship.source_task_id === taskId
+      ? relationship.target_task
+      : type.direction_semantics === 'source_blocks_target' && relationship.target_task_id === taskId
+        ? relationship.source_task
+        : null;
+    if (!blockerSide) continue;
+    const workflowId = blockerSide.workflow_id == null ? null : Number(blockerSide.workflow_id);
+    candidates.push({
+      blockerId: Number(blockerSide.id),
+      status: String(blockerSide.status ?? ''),
+      workflowId: Number.isFinite(workflowId) ? workflowId : null,
+      resolved: type.resolved_statuses ?? [],
+    });
+  }
+  if (candidates.length === 0) return { activeBlockerIds: new Set(), taskIsTerminal: false };
+
+  const terminalByWorkflow = new Map<number | null, Promise<string[]>>();
+  const terminalStatusesFor = (workflowId: number | null) => {
+    let statuses = terminalByWorkflow.get(workflowId);
+    if (!statuses) {
+      statuses = listConfiguredTerminalStatuses(db, { workflowId, tenantId });
+      terminalByWorkflow.set(workflowId, statuses);
+    }
+    return statuses;
+  };
+
+  const activeBlockerIds = new Set<number>();
+  for (const candidate of candidates) {
+    if (candidate.resolved.includes(candidate.status)) continue;
+    if ((await terminalStatusesFor(candidate.workflowId)).includes(candidate.status)) continue;
+    activeBlockerIds.add(candidate.blockerId);
+  }
+  const taskWorkflowId = task.workflow_id == null ? null : Number(task.workflow_id);
+  const taskIsTerminal = activeBlockerIds.size > 0
+    && (await terminalStatusesFor(Number.isFinite(taskWorkflowId) ? taskWorkflowId : null)).includes(String(task.status));
+  return { activeBlockerIds, taskIsTerminal };
 }
 
 export async function enrichTasks(tasks: TaskRecord[]): Promise<TaskRecord[]> {

@@ -937,6 +937,10 @@ export interface Task {
   latest_run_outcome?: string | null;
   run_is_stale?: number | null;
   run_stale_at?: string | null;
+  /** An unresolved blocker relationship holds this task back (decided as dispatch decides it). */
+  is_blocked?: boolean;
+  /** On entries of `blockers`: this blocker still holds the task back. */
+  blocks_dispatch?: boolean;
   blockers?: Task[];
   blocking?: Task[];
   relationships?: TaskRelationship[];
