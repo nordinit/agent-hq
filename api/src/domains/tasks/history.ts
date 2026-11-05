@@ -1,4 +1,5 @@
 import { resolveRuntimeTenantId, tenantInsertColumns } from '../../lib/runtimeTenantScope';
+import { recordLiveRunStatusOwner } from './statusOwners';
 import { type Db } from "../../db/adapter/types";
 
 // ── Move type classification ──────────────────────────────────────────────────
@@ -113,6 +114,11 @@ export async function writeTaskStatusChange(
 ): Promise<void> {
   await writeTaskHistory(db, taskId, changedBy, 'status', oldStatus, newStatus);
   if (oldStatus !== newStatus) {
+    try {
+      await recordLiveRunStatusOwner(db, taskId, newStatus);
+    } catch (err) {
+      console.warn(`[history] Could not record status owner for task #${taskId}:`, err instanceof Error ? err.message : err);
+    }
     await emitTaskEvent(db, {
             taskId,
             fromStatus: oldStatus,

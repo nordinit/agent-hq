@@ -56,7 +56,9 @@ import { resolveRuntime } from '../runtimes';
 import type { AgentRuntime } from '../runtimes';
 import { runDispatcher } from './dispatcher';
 import { reconcileAssignedAgents } from '../scheduler/reconciler';
-import { recordOutcomeStatusOwner } from './dispatch/routing/keepSameAgent';
+import { startRunInstance } from '../domains/runs/callbacks';
+import { writeTaskStatusChange } from '../domains/tasks/history';
+import { applyTaskOutcome } from '../lib/taskOutcome';
 import { getTaskStatusOwner, recordTaskStatusOwner } from '../domains/tasks/statusOwners';
 
 const mockedResolveRuntime = resolveRuntime as jest.MockedFunction<typeof resolveRuntime>;
@@ -225,39 +227,46 @@ describe('dispatch with Keep same agent', () => {
   });
 });
 
-describe('outcome ownership', () => {
-  const moveTo = (status: string, agentId: number) =>
-    recordOutcomeStatusOwner(db, { taskId: TASK, fromStatus: 'ready', status, agentId, instanceId: null });
+describe('run ownership', () => {
+  /** A run for Dev One on the task, linked as its active run. */
+  async function startLiveRun(): Promise<number> {
+    const id = Number(await db.value(`INSERT INTO job_instances (tenant_id, agent_id, status, task_id) VALUES (1, ?, 'running', ?) RETURNING id`, DEV_ONE, TASK));
+    await db.run(`UPDATE tasks SET active_instance_id = ?, agent_id = ? WHERE id = ?`, id, DEV_ONE, TASK);
+    return id;
+  }
 
-  it('the posting agent owns the next status when the same team works it', async () => {
+  it('the start callback moving the task to in_progress makes the run\'s agent the in_progress owner', async () => {
     await addRule(DEV_ONE, 'in_progress', 100);
-    await addRule(DEV_TWO, 'in_progress', 100);
-    await moveTo('in_progress', DEV_ONE);
-    expect(await getTaskStatusOwner(db, TASK, 'in_progress')).toMatchObject({ agent_id: DEV_ONE, source: 'outcome' });
+    await db.run(`INSERT INTO external_event_mappings (tenant_id, source, event_name, status_includes_json, status_excludes_json, action_kind, action_target, enabled, priority)
+      VALUES (1, 'agent_hq_runtime', 'agent_started', '[]', '[]', 'status', 'in_progress', 1, 100)`);
+    const runId = await startLiveRun();
+
+    await startRunInstance(db, runId, null);
+
+    expect(await db.value('SELECT status FROM tasks WHERE id = ?', TASK)).toBe('in_progress');
+    expect(await getTaskStatusOwner(db, TASK, 'in_progress')).toMatchObject({ agent_id: DEV_ONE, source: 'run', instance_id: runId });
   });
 
-  it('the posting agent does not own a status it cannot work', async () => {
-    await moveTo('review', DEV_ONE);
-    expect(await getTaskStatusOwner(db, TASK, 'review')).toBeNull();
-  });
-
-  it('a developer who can also review does not become the review owner by handing work to review', async () => {
-    await addRule(DEV_ONE, 'review', 50);
-    await moveTo('review', DEV_ONE);
-    expect(await getTaskStatusOwner(db, TASK, 'review')).toBeNull();
-  });
-
-  it('an outcome never replaces an existing owner', async () => {
-    await addRule(DEV_ONE, 'in_progress', 100);
-    await addRule(DEV_TWO, 'in_progress', 100);
+  it('a status change while the run is still going is owned by the run\'s agent, replacing an older owner', async () => {
     await recordTaskStatusOwner(db, { taskId: TASK, status: 'in_progress', agentId: DEV_TWO, source: 'dispatch' });
-    await moveTo('in_progress', DEV_ONE);
-    expect(await getTaskStatusOwner(db, TASK, 'in_progress')).toMatchObject({ agent_id: DEV_TWO, source: 'dispatch' });
+    await startLiveRun();
+    await writeTaskStatusChange(db, TASK, 'workflow event', 'ready', 'in_progress');
+    expect(await getTaskStatusOwner(db, TASK, 'in_progress')).toMatchObject({ agent_id: DEV_ONE, source: 'run' });
   });
 
-  it('a status with no assignment rules of its own gets no owner', async () => {
-    // No status borrows another status's rules, so nobody can work in_progress here.
-    await moveTo('in_progress', DEV_ONE);
+  it('a status change by an outcome makes nobody the owner of the next status', async () => {
+    await db.run(`INSERT INTO workflow_task_transitions (tenant_id, workflow_id, project_id, workflow_type, task_type, from_status, outcome, to_status, enabled)
+      VALUES (1, 10, 86, 'team', 'backend', 'ready', 'handed_off', 'review', 1)`);
+    const runId = await startLiveRun();
+
+    await applyTaskOutcome(db, { taskId: TASK, outcome: 'handed_off', changedBy: 'Dev One', instanceId: runId, summary: 'Done' });
+
+    expect(await db.value('SELECT status FROM tasks WHERE id = ?', TASK)).toBe('review');
+    expect(await getTaskStatusOwner(db, TASK, 'review')).toBeNull();
+  });
+
+  it('a status change with no run going records nothing', async () => {
+    await writeTaskStatusChange(db, TASK, 'operator', 'ready', 'in_progress');
     expect(await getTaskStatusOwner(db, TASK, 'in_progress')).toBeNull();
   });
 });

@@ -884,7 +884,7 @@ export interface TaskStatusOwner {
   agent_id: number;
   agent_name: string | null;
   instance_id: number | null;
-  source: 'dispatch' | 'outcome';
+  source: 'dispatch' | 'run';
   created_at: string;
   updated_at: string;
 }

@@ -8,12 +8,11 @@ import { type Db } from '../../db/adapter/types';
  * has the context, worktree and branch is the one that continues. Owners are recorded whether or not
  * the setting is on, so turning it on later already knows who worked what.
  *
- * Nothing here names a status or an outcome. Which statuses an agent owns comes from what happened:
- * the status a run was dispatched for, and the status an agent's own outcome moved the task to when
- * that agent can work that status too.
+ * Nothing here names a status or an outcome. An agent owns the statuses its runs worked in: the status
+ * a run was dispatched for, and any status the task moved to while that run was still going.
  */
 
-export type TaskStatusOwnerSource = 'dispatch' | 'outcome';
+export type TaskStatusOwnerSource = 'dispatch' | 'run';
 
 export interface TaskStatusOwner {
   task_id: number;
@@ -60,6 +59,26 @@ export async function getTaskStatusOwner(db: Db, taskId: number, status: string)
 
 export async function listTaskStatusOwners(db: Db, taskId: number): Promise<TaskStatusOwner[]> {
   return await db.all<TaskStatusOwner>(`${OWNER_SELECT} WHERE o.task_id = ? ORDER BY o.created_at ASC, o.status ASC`, taskId);
+}
+
+/**
+ * A task that changes status while its run is still going stays with that run's agent, who owns the
+ * new status too. This is how the start callback's move into a working status is owned. A status
+ * change made by an outcome is not: the outcome is recorded on the run before the move, which is
+ * what ends it.
+ */
+export async function recordLiveRunStatusOwner(db: Db, taskId: number, status: string): Promise<void> {
+  const run = await db.get<{ id: number; agent_id: number }>(`
+    SELECT ji.id, ji.agent_id
+    FROM tasks t
+    JOIN job_instances ji ON ji.id = t.active_instance_id
+    WHERE t.id = ?
+      AND ji.status IN ('queued', 'dispatched', 'running')
+      AND ji.task_outcome IS NULL
+      AND ji.agent_id IS NOT NULL
+  `, taskId);
+  if (!run) return;
+  await recordTaskStatusOwner(db, { taskId, status, agentId: run.agent_id, instanceId: run.id, source: 'run' });
 }
 
 /** Whether the workflow's type has Keep same agent on. A tenant's own definition wins over a global one. */

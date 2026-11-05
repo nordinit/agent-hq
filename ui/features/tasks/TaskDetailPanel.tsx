@@ -834,7 +834,7 @@ export function TaskDetailPanel({ task, statuses, onClose, onSave, onDelete, onC
                 key={owner.status}
                 href={`/agents/${owner.agent_id}`}
                 onClick={dismiss}
-                title={`Worked "${owner.status}" (${owner.source === 'dispatch' ? 'dispatched there' : 'moved it there with its own outcome'})`}
+                title={`Worked "${owner.status}" (${owner.source === 'dispatch' ? 'dispatched there' : 'its run was going when the task moved there'})`}
                 className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-full bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-slate-100 transition-colors"
               >
                 <span className="font-mono text-slate-500">{owner.status}</span>

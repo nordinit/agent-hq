@@ -12,7 +12,7 @@ import {
   isRuntimeFailureOutcome,
 } from './outcomeCatalog';
 import { syncTaskActiveAgentFromInstance } from '../domains/tasks/ownership';
-import { recordOutcomeStatusOwner, resolveRequiredStatusOwner } from '../services/dispatch/routing/keepSameAgent';
+import { resolveRequiredStatusOwner } from '../services/dispatch/routing/keepSameAgent';
 import { insertRuntimeLog, resolveRuntimeTenantId, tenantInsertColumns } from './runtimeTenantScope';
 import { assertTaskStatusDefinedForWorkflow, WorkflowAllowedValuesError } from './taskStatusValidation';
 import { nowTimestamp } from './timestamps';
@@ -493,16 +493,6 @@ export async function applyTaskOutcome(db: Db, input: ApplyTaskOutcomeInput): Pr
   const telemetryOutcomeAgent=telemetryInstanceId==null?undefined:await db.value<number>(
     'SELECT agent_id FROM job_instances WHERE id=? AND task_id=?',telemetryInstanceId,input.taskId);
   return withTelemetryCausation(db, `outcome:${input.taskId}:${randomUUID()}`, async (db) => {
-    // The posting agent owns the next status when the same team works it (see keepSameAgent).
-    if (!input.dryRun && telemetryOutcomeAgent != null) {
-      await recordOutcomeStatusOwner(db, {
-        taskId: input.taskId,
-        fromStatus: priorStatus,
-        status: nextStatus,
-        agentId: telemetryOutcomeAgent,
-        instanceId: telemetryInstanceId ?? null,
-      });
-    }
     // With Keep same agent on, the board shows the agent the next status will wait for.
     const nextAssignedAgentId = (await resolveRequiredStatusOwner(db, input.taskId, nextStatus))?.agent_id ?? routedAssignedAgentId;
     // Store failure or blocker detail on the task when failing.

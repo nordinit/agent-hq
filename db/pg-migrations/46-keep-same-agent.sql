@@ -6,15 +6,16 @@ ALTER TABLE workflow_types ADD COLUMN keep_same_agent bigint NOT NULL DEFAULT 0;
 -- The agent that owns each status of each task, recorded whether or not the setting is on so that
 -- turning it on later already knows who worked what. Two writers:
 --   dispatch: the agent a run is dispatched to owns the status the run was dispatched for;
---   outcome:  the agent that posted an outcome owns the status the outcome moves the task to, when
---             that agent can also work that status and nobody owns it yet.
+--   run:      when the task changes status while that run is still going (the start callback moving
+--             it into a working status), the run's agent owns the new status too.
+-- An outcome ends its run, so it never makes anyone an owner.
 -- No backfill: a historical run does not record which status it was dispatched for.
 CREATE TABLE task_status_owners (
   task_id bigint NOT NULL REFERENCES tasks (id) ON DELETE CASCADE,
   status text NOT NULL,
   agent_id bigint NOT NULL REFERENCES agents (id) ON DELETE CASCADE,
   instance_id bigint REFERENCES job_instances (id) ON DELETE SET NULL,
-  source text NOT NULL CHECK (source IN ('dispatch', 'outcome')),
+  source text NOT NULL CHECK (source IN ('dispatch', 'run')),
   tenant_id bigint,
   created_at text NOT NULL DEFAULT to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'),
   updated_at text NOT NULL DEFAULT to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'),
