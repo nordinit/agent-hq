@@ -41,6 +41,7 @@ import {
 } from '../domains/agents/runtimeConfig';
 import { getSkillMaterializationAdapter } from '../runtimes/skillMaterialization';
 import { cleanupOpenClawGlobalMcpForAgent, syncAssignedMcpForAgent } from '../runtimes/mcpMaterialization';
+import { redactSensitiveRuntimeText } from '../runtimes/sensitiveText';
 import { resolveRuntime, type RuntimeAuthProfileSyncResult } from '../runtimes';
 import { isValidTaskType } from '../lib/taskTypes';
 import { ensureOpenClawGatewayAvailable, requireOpenClawOutput, runOpenClawSync } from '../lib/openclawCli';
@@ -1363,7 +1364,44 @@ async function replaceAgentMcpToolAllowlistHandler(req: Request, res: Response) 
     }
 
     const servers = await replaceAgentMcpServerToolAllowlist(db, agentId, mcpServerId, body.tool_allowlist);
-    return res.json({ agent_id: agentId, servers });
+
+    // The allowlist is baked into the agent's materialized MCP bundle, so a
+    // stored change does nothing until it is re-materialized. Dispatch only
+    // does that right before a run, which leaves fresh sessions started any
+    // other way on the old tool list. Publish now, and say so if it fails:
+    // the allowlist restricts what an agent may do, so a silent miss could
+    // leave an agent with tools it was just denied.
+    let failure: string | null = null;
+    let skipped: string | null = null;
+    try {
+      const syncResult = await syncAssignedMcpForAgent({
+        db,
+        agentId,
+        materializeOpenClawGlobalConfig: true,
+      });
+      // No workspace yet means there is no runtime to publish to; the next
+      // dispatch materializes the stored allowlist.
+      if (syncResult.ok || syncResult.skipped === 'missing_workspace') skipped = syncResult.skipped ?? null;
+      else failure = syncResult.error ?? 'Unknown MCP materialization error';
+    } catch (syncError) {
+      failure = syncError instanceof Error ? syncError.message : String(syncError);
+    }
+
+    if (failure !== null) {
+      return res.status(502).json({
+        error: `MCP allowlist was stored, but publishing it to the agent runtime failed: ${redactSensitiveRuntimeText(failure)}. Retry the allowlist update once the runtime error is resolved.`,
+        agent_id: agentId,
+        servers,
+        allowlist_stored: true,
+        runtime_published: false,
+      });
+    }
+    return res.json({
+      agent_id: agentId,
+      servers,
+      runtime_published: skipped === null,
+      runtime_sync_skipped: skipped,
+    });
   } catch (err) {
     const status = (err as Error & { status?: number }).status;
     const message = err instanceof Error ? err.message : String(err);
