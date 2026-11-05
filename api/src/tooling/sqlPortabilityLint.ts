@@ -14,10 +14,14 @@ import {
  * Every pattern below is SQL that PostgreSQL rejects or silently changes: functions and syntax it
  * does not have, unquoted mixed-case aliases it folds, two-argument round() without a numeric
  * argument, untyped `? IS NULL` parameters, and schema DDL outside db/pg-migrations. It also keeps
- * two workflow-policy invariants and confines better-sqlite3 to the one module that reads
- * OpenClaw's own on-disk auth store, which is not Agent HQ's database.
+ * two workflow-policy invariants and confines better-sqlite3 to the modules that read OpenClaw's
+ * own on-disk state (its auth store and device identity), which is not Agent HQ's database.
  */
-const OPENCLAW_SQLITE_INTEGRATION = 'src/lib/openclawOAuthProfiles.ts';
+const OPENCLAW_SQLITE_INTEGRATIONS = new Set([
+  'src/lib/openclawOAuthProfiles.ts',
+  'src/lib/openclawDeviceIdentity.ts',
+]);
+const OPENCLAW_SQLITE_INTEGRATION_LIST = [...OPENCLAW_SQLITE_INTEGRATIONS].join(', ');
 const LINTER_SOURCE = 'src/tooling/sqlPortabilityLint.ts';
 const POLICY_SEED_ALLOWED_SOURCES = new Set([
   'src/lib/defaultInstallPackage.ts',
@@ -224,7 +228,7 @@ export function analyzeSqlPortabilitySourceFile(sourceFile: SourceFile, apiRoot:
   }
 
   const findings: SqlPortabilityFinding[] = [];
-  const isExternalSqliteIntegration = relativeFile === OPENCLAW_SQLITE_INTEGRATION;
+  const isExternalSqliteIntegration = OPENCLAW_SQLITE_INTEGRATIONS.has(relativeFile);
   const add = (line: number, construct: string, detail: string) => {
     findings.push({ file: relativeFile, line, construct, detail });
   };
@@ -234,7 +238,7 @@ export function analyzeSqlPortabilitySourceFile(sourceFile: SourceFile, apiRoot:
       add(
         importDeclaration.getStartLineNumber(),
         'better-sqlite3 import',
-        `Only ${OPENCLAW_SQLITE_INTEGRATION} may access OpenClaw's external SQLite auth store.`,
+        `Only ${OPENCLAW_SQLITE_INTEGRATION_LIST} may access OpenClaw's external SQLite state.`,
       );
     }
   }
@@ -270,7 +274,7 @@ export function analyzeSqlPortabilitySourceFile(sourceFile: SourceFile, apiRoot:
       add(
         call.getStartLineNumber(),
         'raw .prepare()',
-        `Use the async Db adapter; only ${OPENCLAW_SQLITE_INTEGRATION} may use the external SQLite driver.`,
+        `Use the async Db adapter; only ${OPENCLAW_SQLITE_INTEGRATION_LIST} may use the external SQLite driver.`,
       );
     }
     const moduleSpecifier = call.getArguments()[0];
@@ -284,7 +288,7 @@ export function analyzeSqlPortabilitySourceFile(sourceFile: SourceFile, apiRoot:
       add(
         call.getStartLineNumber(),
         'better-sqlite3 import',
-        `Only ${OPENCLAW_SQLITE_INTEGRATION} may access OpenClaw's external SQLite auth store.`,
+        `Only ${OPENCLAW_SQLITE_INTEGRATION_LIST} may access OpenClaw's external SQLite state.`,
       );
     }
   }
