@@ -38,7 +38,7 @@ it('releases only legacy retry-limit pauses and preserves retry timing, routing,
         status: 'ready', paused_at: null, pause_reason: null, retry_count: 3,
         dispatched_at: '2026-10-09 17:20:11', failure_detail: 'Gateway unavailable',
       });
-      expect(await db.all('SELECT tenant_id, field, old_value, new_value FROM task_history WHERE task_id = ? ORDER BY field', id)).toEqual([
+      expect(await db.all('SELECT tenant_id, field, old_value, new_value FROM task_history WHERE task_id = ? ORDER BY field COLLATE "C"', id)).toEqual([
         { tenant_id: id, field: 'pause_reason', old_value: oldPause, new_value: null },
         { tenant_id: id, field: 'paused_at', old_value: '2026-10-09 17:20:11', new_value: null },
       ]);
