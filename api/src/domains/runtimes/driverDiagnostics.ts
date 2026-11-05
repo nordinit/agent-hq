@@ -394,7 +394,9 @@ export async function diagnoseRuntimeDriver(input: DiagnoseRuntimeDriverInput): 
         checks.push({
           key: 'version',
           label: 'Runtime version',
-          status: controlledVersionResult.ok ? 'pass' : 'fail',
+          // Only the minimum is enforced; a release newer than the verified
+          // family runs but is flagged until its tool policy is re-verified.
+          status: !controlledVersionResult.ok ? 'fail' : controlledVersionResult.newerThanVerified ? 'warn' : 'pass',
           message: controlledVersionResult.message,
           details: controlledVersionResult.details,
         });

@@ -112,8 +112,31 @@ describe('runtime driver diagnostics', () => {
     ]));
   });
 
-  it('fails closed for a newer unverified CLI contract family', async () => {
+  it('allows a CLI newer than the verified family but warns about it', async () => {
     const codexBin = fakeRuntimeCli('codex-cli 0.165.0', true);
+    allowRuntimeCli('codex', codexBin);
+    const result = await diagnoseRuntimeDriver({
+      runtimeType: 'codex',
+      runtimeConfig: {
+        codexBin,
+        codexHome: temporaryDirectory(),
+      },
+      agentSlug: 'builder',
+      providerConnectionId: 91,
+    });
+
+    expect(result.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        key: 'version',
+        status: 'warn',
+        message: expect.stringMatching(/re-verify/),
+        details: expect.objectContaining({ newer_than_verified: true }),
+      }),
+    ]));
+  });
+
+  it('fails closed for a CLI older than the minimum', async () => {
+    const codexBin = fakeRuntimeCli('codex-cli 0.163.9', true);
     allowRuntimeCli('codex', codexBin);
     const result = await diagnoseRuntimeDriver({
       runtimeType: 'codex',
@@ -127,7 +150,7 @@ describe('runtime driver diagnostics', () => {
 
     expect(result.ok).toBe(false);
     expect(result.checks).toEqual(expect.arrayContaining([
-      expect.objectContaining({ key: 'version', status: 'fail' }),
+      expect.objectContaining({ key: 'version', status: 'fail', message: expect.stringMatching(/older than the minimum/) }),
     ]));
   });
 

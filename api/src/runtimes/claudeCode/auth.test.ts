@@ -125,8 +125,8 @@ describe('prepareClaudeCodeAuthProfiles', () => {
     expect(fs.existsSync(profile.authMarker)).toBe(false);
   });
 
-  it('fails before authentication when the installed CLI family is outside the verified range', async () => {
-    const profile = fakeClaude(true, '2.2.0 (Claude Code)');
+  it('fails before authentication when the installed CLI is older than the minimum', async () => {
+    const profile = fakeClaude(true, '2.1.219 (Claude Code)');
     const result = await prepareClaudeCodeAuthProfiles({}, {
       agentSlug: 'builder',
       preferredProvider: 'anthropic',
@@ -142,9 +142,9 @@ describe('prepareClaudeCodeAuthProfiles', () => {
       ok: false,
       status: 'failed',
       source: 'runtime-cli-version',
-      details: { runtime_cli_version: '2.2.0 (Claude Code)' },
+      details: { runtime_cli_version: '2.1.219 (Claude Code)' },
     });
-    expect(result.error).toContain('outside the verified claude-code CLI range');
+    expect(result.error).toContain('older than the minimum supported claude-code CLI');
     expect(fs.existsSync(profile.authMarker)).toBe(false);
   });
 });

@@ -177,8 +177,8 @@ describe('Codex managed auth', () => {
     expect(fs.readFileSync(authPath, 'utf8')).toBe(original);
   });
 
-  it('fails before auth materialization when the installed CLI family is unverified', async () => {
-    const result = await prepareCodexAuthProfiles({ codexBin: fakeCodex('codex-cli 0.165.0') }, {
+  it('fails before auth materialization when the installed CLI is older than the minimum', async () => {
+    const result = await prepareCodexAuthProfiles({ codexBin: fakeCodex('codex-cli 0.163.0') }, {
       agentSlug: 'cinder',
       agentId: 7,
       tenantId: 1,
@@ -190,7 +190,7 @@ describe('Codex managed auth', () => {
       ok: false,
       status: 'failed',
       source: 'runtime-cli-version',
-      details: { runtime_cli_version: 'codex-cli 0.165.0' },
+      details: { runtime_cli_version: 'codex-cli 0.163.0' },
     });
     expect(resolveOAuth).not.toHaveBeenCalled();
   });

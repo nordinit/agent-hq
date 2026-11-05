@@ -25,13 +25,20 @@ function fixture(version: string): string {
 }
 
 describe('runtime CLI version policy', () => {
-  it('assesses both lower and exclusive upper compatibility boundaries', () => {
-    expect(assessRuntimeCliVersion('claude-code', '2.1.220 (Claude Code)').ok).toBe(true);
-    expect(assessRuntimeCliVersion('claude-code', '2.2.0 (Claude Code)').ok).toBe(false);
-    expect(assessRuntimeCliVersion('codex', 'codex-cli 0.164.0').ok).toBe(true);
-    expect(assessRuntimeCliVersion('codex', 'codex-cli 0.165.0').ok).toBe(false);
-    // The adapter policy was re-verified for 0.164; the previous pin no longer applies.
+  it('enforces only the minimum and flags releases newer than the verified family', () => {
+    expect(assessRuntimeCliVersion('claude-code', '2.1.219 (Claude Code)').ok).toBe(false);
+    expect(assessRuntimeCliVersion('claude-code', '2.1.220 (Claude Code)')).toMatchObject({ ok: true, newerThanVerified: false });
+    expect(assessRuntimeCliVersion('claude-code', '2.1.999 (Claude Code)')).toMatchObject({ ok: true, newerThanVerified: false });
+    expect(assessRuntimeCliVersion('claude-code', '2.2.0 (Claude Code)')).toMatchObject({ ok: true, newerThanVerified: true });
+    expect(assessRuntimeCliVersion('claude-code', '3.0.0 (Claude Code)')).toMatchObject({ ok: true, newerThanVerified: true });
+    expect(assessRuntimeCliVersion('codex', 'codex-cli 0.164.0')).toMatchObject({ ok: true, newerThanVerified: false });
+    const newer = assessRuntimeCliVersion('codex', 'codex-cli 0.165.0');
+    expect(newer).toMatchObject({ ok: true, newerThanVerified: true, details: { newer_than_verified: true } });
+    expect(newer.message).toMatch(/re-verify/);
+    expect(assessRuntimeCliVersion('codex', 'codex-cli 1.0.0').ok).toBe(true);
+    // Below the minimum the hardened policy does not apply (0.146 predates code-mode models and MCP approval mode).
     expect(assessRuntimeCliVersion('codex', 'codex-cli 0.146.0').ok).toBe(false);
+    expect(assessRuntimeCliVersion('codex', 'not a version').ok).toBe(false);
   });
 
   it('probes an explicitly allowlisted fixture without starting a model turn', async () => {

@@ -47,7 +47,7 @@ const mockProbeRuntimeCliVersion = jest.fn(async (..._args: unknown[]) => ({
   message: 'Claude Code 2.1.220 (supported)',
   details: {
     minimum_supported: '2.1.220',
-    maximum_exclusive: '2.2.0',
+    verified_family: '2.1.x',
     detected: '2.1.220',
     executable_path: '/opt/agent-hq/bin/claude',
     executable_fingerprint: 'sha256:test-claude-executable',
@@ -291,7 +291,7 @@ beforeEach(() => {
     message: 'Claude Code 2.1.220 (supported)',
     details: {
       minimum_supported: '2.1.220',
-      maximum_exclusive: '2.2.0',
+      verified_family: '2.1.x',
       detected: '2.1.220',
       executable_path: '/opt/agent-hq/bin/claude',
       executable_fingerprint: 'sha256:test-claude-executable',
@@ -365,14 +365,14 @@ describe('ClaudeCodeRuntime dispatch', () => {
   it('fails a supported-version probe before DB writes or MCP materialization', async () => {
     mockProbeRuntimeCliVersion.mockResolvedValueOnce({
       ok: false,
-      version: 'Claude Code 2.2.0',
+      version: 'Claude Code 2.1.200',
       executablePath: '/opt/agent-hq/bin/claude',
       executableFingerprint: 'sha256:test-claude-executable',
-      message: 'outside verified range',
+      message: 'older than the minimum',
       details: {
         minimum_supported: '2.1.220',
-        maximum_exclusive: '2.2.0',
-        detected: '2.2.0',
+        verified_family: '2.1.x',
+        detected: '2.1.200',
         executable_path: '/opt/agent-hq/bin/claude',
         executable_fingerprint: 'sha256:test-claude-executable',
       },
@@ -382,7 +382,7 @@ describe('ClaudeCodeRuntime dispatch', () => {
     await expect(new ClaudeCodeRuntime().dispatch(baseParams({
       db: db as never,
       activeRepoRoot: '/repo',
-    }))).rejects.toThrow(/version verification failed: outside verified range/);
+    }))).rejects.toThrow(/version verification failed: older than the minimum/);
 
     expect(db.runs).toEqual([]);
     expect(mockMaterializeMcp).not.toHaveBeenCalled();

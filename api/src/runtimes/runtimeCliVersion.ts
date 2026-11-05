@@ -5,19 +5,26 @@ import {
   type PolicyControlledRuntime,
 } from './executablePolicy';
 
-interface VerifiedCliRange {
+interface RuntimeCliVersionPolicy {
+  /** Oldest CLI the adapter supports. Older versions are refused. */
   minimum: readonly [number, number, number];
-  maximumExclusive: readonly [number, number, number];
+  /**
+   * The major.minor release family the adapter's tool-surface policy was last
+   * verified against. Newer releases are allowed (Agent HQ enforces only the
+   * minimum) but diagnostics warn until the policy is re-verified for them.
+   */
+  verifiedFamily: readonly [number, number];
 }
 
-/** Runtimes whose CLI contract Agent HQ pins to a verified version range. */
+/** Runtimes whose CLI contract Agent HQ checks before launch. */
 export type VersionVerifiedRuntime = Extract<PolicyControlledRuntime, 'claude-code' | 'codex'>;
 
-export const VERIFIED_RUNTIME_CLI_RANGES: Record<VersionVerifiedRuntime, VerifiedCliRange> = {
-  'claude-code': { minimum: [2, 1, 220], maximumExclusive: [2, 2, 0] },
-  // Each Codex minor changes feature names, model-driven tool modes and MCP
-  // approval defaults; the adapter policy is verified against 0.164 only.
-  codex: { minimum: [0, 164, 0], maximumExclusive: [0, 165, 0] },
+export const RUNTIME_CLI_VERSION_POLICIES: Record<VersionVerifiedRuntime, RuntimeCliVersionPolicy> = {
+  'claude-code': { minimum: [2, 1, 220], verifiedFamily: [2, 1] },
+  // Codex minors change feature names, model-driven tool modes and MCP approval
+  // defaults. 0.164 is the first release the hardened policy supports
+  // (code-mode models, MCP approval mode, agents/skills config keys).
+  codex: { minimum: [0, 164, 0], verifiedFamily: [0, 164] },
 };
 
 export interface RuntimeCliVersionResult {
@@ -28,10 +35,13 @@ export interface RuntimeCliVersionResult {
   /** Non-secret identity recorded alongside the canonical executable path. */
   executableFingerprint: string | null;
   message: string;
+  /** True when the CLI is newer than the release family the adapter policy was verified against. */
+  newerThanVerified?: boolean;
   details: {
     minimum_supported: string;
-    maximum_exclusive: string;
+    verified_family: string;
     detected?: string;
+    newer_than_verified?: boolean;
     executable_path?: string;
     executable_fingerprint?: string;
   };
@@ -64,12 +74,12 @@ export function assessRuntimeCliVersion(
   runtime: VersionVerifiedRuntime,
   version: string | null,
 ): RuntimeCliVersionResult {
-  const { minimum, maximumExclusive } = VERIFIED_RUNTIME_CLI_RANGES[runtime];
+  const { minimum, verifiedFamily } = RUNTIME_CLI_VERSION_POLICIES[runtime];
   const minimumText = minimum.join('.');
-  const maximumText = maximumExclusive.join('.');
+  const familyText = `${verifiedFamily.join('.')}.x`;
   const details: RuntimeCliVersionResult['details'] = {
     minimum_supported: minimumText,
-    maximum_exclusive: maximumText,
+    verified_family: familyText,
   };
   const actual = parseSemanticVersion(version);
   if (!actual) {
@@ -78,23 +88,26 @@ export function assessRuntimeCliVersion(
       version,
       executablePath: null,
       executableFingerprint: null,
-      message: `Could not verify ${runtime} CLI version; Agent HQ supports ${minimumText} through versions below ${maximumText}.`,
+      message: `Could not verify ${runtime} CLI version; Agent HQ requires ${minimumText} or newer.`,
       details,
     };
   }
 
   const actualText = actual.join('.');
-  const supported = compareVersion(actual, minimum) >= 0
-    && compareVersion(actual, maximumExclusive) < 0;
+  const supported = compareVersion(actual, minimum) >= 0;
+  const newer = compareVersion(actual, [verifiedFamily[0], verifiedFamily[1] + 1, 0]) >= 0;
   return {
     ok: supported,
     version,
     executablePath: null,
     executableFingerprint: null,
-    message: supported
-      ? `${version} (supported: >=${minimumText}, <${maximumText})`
-      : `${version} is outside the verified ${runtime} CLI range >=${minimumText}, <${maximumText}.`,
-    details: { ...details, detected: actualText },
+    newerThanVerified: supported && newer,
+    message: !supported
+      ? `${version} is older than the minimum supported ${runtime} CLI ${minimumText}.`
+      : newer
+        ? `${version} is allowed (>=${minimumText}) but newer than ${familyText}, the release the ${runtime} adapter's tool policy was verified against; re-verify the policy for this release.`
+        : `${version} (supported: >=${minimumText}; tool policy verified on ${familyText})`,
+    details: { ...details, detected: actualText, newer_than_verified: supported && newer },
   };
 }
 
@@ -109,10 +122,10 @@ export async function probeAllowedRuntimeCliVersion(params: {
   timeoutMs?: number;
   pathValue?: string;
 }): Promise<RuntimeCliVersionResult> {
-  const range = VERIFIED_RUNTIME_CLI_RANGES[params.runtime];
+  const policy = RUNTIME_CLI_VERSION_POLICIES[params.runtime];
   const baseDetails = {
-    minimum_supported: range.minimum.join('.'),
-    maximum_exclusive: range.maximumExclusive.join('.'),
+    minimum_supported: policy.minimum.join('.'),
+    verified_family: `${policy.verifiedFamily.join('.')}.x`,
   };
   let executable: ReturnType<typeof resolveAllowedRuntimeExecutable>;
   try {

@@ -36,7 +36,7 @@ const mockProbeRuntimeCliVersion = jest.fn(async (..._args: unknown[]) => ({
   message: 'codex-cli 0.164.0 (supported)',
   details: {
     minimum_supported: '0.164.0',
-    maximum_exclusive: '0.165.0',
+    verified_family: '0.164.x',
     detected: '0.164.0',
     executable_path: '/opt/agent-hq/bin/codex',
     executable_fingerprint: 'sha256:test-codex-executable',
@@ -166,7 +166,7 @@ beforeEach(() => {
     message: 'codex-cli 0.164.0 (supported)',
     details: {
       minimum_supported: '0.164.0',
-      maximum_exclusive: '0.165.0',
+      verified_family: '0.164.x',
       detected: '0.164.0',
       executable_path: '/opt/agent-hq/bin/codex',
       executable_fingerprint: 'sha256:test-codex-executable',
@@ -420,21 +420,21 @@ describe('CodexRuntime', () => {
   it('rejects an unsupported Codex CLI before profile materialization or model spend', async () => {
     mockProbeRuntimeCliVersion.mockResolvedValueOnce({
       ok: false,
-      version: 'codex-cli 0.165.0',
+      version: 'codex-cli 0.163.0',
       executablePath: '/opt/agent-hq/bin/codex',
       executableFingerprint: 'sha256:test-codex-executable',
-      message: 'codex-cli 0.165.0 is outside the verified range',
+      message: 'codex-cli 0.163.0 is older than the minimum supported codex CLI 0.164.0.',
       details: {
         minimum_supported: '0.164.0',
-        maximum_exclusive: '0.165.0',
-        detected: '0.165.0',
+        verified_family: '0.164.x',
+        detected: '0.163.0',
         executable_path: '/opt/agent-hq/bin/codex',
         executable_fingerprint: 'sha256:test-codex-executable',
       },
     });
 
     await expect(new CodexRuntime().dispatch(params()))
-      .rejects.toThrow(/CLI version verification failed.*outside the verified range/);
+      .rejects.toThrow(/CLI version verification failed.*older than the minimum/);
     expect(mockMaterializeMcp).not.toHaveBeenCalled();
     expect(spawnMock).not.toHaveBeenCalled();
   });
@@ -461,7 +461,7 @@ describe('CodexRuntime', () => {
       message: 'supported',
       details: {
         minimum_supported: '0.164.0',
-        maximum_exclusive: '0.165.0',
+        verified_family: '0.164.x',
         detected: '0.164.0',
         executable_path: pathFromProbe,
         executable_fingerprint: fingerprintFromProbe,
