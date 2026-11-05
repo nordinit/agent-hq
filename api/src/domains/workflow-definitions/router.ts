@@ -24,6 +24,8 @@ interface WorkflowTypeRow {
   name: string;
   description: string;
   is_system: number;
+  /** 1 = a task coming back to a status waits for the agent that already worked it there. */
+  keep_same_agent: number;
   created_at: string;
   updated_at: string;
 }
@@ -147,12 +149,18 @@ function normalizeOutcomeMetadata(raw: unknown, fieldName: string): Record<strin
   const parsed = parseMetadataObject(raw, fieldName);
   const failureLike = parsed.failure_like === true;
   const blockedLike = parsed.blocked_like === true;
+  // runtime_failure: posting this outcome also marks the agent's run as failed, not just the task.
+  const runtimeFailure = parsed.runtime_failure === true;
   if (failureLike && blockedLike) {
     throw new Error(`${fieldName} cannot set both failure_like and blocked_like`);
+  }
+  if (runtimeFailure && blockedLike) {
+    throw new Error(`${fieldName} cannot set both runtime_failure and blocked_like`);
   }
   return {
     ...(failureLike ? { failure_like: true } : {}),
     ...(blockedLike ? { blocked_like: true } : {}),
+    ...(runtimeFailure ? { runtime_failure: true } : {}),
   };
 }
 
@@ -227,7 +235,7 @@ async function outcomeListTenantPredicate(db: ReturnType<typeof getDb>, tenantId
 async function getWorkflowTypeOr404(db: ReturnType<typeof getDb>, workflowTypeKey: string, tenantId?: number | null): Promise<WorkflowTypeRow | null> {
   const tenant = await workflowTypeTenantPredicate(db, tenantId);
   return await db.get(`
-    SELECT ${await tableHasColumn(db, 'workflow_types', 'tenant_id') ? 'tenant_id,' : ''}${await tableHasColumn(db, 'workflow_types', 'project_id') ? 'project_id,' : ''} key, name, description, is_system, created_at, updated_at
+    SELECT ${await tableHasColumn(db, 'workflow_types', 'tenant_id') ? 'tenant_id,' : ''}${await tableHasColumn(db, 'workflow_types', 'project_id') ? 'project_id,' : ''} key, name, description, is_system, keep_same_agent, created_at, updated_at
     FROM workflow_types
     WHERE key = ?
       ${tenant.sql}
@@ -556,7 +564,7 @@ async function buildWorkflowConfigSnapshot(db: ReturnType<typeof getDb>, tenantI
   const tenant = await workflowTypeTenantPredicate(db, tenantId);
   const project = await workflowTypeProjectPredicate(db, rawProjectId);
   const workflowTypes = await db.all(`
-    SELECT ${await tableHasColumn(db, 'workflow_types', 'tenant_id') ? 'tenant_id,' : ''}${await tableHasColumn(db, 'workflow_types', 'project_id') ? 'project_id,' : ''} key, name, description, is_system, created_at, updated_at
+    SELECT ${await tableHasColumn(db, 'workflow_types', 'tenant_id') ? 'tenant_id,' : ''}${await tableHasColumn(db, 'workflow_types', 'project_id') ? 'project_id,' : ''} key, name, description, is_system, keep_same_agent, created_at, updated_at
     FROM workflow_types
     WHERE 1 = 1
       ${tenant.sql}
@@ -595,7 +603,7 @@ router.get('/types/list', async (req: Request, res: Response) => {
     const tenant = await workflowTypeTenantPredicate(db, tenantId);
     const project = await workflowTypeProjectPredicate(db, req.query.project_id);
     const workflowTypes = await db.all(`
-      SELECT ${await tableHasColumn(db, 'workflow_types', 'tenant_id') ? 'tenant_id,' : ''}${await tableHasColumn(db, 'workflow_types', 'project_id') ? 'project_id,' : ''} key, name, description, is_system, created_at, updated_at
+      SELECT ${await tableHasColumn(db, 'workflow_types', 'tenant_id') ? 'tenant_id,' : ''}${await tableHasColumn(db, 'workflow_types', 'project_id') ? 'project_id,' : ''} key, name, description, is_system, keep_same_agent, created_at, updated_at
       FROM workflow_types
       WHERE 1 = 1
         ${tenant.sql}
@@ -794,6 +802,7 @@ router.post('/types', async (req: Request, res: Response) => {
     const name = normalizeOptionalText(req.body?.name);
     if (!name) return res.status(400).json({ error: 'name is required' });
     const description = normalizeOptionalText(req.body?.description);
+    const keepSameAgent = normalizeBooleanInt(req.body?.keep_same_agent);
     const project = await workflowTypeProjectInsertFragment(db, req.body?.project_id);
 
     const existing = await getWorkflowTypeOr404(db, key, tenantId);
@@ -801,9 +810,9 @@ router.post('/types', async (req: Request, res: Response) => {
     const tenant = await workflowTypeTenantInsertFragment(db, tenantId);
 
     await db.run(`
-      INSERT INTO workflow_types (${tenant.columns}${project.columns}key, name, description, is_system, created_at, updated_at)
-      VALUES (${tenant.placeholders}${project.placeholders}?, ?, ?, 0, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
-    `, ...tenant.params, ...project.params, key, name, description);
+      INSERT INTO workflow_types (${tenant.columns}${project.columns}key, name, description, is_system, keep_same_agent, created_at, updated_at)
+      VALUES (${tenant.placeholders}${project.placeholders}?, ?, ?, 0, ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
+    `, ...tenant.params, ...project.params, key, name, description, keepSameAgent);
 
     return res.status(201).json(await getWorkflowTypeOr404(db, key, tenantId));
   } catch (err) {
@@ -826,6 +835,7 @@ router.put('/types/:key', async (req: Request, res: Response) => {
     const name = req.body?.name !== undefined ? normalizeOptionalText(req.body.name) : existing.name;
     if (!name) return res.status(400).json({ error: 'name is required' });
     const description = req.body?.description !== undefined ? normalizeOptionalText(req.body.description) : existing.description;
+    const keepSameAgent = req.body?.keep_same_agent !== undefined ? normalizeBooleanInt(req.body.keep_same_agent) : Number(existing.keep_same_agent);
     // Scoped MCP callers pass their project as access context. Editing a shared definition
     // must not move it from its creating project (or assign a tenant-wide definition to one).
     const project = await workflowTypeProjectInsertFragment(db, req.mcpIdentity?.keyRole === 'scoped' ? undefined : req.body?.project_id);
@@ -833,10 +843,10 @@ router.put('/types/:key', async (req: Request, res: Response) => {
     const tenant = await workflowTypeTenantPredicate(db, tenantId);
     await db.run(`
       UPDATE workflow_types
-      SET ${project.projectId != null ? 'project_id = ?, ' : ''}name = ?, description = ?, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
+      SET ${project.projectId != null ? 'project_id = ?, ' : ''}name = ?, description = ?, keep_same_agent = ?, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
       WHERE key = ?
         ${tenant.sql}
-    `, ...project.params, name, description, workflowTypeKey, ...tenant.params);
+    `, ...project.params, name, description, keepSameAgent, workflowTypeKey, ...tenant.params);
 
     return res.json(await getWorkflowTypeOr404(db, workflowTypeKey, tenantId));
   } catch (err) {

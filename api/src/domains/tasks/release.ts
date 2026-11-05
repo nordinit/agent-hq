@@ -429,8 +429,6 @@ async function applyPostedTaskOutcome(
         outcome: result.outcome,
         evidence_written: false,
         evidence_would_write: hasInline && result.applied,
-        auto_recovered: result.autoRecovered ?? false,
-        recovery_description: result.recoveryDescription ?? null,
         validation_errors: [],
         missing_evidence_requirements: [],
         gate_requirements: transitionRequirements,
@@ -531,8 +529,6 @@ async function applyPostedTaskOutcome(
     outcome: result.outcome,
     instance_closed: result.instanceClosed ?? false,
     evidence_written: hasInline && result.applied,
-    auto_recovered: result.autoRecovered ?? false,
-    recovery_description: result.recoveryDescription ?? null,
   };
 }
 

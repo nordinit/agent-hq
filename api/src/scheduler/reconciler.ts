@@ -1,28 +1,13 @@
 import { getDb } from '../db/client';
-import { getAgentMcpRecovery, attachRecoveryTask } from '../lib/mcpRecovery';
-import { loadTaskRecurrenceMetadata } from '../domains/tasks/recurrence';
-import { runDispatcher, type DispatchResult, loadDispatchScopeContext, dispatchInstance, type DispatchInstanceParams, getNonDispatchableTaskStatusPredicate } from '../services/dispatcher';
-import { buildDispatchContextBundle } from '../services/dispatch/prompt/dispatchContext';
-import { getDispatchTaskNotesContext } from '../services/dispatch/prompt/notes';
-import {
-  buildInstanceCallbackContractSegmentDrafts,
-  extractWorkingDirectoryFromRuntimeConfig,
-  resolveDispatchPathContext,
-} from '../services/dispatch/prompt';
-import { injectGitHubCredentials, resolveGitHubIdentity } from '../lib/githubIdentity';
-import { attachInstanceToTask } from '../domains/runs/observability';
+import { runDispatcher, type DispatchResult, getNonDispatchableTaskStatusPredicate } from '../services/dispatcher';
 import { cleanupImpossibleTaskLifecycleStates } from '../lib/taskLifecycle';
-import { runEligibilityPass, type EligibilityResult } from '../services/eligibility';
-import { buildContractInstructions, resolveTransportMode } from '../services/contracts';
 import { backfillInstanceTokensAsync } from '../domains/runs/tokenBackfill';
-import { writeTaskHistory, writeTaskStatusChange } from '../domains/tasks/history';
+import { writeTaskHistory } from '../domains/tasks/history';
 import { markTaskNeedsAttentionForMissingSemanticHandoff, taskRequiresSemanticOutcome } from '../domains/runs/lifecycleHandoff';
 import { getNeedsAttentionEligibleStatuses } from '../lib/reconcilerConfig';
-import { buildHookSessionKey, resolveRuntimeAgentSlug } from '../lib/sessionKeys';
-import { createDurableRunId, ensureJobInstanceDurableRunId, tableHasColumn } from '../lib/durableRunIdentity';
 import { insertRuntimeLog } from '../lib/runtimeTenantScope';
 import { resolveWorkflowTaskRoutingAssignment } from '../domains/routing/policy/statuses';
-import { resolveTeamContextForDispatch } from '../domains/teams/context';
+import { resolveRequiredStatusOwner } from '../services/dispatch/routing/keepSameAgent';
 import { runRecurringTaskSchedulerTick, type RecurringTaskSchedulerSummary } from './recurringTaskScheduler';
 import { syncTaskActiveAgentFromInstance } from '../domains/tasks/ownership';
 import { type Db } from '../db/adapter/types';
@@ -112,7 +97,6 @@ interface TaskRow {
   project_id: number | null;
   workflow_id: number | null;
   task_type: string | null;
-  review_owner_agent_id: number | null;
   active_instance_id: number | null;
   updated_at: string;
   story_points: number | null;
@@ -146,29 +130,7 @@ interface AgentRow {
   enabled: number;
 }
 
-interface WorkflowRow {
-  id: number;
-  name: string;
-  goal: string;
-  status: string;
-  workflow_type: string | null;
-}
-
-interface RoutingRuleRow {
-  id: number;
-  project_id: number;
-  task_type: string;
-  status: string;
-  agent_id: number | null;
-  priority: number;
-}
-
-interface DispatchDeps {
-  dispatchInstance: (params: DispatchInstanceParams) => Promise<void>;
-}
-
-export interface ReconcilerDeps extends DispatchDeps {
-  runEligibilityPass: (db: Db, projectId?: number) => Promise<EligibilityResult>;
+export interface ReconcilerDeps {
   runDispatcher: (db: Db, projectId?: number) => Promise<DispatchResult>;
 }
 
@@ -176,18 +138,12 @@ export interface ReconcilerTickSummary {
   projectsChecked: number;
   projectIds: number[];
   recurring: RecurringTaskSchedulerSummary;
-  promoted: number;
-  blocked: number;
-  stalled: number;
-  unclaimed: number;
   dispatched: number;
   skipped: number;
   errors: string[];
 }
 
 const DEFAULT_RECONCILER_DEPS: ReconcilerDeps = {
-  dispatchInstance,
-  runEligibilityPass,
   runDispatcher,
 };
 
@@ -196,10 +152,6 @@ function createEmptySummary(projectIds: number[] = []): ReconcilerTickSummary {
     projectsChecked: projectIds.length,
     projectIds,
     recurring: { checked: 0, created: 0, skipped: 0, failed: 0, duplicates: 0, errors: [] },
-    promoted: 0,
-    blocked: 0,
-    stalled: 0,
-    unclaimed: 0,
     dispatched: 0,
     skipped: 0,
     errors: [],
@@ -234,28 +186,15 @@ async function resolveAgentName(db: Db, agentId: number | null): Promise<string 
   return row?.name ?? String(agentId);
 }
 
-async function isAgentBusy(db: Db, agentId: number): Promise<boolean> {
-  const running = await db.get(`
-    SELECT id FROM job_instances
-    WHERE agent_id = ? AND status IN ('queued', 'dispatched', 'running')
-    LIMIT 1
-  `, agentId);
-  return !!running;
-}
-
-async function hasTaskLiveInstance(db: Db, taskId: number): Promise<boolean> {
-  const row = await db.get(`
-    SELECT ji.id
-    FROM job_instances ji
-    WHERE ji.task_id = ?
-      AND ji.status IN ('queued', 'dispatched', 'running')
-    LIMIT 1
-  `, taskId);
-  return Boolean(row);
-}
-
 async function resolveRoutedTaskAgentId(db: Db, task: TaskRow): Promise<number | null> {
   if (!task.task_type) return null;
+  try {
+    // Keep same agent: the status owner, while it can still work this status, is the only agent.
+    const requiredOwner = await resolveRequiredStatusOwner(db, task.id, task.status);
+    if (requiredOwner) return requiredOwner.agent_id;
+  } catch (err) {
+    console.warn(`[reconciler] Keep same agent lookup failed for task #${task.id}:`, err instanceof Error ? err.message : err);
+  }
   try {
     return (await resolveWorkflowTaskRoutingAssignment(
           db,
@@ -274,44 +213,25 @@ function shouldReconcileTaskOwnership(task: TaskRow): boolean {
   return true;
 }
 
-async function reassignTaskIfNeeded(db: Db, task: TaskRow, nextAgentId: number | null): Promise<TaskRow> {
-  if (task.assigned_agent_id === nextAgentId && (task.status !== 'review' || task.review_owner_agent_id != null)) {
-    return task;
-  }
-
-  const nextReviewOwnerAgentId = task.status === 'review'
-    ? (task.review_owner_agent_id ?? (task.assigned_agent_id !== nextAgentId ? task.assigned_agent_id : null))
-    : task.review_owner_agent_id;
-
-  if (task.assigned_agent_id === nextAgentId && nextReviewOwnerAgentId === task.review_owner_agent_id) {
-    return task;
-  }
+async function reassignTaskIfNeeded(db: Db, task: TaskRow, nextAgentId: number): Promise<void> {
+  if (task.assigned_agent_id === nextAgentId) return;
 
   await db.run(`
     UPDATE tasks
     SET assigned_agent_id = ?,
-        review_owner_agent_id = ?,
         updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
     WHERE id = ?
-  `, nextAgentId, nextReviewOwnerAgentId, task.id);
+  `, nextAgentId, task.id);
   await syncTaskActiveAgentFromInstance(db, task.id);
 
-  if (task.assigned_agent_id !== nextAgentId) {
-    const oldName = task.assigned_agent_id ? (await db.get('SELECT name FROM agents WHERE id = ?', task.assigned_agent_id) as { name: string } | undefined)?.name : null;
-    const newName = nextAgentId ? (await db.get('SELECT name FROM agents WHERE id = ?', nextAgentId) as { name: string } | undefined)?.name : null;
-    await logHistory(db, task.id, 'reconciler', 'assigned_agent_id', oldName ?? 'unassigned', newName ?? String(nextAgentId));
-    await log(db,
-            `${task.status === 'review' ? 'Review' : 'Routing'} ownership: task #${task.id} "${task.title}" reassigned ${oldName ?? 'unassigned'} → ${newName ?? String(nextAgentId)}`,
-            task.id,
-            nextAgentId ?? undefined,
-          );
-  }
-
-  return {
-    ...task,
-    assigned_agent_id: nextAgentId,
-    review_owner_agent_id: nextReviewOwnerAgentId,
-  };
+  const oldName = task.assigned_agent_id ? await resolveAgentName(db, task.assigned_agent_id) : null;
+  const newName = await resolveAgentName(db, nextAgentId);
+  await logHistory(db, task.id, 'reconciler', 'assigned_agent_id', oldName ?? 'unassigned', newName ?? String(nextAgentId));
+  await log(db,
+    `Routing ownership: task #${task.id} "${task.title}" reassigned ${oldName ?? 'unassigned'} → ${newName ?? String(nextAgentId)}`,
+    task.id,
+    nextAgentId,
+  );
 }
 
 async function getReconcilerProjectIds(db: Db): Promise<number[]> {
@@ -334,43 +254,11 @@ async function getReconcilerProjectIds(db: Db): Promise<number[]> {
 }
 
 /**
- * Re-dispatch tasks sitting in `review` to whichever agent the routing rules name.
- *
- * NOT a QA-specific path, despite the name. It fires on the literal status `review` for any
- * workflow, and plenty of workflows have no QA concept at all — a review status might mean human
- * approval, a security pass, or a design check.
- *
- * That is why this used to be wrong. It prepended a hardcoded procedure to the agent's
- * instructions that named `qa_pass`/`qa_fail` outcomes, a `changed_by` of "agency-qa", and direct
- * `PUT /qa-evidence` and `POST /outcome` HTTP calls. All three were assumptions:
- *
- *   - the outcomes are workflow-configured (resolveWorkflow reads them from workflow type config;
- *     qa_pass/qa_fail are only the compatibility fallback), so a workflow using `approved` /
- *     `changes_requested` was told to post an outcome it did not accept;
- *   - the HTTP instructions contradicted the contract template rendered into the same prompt,
- *     which says to use the MCP lifecycle tools and never call the endpoints directly;
- *   - "agency-qa" is one deployment's actor slug.
- *
- * Everything it carried is already rendered correctly and per-workflow by the contract template —
- * see the QA section of agent-contracts/dev.md, which is scoped to "status is review, or valid
- * outcomes include qa_pass/qa_fail" rather than assumed for everyone. So this path now assembles
- * exactly like every other dispatch.
+ * Keep each waiting task's assigned agent in line with its assignment rules, so the board shows who
+ * will pick it up: the top-priority rule's agent, or the status owner when Keep same agent requires
+ * one. Display only. Dispatch itself happens in the main dispatcher, for every status.
  */
-export async function reconcileReviewQaRouting(
-  deps: DispatchDeps = { dispatchInstance },
-  db: Db = getDb(),
-): Promise<void> {
-  const reviewTasks = await db.all(`
-    SELECT t.*
-    FROM tasks t
-    WHERE t.status = 'review'
-      AND t.paused_at IS NULL
-      AND (t.workflow_id IS NULL OR EXISTS (
-        SELECT 1 FROM workflows sp WHERE sp.id = t.workflow_id AND sp.status != 'closed'
-      ))
-    ORDER BY t.updated_at ASC
-  `) as TaskRow[];
-
+export async function reconcileAssignedAgents(db: Db = getDb()): Promise<void> {
   const statusEligibility = await getNonDispatchableTaskStatusPredicate(db, 't', 's');
   const routedTasks = await db.all(`
     SELECT t.*
@@ -391,194 +279,6 @@ export async function reconcileReviewQaRouting(
     const routedAgentId = await resolveRoutedTaskAgentId(db, task);
     if (routedAgentId == null || routedAgentId === task.assigned_agent_id) continue;
     await reassignTaskIfNeeded(db, task, routedAgentId);
-  }
-
-  for (const originalTask of reviewTasks) {
-    const routedAgentId = await resolveRoutedTaskAgentId(db, originalTask);
-    if (routedAgentId == null) continue;
-
-    // Skip entire task if it already has a live instance (no point trying any rule)
-    if (await hasTaskLiveInstance(db, originalTask.id)) continue;
-
-    let agent: AgentRow | undefined;
-    if (routedAgentId) {
-      agent = await db.get(`SELECT * FROM agents WHERE id = ? AND enabled = 1`, routedAgentId) as AgentRow | undefined;
-    }
-    if (!agent) continue;
-    const agentLabel = agent.name || agent.job_title || `Agent #${agent.id}`;
-
-    // Agent busy? leave review ownership converged on next tick when capacity frees up
-    if (await isAgentBusy(db, agent.id)) continue;
-
-    // Use the same agent -> task lock order as the regular dispatcher. The
-    // periodic review pass and mutation-triggered pass can overlap.
-    const claim = await db.withTransaction(async db => {
-      const currentAgent = await db.get<{ enabled: number }>('SELECT enabled FROM agents WHERE id = ? FOR UPDATE', agent!.id);
-      const current = await db.get<TaskRow>('SELECT * FROM tasks WHERE id = ? FOR UPDATE', originalTask.id);
-      if (!currentAgent?.enabled || !current || current.status !== 'review' || current.paused_at
-        || current.active_instance_id != null || current.workflow_id !== originalTask.workflow_id
-        || await hasTaskLiveInstance(db, current.id) || await isAgentBusy(db, agent!.id)) return null;
-      const task = await reassignTaskIfNeeded(db, current, routedAgentId);
-      if ((agent!.runtime_type ?? 'openclaw') === 'openclaw') {
-        const recovery = await getAgentMcpRecovery(db, agent!.id);
-        if (recovery) { await attachRecoveryTask(db, recovery, task.id); return null; }
-      }
-      const supportsDurableRunId = await tableHasColumn(db, 'job_instances', 'durable_run_id');
-      const instanceResult = supportsDurableRunId
-        ? await db.run(`
-            INSERT INTO job_instances (tenant_id, agent_id, status, durable_run_id)
-            VALUES (?, ?, 'queued', ?)
-          `, task.tenant_id, agent!.id, createDurableRunId())
-        : await db.run(`
-            INSERT INTO job_instances (tenant_id, agent_id, status)
-            VALUES (?, ?, 'queued')
-          `, task.tenant_id, agent!.id);
-      const instanceId = instanceResult.lastInsertId as number;
-      await attachInstanceToTask(db, instanceId, task.id);
-
-      return { task, instanceId };
-    });
-    if (!claim) continue;
-    const { task, instanceId } = claim;
-    const workflow = task.workflow_id
-      ? await db.get('SELECT * FROM workflows WHERE id = ?', task.workflow_id) as WorkflowRow | undefined
-      : undefined;
-    const jobInstructions = agent.job_instructions;
-
-    try {
-      const taskNotesContext = await getDispatchTaskNotesContext(db, {
-                  taskId: task.id,
-                  agentId: agent.id,
-                  currentInstanceId: instanceId,
-                });
-
-      const teamContext = await resolveTeamContextForDispatch(db, {
-        agentId: agent.id,
-        workflowId: task.workflow_id ?? null,
-      });
-
-      const agentSlug = resolveRuntimeAgentSlug(agent)
-        ?? agent.session_key.replace(/[^a-z0-9-]/gi, '-').toLowerCase();
-      const durableRunId = await ensureJobInstanceDurableRunId(db, instanceId);
-      const runSessionKey = buildHookSessionKey(instanceId, durableRunId);
-
-      // This path never creates a worktree — dispatchInstance reads whatever the payload already
-      // carries — so the authoritative root is the agent's runtime working directory or its
-      // workspace. Resolving it here is what lets a QA retry carry the same workspace block a
-      // first dispatch does, instead of leaving the agent to guess.
-      const pathContext = resolveDispatchPathContext({
-        worktreePath: null,
-        runtimeConfigWorkingDirectory: extractWorkingDirectoryFromRuntimeConfig(agent.runtime_config),
-        workspacePath: agent.workspace_path ?? null,
-      });
-      const ghIdentity = await resolveGitHubIdentity(db, agent.id);
-      if (ghIdentity && pathContext.activeRepoRoot) {
-        injectGitHubCredentials(pathContext.activeRepoRoot, ghIdentity.identity);
-      }
-
-      const scope = await loadDispatchScopeContext(db, {
-        projectId: task.project_id ?? null,
-        workflowId: task.workflow_id ?? null,
-      });
-
-      const contextBundle = buildDispatchContextBundle({
-        workflow: {
-          id: task.workflow_id ?? null,
-          name: workflow?.name ?? scope.workflow?.name ?? null,
-          goal: workflow?.goal ?? scope.workflow?.goal ?? null,
-        },
-        team: teamContext,
-        project: scope.project,
-        job: { agentId: agent.id, title: agentLabel, instructions: jobInstructions },
-        task: {
-          ...await loadTaskRecurrenceMetadata(db, task.id),
-          id: task.id,
-          title: task.title,
-          description: task.description ?? '',
-          priority: task.priority ?? 'medium',
-          status: task.status,
-          workflowName: workflow?.name ?? null,
-        },
-        taskNotes: { context: taskNotesContext, taskId: task.id },
-        workspace: pathContext,
-        contract: await buildInstanceCallbackContractSegmentDrafts({
-          instanceId,
-          durableRunId,
-          taskId: task.id,
-          taskStatus: task.status,
-          taskType: task.task_type ?? null,
-          workflowId: task.workflow_id ?? null,
-          workflowType: workflow?.workflow_type ?? null,
-          agentSlug,
-          sessionKey: runSessionKey,
-          transportMode: resolveTransportMode({
-            runtimeType: agent.runtime_type,
-            runtimeConfig: agent.runtime_config,
-            hooksUrl: agent.hooks_url,
-          }),
-        }),
-      });
-      const message = contextBundle.promptText;
-
-      const effectiveModel = agent.model ?? null;
-
-      await withReconcilerTimeout(
-        deps.dispatchInstance({
-          instanceId,
-          agentId: agent.id,
-          jobTitle: agentLabel,
-          sessionKey: agent.session_key,
-          openclawAgentId: agent.openclaw_agent_id,
-          message,
-          model: effectiveModel,
-          preferredProvider: agent.preferred_provider ?? null,
-          providerConnectionId: agent.provider_connection_id ?? null,
-          timeoutSeconds: agent.timeout_seconds,
-          hooksUrl: agent.hooks_url,
-          hooksAuthHeader: agent.hooks_auth_header,
-          runtimeType: agent.runtime_type,
-          runtimeConfig: agent.runtime_config,
-          storyPoints: task.story_points ?? null,
-          projectId: task.project_id ?? null,
-          workflowId: task.workflow_id ?? null,
-          taskId: task.id,
-          contextBundle,
-        }),
-        RECONCILER_OPERATION_TIMEOUT_MS,
-        `QA dispatch task #${task.id} project=${task.project_id ?? 'none'} agent=${agent.id} instance=${instanceId}`,
-      );
-
-      await log(db,
-                `QA auto-dispatch: task #${task.id} "${task.title}" kept in review and queued agent "${agentLabel}" (model=${effectiveModel ?? 'gateway-default'})`,
-                task.id,
-                agent.id,
-              );
-    } catch (err) {
-      console.error(`[reconciler] QA dispatch failed for task #${task.id}:`, err);
-      // Mark the newly created instance as failed — do NOT call
-      // cleanupTaskExecutionLinkage here, because the task may
-      // still have a legitimately running instance from a prior dispatch.
-      // Clearing active_instance_id on a transient dispatch error causes
-      // running QA/DevOps instances to lose authoritative linkage.
-      await db.run(`
-        UPDATE job_instances
-        SET status = 'failed',
-            error = ?,
-            completed_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
-        WHERE id = ?
-          AND status NOT IN ('done', 'failed', 'cancelled')
-      `, err instanceof Error ? err.message : String(err), instanceId);
-      // Restore previous active_instance_id if this failed instance was set as active
-      const cleared = await db.run(`
-        UPDATE tasks SET active_instance_id = NULL, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS') WHERE id = ? AND active_instance_id = ?
-      `, task.id, instanceId);
-      if (cleared.changes > 0) {
-        // Recorded so the detach is visible. An agent refused for not owning "the active
-        // dispatched instance" is refused precisely because this link is gone, and without a
-        // history row there is nothing to show it was ever here or who removed it.
-        await writeTaskHistory(db, task.id, 'reconciler', 'active_instance_id', instanceId, null);
-      }
-    }
   }
 }
 
@@ -855,20 +555,15 @@ export async function runReconcilerTick(
 
   for (const projectId of projectIds) {
     try {
-      const eligibility = await deps.runEligibilityPass(db, projectId);
       const dispatch = await deps.runDispatcher(db, projectId);
 
-      summary.promoted += eligibility.promoted;
-      summary.blocked += eligibility.blocked;
-      summary.stalled += eligibility.stalled;
-      summary.unclaimed += eligibility.unclaimed;
       summary.dispatched += dispatch.dispatched;
       summary.skipped += dispatch.skipped;
       summary.errors.push(...dispatch.errors.map(error => `[project ${projectId}] ${error}`));
 
-      if (eligibility.promoted > 0 || eligibility.blocked > 0 || eligibility.stalled > 0 || eligibility.unclaimed > 0 || dispatch.dispatched > 0 || dispatch.errors.length > 0) {
+      if (dispatch.dispatched > 0 || dispatch.errors.length > 0) {
         console.log(
-          `[reconciler] project=${projectId} promoted=${eligibility.promoted} blocked=${eligibility.blocked} stalled=${eligibility.stalled} unclaimed=${eligibility.unclaimed} dispatched=${dispatch.dispatched} skipped=${dispatch.skipped} errors=${dispatch.errors.length}`
+          `[reconciler] project=${projectId} dispatched=${dispatch.dispatched} skipped=${dispatch.skipped} errors=${dispatch.errors.length}`
         );
       }
     } catch (err) {
@@ -879,9 +574,9 @@ export async function runReconcilerTick(
   }
 
   await withReconcilerTimeout(
-    reconcileReviewQaRouting({ dispatchInstance: deps.dispatchInstance }, db),
+    reconcileAssignedAgents(db),
     RECONCILER_OPERATION_TIMEOUT_MS,
-    `review/QA routing projects=${projectIds.join(',') || 'none'}`,
+    `assigned agent sync projects=${projectIds.join(',') || 'none'}`,
   );
   await reconcileOrphanInProgressTasks(db);
   await reconcileInProgressRecovery(db);
@@ -899,9 +594,9 @@ export async function runReconcilerTick(
     console.warn('[reconciler] Token backfill error:', err);
   }
 
-  if (summary.dispatched > 0 || summary.promoted > 0 || summary.blocked > 0 || summary.stalled > 0 || summary.unclaimed > 0 || summary.recurring.created > 0 || summary.recurring.failed > 0 || summary.errors.length > 0) {
+  if (summary.dispatched > 0 || summary.recurring.created > 0 || summary.recurring.failed > 0 || summary.errors.length > 0) {
     console.log(
-      `[reconciler] tick summary projects=${summary.projectsChecked} recurring_created=${summary.recurring.created} recurring_failed=${summary.recurring.failed} dispatched=${summary.dispatched} promoted=${summary.promoted} blocked=${summary.blocked} stalled=${summary.stalled} unclaimed=${summary.unclaimed} errors=${summary.errors.length}`
+      `[reconciler] tick summary projects=${summary.projectsChecked} recurring_created=${summary.recurring.created} recurring_failed=${summary.recurring.failed} dispatched=${summary.dispatched} errors=${summary.errors.length}`
     );
   }
 

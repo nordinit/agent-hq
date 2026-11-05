@@ -77,7 +77,19 @@ async function resetDb(): Promise<void> {
       (1, 10, 1, 'generic', 'backend', 'dev_deploy_queued', 'blocked', 'stalled'),
       (1, 10, 1, 'generic', 'backend', 'dev_deploying', 'completed_for_review', 'review'),
       (1, 10, 1, 'generic', 'backend', 'dev_deploying', 'blocked', 'stalled'),
-      (1, 10, 1, 'generic', 'backend', 'in_progress', 'blocked', 'stalled')
+      (1, 10, 1, 'generic', 'backend', 'in_progress', 'blocked', 'stalled'),
+      (1, 10, 1, 'generic', 'backend', 'dev_deploy_queued', 'env_blocked', 'stalled'),
+      (1, 10, 1, 'generic', 'backend', 'dev_deploying', 'env_blocked', 'stalled'),
+      (1, 10, 1, 'generic', 'backend', 'in_progress', 'env_blocked', 'stalled')
+  `);
+  // Every outcome is routed by its own transition, and blocker handling comes from configuration.
+  await db.run(`
+    INSERT INTO workflow_type_outcomes (tenant_id, workflow_type_key, task_type, outcome_key, label, description, enabled, behavior, badge_variant, stage_order, is_system, metadata_json)
+    VALUES
+      (1, 'generic', NULL, 'completed_for_review', 'Completed for review', '', 1, 'base', 'review', 1, 0, '{}'),
+      (1, 'generic', NULL, 'dev_deploy_queued', 'Deploy queued', '', 1, 'base', 'workspace', 2, 0, '{}'),
+      (1, 'generic', NULL, 'blocked', 'Blocked', '', 1, 'base', 'stalled', 3, 0, '{"blocked_like":true}'),
+      (1, 'generic', NULL, 'env_blocked', 'Environment blocked', '', 1, 'base', 'stalled', 4, 0, '{"blocked_like":true}')
   `);
   await db.run(`
     INSERT INTO workflow_task_transition_requirements (tenant_id, workflow_id, project_id, workflow_type, task_type, outcome, field_name, message)

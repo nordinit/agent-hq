@@ -878,6 +878,17 @@ export type CreateTaskPayload = Omit<Partial<Task>, 'relationships'> & {
   }>;
 };
 
+export interface TaskStatusOwner {
+  task_id: number;
+  status: string;
+  agent_id: number;
+  agent_name: string | null;
+  instance_id: number | null;
+  source: 'dispatch' | 'outcome';
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Task {
   runtime_recovery?: RuntimeRecovery | null;
   id: number;
@@ -944,6 +955,8 @@ export interface Task {
   failure_detail?: string | null;
   previous_status?: string | null;
   review_owner_agent_id?: number | null;
+  /** Agent that has worked each status of this task (task detail only). Used by Keep same agent. */
+  status_owners?: TaskStatusOwner[];
   integrity_state?: 'clean' | 'missing_review_evidence' | 'missing_qa_evidence' | 'missing_deploy_evidence' | 'missing_live_verification' | 'invalid_done_state';
   integrity_warnings?: string[];
   release_state_badge?: 'review build' | 'qa passed' | 'ready to merge' | 'live deployed' | 'live verified' | null;
@@ -1205,6 +1218,8 @@ export interface WorkflowType {
   name: string;
   description: string;
   is_system: number;
+  /** 1 = a task coming back to a status waits for the agent that already worked it there. */
+  keep_same_agent?: number;
   created_at: string;
   updated_at: string;
 }

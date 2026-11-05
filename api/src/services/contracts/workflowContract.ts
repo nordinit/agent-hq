@@ -5,7 +5,6 @@ import {
 } from '../../lib/workflowModel';
 import { resolveWorkflowOutcomeMap, getLegacyOutcomeMeta, type WorkflowOutcomeDefinition } from '../../domains/workflow-definitions/outcomes';
 import { loadWorkflowTaskTransitionRequirements } from '../../domains/routing/policy/statuses';
-import { isBackendSystemOutcome, isBlockerLikeOutcome, isFailureLikeOutcome } from '../../lib/outcomeCatalog';
 import { type Db } from "../../db/adapter/types";
 
 // ── Workflow resolution ──────────────────────────────────────────────────────
@@ -223,24 +222,10 @@ async function resolveWorkflowFromResolvedWorkflow(
   const transitionOutcomes = transitions.map((transition) => transition.outcome);
   const validOutcomeSet = new Set(transitionOutcomes);
   const transitionByOutcome = new Map(transitions.map((transition) => [transition.outcome, transition]));
-  const hasBlockedRoute = validOutcomeSet.has('blocked');
-  const hasFailedRoute = validOutcomeSet.has('failed');
+  // Valid outcomes are exactly the outcomes with a configured transition from this status.
   const outcomeMeta: Map<string, WorkflowOutcomeDefinition> = db
     ? await resolveWorkflowOutcomeMap(db, { workflowType: workflow.workflowType, taskType, fallbackOutcomes: transitionOutcomes })
     : new Map<string, WorkflowOutcomeDefinition>();
-
-  if (hasBlockedRoute || hasFailedRoute) {
-    const extras = [...outcomeMeta.values()]
-      .filter((outcome) => {
-        if (validOutcomeSet.has(outcome.outcome_key)) return false;
-        if (isBackendSystemOutcome(outcome.outcome_key)) return false;
-        if (hasBlockedRoute && isBlockerLikeOutcome(outcome.outcome_key, outcome)) return true;
-        if (hasFailedRoute && outcome.outcome_key !== 'qa_fail' && isFailureLikeOutcome(outcome.outcome_key, outcome)) return true;
-        return false;
-      })
-      .sort((left, right) => Number(left.stage_order ?? 0) - Number(right.stage_order ?? 0) || left.outcome_key.localeCompare(right.outcome_key));
-    for (const outcome of extras) validOutcomeSet.add(outcome.outcome_key);
-  }
 
   const validOutcomes = [...validOutcomeSet];
   const suggestedOutcome = getSuggestedOutcome(taskStatus, taskType, validOutcomes);

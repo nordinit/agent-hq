@@ -4,7 +4,7 @@ import type { CustomFieldDefinition, WorkflowTypeOutcome, TaskFieldSchema, TaskR
 
 export type Notice = { type: 'success' | 'error'; message: string } | null;
 export type WorkflowDefinitionTab = 'overview' | 'task-statuses' | 'task-fields' | 'relationship-types' | 'outcomes' | 'metrics';
-export type WorkflowTypeForm = { key: string; name: string; description: string };
+export type WorkflowTypeForm = { key: string; name: string; description: string; keep_same_agent: boolean };
 export type FieldSchemaForm = { id?: number; task_type: string; fields: CustomFieldDefinition[] };
 export type SchemaEditorPlacement =
   | { kind: 'default' }
@@ -37,6 +37,7 @@ export type OutcomeForm = {
   badge_variant: string;
   failure_like: boolean;
   blocked_like: boolean;
+  runtime_failure: boolean;
 };
 
 export type SchemaDeleteDialogState = {
@@ -45,7 +46,7 @@ export type SchemaDeleteDialogState = {
   label: string;
 };
 
-export const emptyWorkflowTypeForm: WorkflowTypeForm = { key: '', name: '', description: '' };
+export const emptyWorkflowTypeForm: WorkflowTypeForm = { key: '', name: '', description: '', keep_same_agent: false };
 export const emptyField: CustomFieldDefinition = { key: '', label: '', type: 'text', required: false, options: [], help_text: '' };
 export const BACKEND_ONLY_OUTCOMES = new Set(['runtime_failed']);
 export const COLOR_OPTIONS = [
@@ -142,6 +143,7 @@ export function outcomeToForm(outcome: WorkflowTypeOutcome): OutcomeForm {
     badge_variant: outcome.badge_variant ?? '',
     failure_like: outcome.metadata?.failure_like === true,
     blocked_like: outcome.metadata?.blocked_like === true,
+    runtime_failure: outcome.metadata?.runtime_failure === true,
   };
 }
 
@@ -156,6 +158,7 @@ export function emptyOutcomeForm(taskType = ''): OutcomeForm {
     badge_variant: '',
     failure_like: false,
     blocked_like: false,
+    runtime_failure: false,
   };
 }
 

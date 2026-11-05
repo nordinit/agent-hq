@@ -389,12 +389,12 @@ describe('applyTaskOutcome scoped routing_config resolution', () => {
     expect(notes[0].content).not.toContain('Agent check-in: Run completed');
   });
 
-  it('routes custom failure-like outcomes through generic failure routes', async () => {
+  it('routes a configured failure-like outcome by its own transition and keeps its failure detail', async () => {
     db = await createDb();
     await db.run(`UPDATE tasks SET status = 'in_progress' WHERE id = 417`);
     await db.run(`
       INSERT INTO workflow_task_transitions (tenant_id, workflow_id, task_type, from_status, outcome, to_status, enabled)
-      VALUES (1, 10, 'backend', 'in_progress', 'failed', 'failed', 1)
+      VALUES (1, 10, 'backend', 'in_progress', 'custom_failure', 'failed', 1)
     `);
     await db.run(`
       INSERT INTO workflow_type_outcomes (tenant_id, workflow_type_key, task_type, outcome_key, label, description, enabled, behavior, badge_variant, stage_order, is_system, metadata_json)
@@ -405,7 +405,7 @@ describe('applyTaskOutcome scoped routing_config resolution', () => {
       taskId: 417,
       outcome: 'custom_failure',
       changedBy: 'cinder-backend',
-      summary: 'Custom failure outcome should use the generic failed route',
+      summary: 'Custom failure outcome follows its own route',
     });
 
     expect(result).toMatchObject({
@@ -419,7 +419,7 @@ describe('applyTaskOutcome scoped routing_config resolution', () => {
     expect(row.failure_detail).toContain('Custom failure outcome');
   });
 
-  it('routes custom blocked-like outcomes through generic blocked routes', async () => {
+  it('refuses a blocked-like outcome that has no transition of its own, even when a blocked route exists', async () => {
     db = await createDb();
     await db.run(`UPDATE tasks SET status = 'in_progress' WHERE id = 417`);
     await db.run(`
@@ -431,22 +431,13 @@ describe('applyTaskOutcome scoped routing_config resolution', () => {
       VALUES (1, 'generic', NULL, 'custom_blocker', 'Custom Blocker', 'A configured blocker outcome', 1, 'base', 'stalled', 1, 0, '{"blocked_like":true}')
     `);
 
-    const result = await applyTaskOutcome(db, {
+    await expect(applyTaskOutcome(db, {
       taskId: 417,
       outcome: 'custom_blocker',
       changedBy: 'cinder-backend',
-      summary: 'Custom blocker outcome should use the generic blocked route',
-    });
-
-    expect(result).toMatchObject({
-      applied: true,
-      priorStatus: 'in_progress',
-      nextStatus: 'stalled',
-      outcome: 'custom_blocker',
-    });
-    const row = await db.get(`SELECT status, failure_detail FROM tasks WHERE id = 417`) as { status: string; failure_detail: string | null };
-    expect(row.status).toBe('stalled');
-    expect(row.failure_detail).toContain('Custom blocker outcome');
+      summary: 'No outcome borrows another outcome\'s route',
+    })).rejects.toMatchObject({ code: 'task_outcome_not_allowed_for_workflow' });
+    expect(await db.value(`SELECT status FROM tasks WHERE id = 417`)).toBe('in_progress');
   });
 
   it('does not infer failure behavior from a custom outcome name', async () => {
@@ -768,6 +759,27 @@ describe('applyTaskOutcome scoped routing_config resolution', () => {
     expect(task.status).toBe('in_progress');
   });
 
+  it.each([
+    ['configured as a run failure', '{"failure_like":true,"runtime_failure":true}', 'failed'],
+    ['named failed but only failure-like', '{"failure_like":true}', 'done'],
+  ])('marks the run failed only when the outcome is %s', async (_label, metadata, expectedRunStatus) => {
+    db = await createDb();
+    await db.run(`INSERT INTO job_instances (id, task_id, agent_id, status) VALUES (96, 417, 7, 'running')`);
+    await db.run(`UPDATE tasks SET status = 'in_progress', active_instance_id = 96, agent_id = 7 WHERE id = 417`);
+    await db.run(`
+      INSERT INTO workflow_task_transitions (tenant_id, workflow_id, task_type, from_status, outcome, to_status, enabled)
+      VALUES (1, 10, 'backend', 'in_progress', 'failed', 'failed', 1)
+    `);
+    await db.run(`
+      INSERT INTO workflow_type_outcomes (tenant_id, workflow_type_key, task_type, outcome_key, label, description, enabled, behavior, badge_variant, stage_order, is_system, metadata_json)
+      VALUES (1, 'generic', NULL, 'failed', 'Failed', 'The task failed', 1, 'base', 'failed', 1, 0, ?)
+    `, metadata);
+
+    await applyTaskOutcome(db, { taskId: 417, outcome: 'failed', changedBy: 'agent-7', instanceId: 96, summary: 'Could not finish' });
+
+    expect(await db.value(`SELECT status FROM job_instances WHERE id = 96`)).toBe(expectedRunStatus);
+  });
+
   it('maps MCP payload fields into existing outcome handling', async () => {
     db = await createDb();
     await db.run(`INSERT INTO job_instances (id, task_id, agent_id, status) VALUES (95, 417, 7, 'running')`);
@@ -775,6 +787,11 @@ describe('applyTaskOutcome scoped routing_config resolution', () => {
     await db.run(`
       INSERT INTO workflow_task_transitions (tenant_id, workflow_id, task_type, from_status, outcome, to_status, enabled)
       VALUES (1, 10, 'backend', 'in_progress', 'failed', 'failed', 1)
+    `);
+    // Failure handling comes from the outcome's configuration, not its name.
+    await db.run(`
+      INSERT INTO workflow_type_outcomes (tenant_id, workflow_type_key, task_type, outcome_key, label, description, enabled, behavior, badge_variant, stage_order, is_system, metadata_json)
+      VALUES (1, 'generic', NULL, 'failed', 'Failed', 'The task failed', 1, 'base', 'failed', 1, 0, '{"failure_like":true}')
     `);
 
     await postTaskOutcome(db, 417, {

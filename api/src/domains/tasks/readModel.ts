@@ -1,4 +1,5 @@
 import { getDb } from '../../db/client';
+import { listTaskStatusOwners } from './statusOwners';
 import { getTaskMcpRecovery } from '../../lib/mcpRecovery';
 import { evaluateTaskIntegrity } from '../../lib/taskRelease';
 import { listConfiguredTerminalStatuses } from './terminality';
@@ -705,7 +706,8 @@ export async function listTasks(
 
 export async function getTaskById(db: ReturnType<typeof getDb>, taskId: number): Promise<TaskRecord | null> {
   const task = await db.get(`${TASK_SELECT} WHERE t.id = ?`, taskId) as TaskRecord | undefined;
-  return task ? await enrichTask(task) : null;
+  if (!task) return null;
+  return { ...await enrichTask(task), status_owners: await listTaskStatusOwners(db, taskId) };
 }
 
 export async function listTaskHistory(db: ReturnType<typeof getDb>, taskId: number) {

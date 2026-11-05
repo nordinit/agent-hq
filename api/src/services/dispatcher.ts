@@ -44,6 +44,9 @@ import { sortCandidates } from './dispatch/routing/candidates';
 export { sortCandidates } from './dispatch/routing/candidates';
 export { resolveModelFromStoryPoints, type ResolvedStoryPointModel } from './dispatch/routing/modelRouting';
 import { resolveModelFromStoryPoints } from './dispatch/routing/modelRouting';
+import { getMatchingAssignmentRules } from './dispatch/routing/assignmentRules';
+import { applyKeepSameAgent, recordDispatchStatusOwner } from './dispatch/routing/keepSameAgent';
+import type { TaskStatusOwner } from '../domains/tasks/statusOwners';
 export {
   appendInstanceInstructions,
   buildDispatchContextBundle,
@@ -267,12 +270,6 @@ interface RelationshipDispatchEligibility {
   blockedByTaskId: Map<number, RelationshipDispatchReason[]>;
   blockingCountByTaskId: Map<number, number>;
 }
-/**
- * RoutingRuleRow — a workflow_task_routing_rules row joined with the agent.
- * The `agent_id` field maps directly to the agents table.
- */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type RoutingRuleRow = any; // joined rule+job+agent; accessed by field name below
 
 // ── Routing config helpers ───────────────────────────────────────────────────
 
@@ -329,17 +326,6 @@ async function assertDispatchStillOwned(db: Db, instanceId: number, agentId: num
     AND (ji.task_id IS NULL OR EXISTS (SELECT 1 FROM tasks t WHERE t.id = ji.task_id
       AND t.active_instance_id = ji.id AND t.paused_at IS NULL))`, instanceId, agentId);
   if (!owned) throw new Error('Dispatch no longer owns a live, unpaused run');
-}
-
-function deriveDispatchTaskStatus(currentStatus: string): string {
-  return currentStatus;
-}
-
-function deriveDispatchFailureFallbackStatus(currentStatus: string): string {
-  if (currentStatus === 'ready') return 'ready';
-  if (currentStatus === 'review') return 'review';
-  if (currentStatus === 'ready_to_merge') return 'ready_to_merge';
-  return currentStatus;
 }
 
 function classifyDispatchStartupFailure(reason: string): {
@@ -450,7 +436,6 @@ async function persistDispatchStartupFailure(
     params = { ...params, retryCount: (retryState?.retry_count ?? 0) + 1 };
   }
   const classification = classifyDispatchStartupFailure(params.reason);
-  const fallbackStatus = deriveDispatchFailureFallbackStatus(params.priorStatus);
   const hasWorkflowEventMappings = await tableHasColumn(db, 'external_event_mappings', 'event_name');
   const mapping = hasWorkflowEventMappings
     ? await resolveWorkflowEventMapping(db, {
@@ -464,9 +449,10 @@ async function persistDispatchStartupFailure(
               currentStatus: params.priorStatus,
             })
     : null;
+  // Only a configured workflow event mapping moves the task; otherwise it stays where it was.
   const nextStatus = mapping?.action_kind === 'status' && mapping.action_target
     ? mapping.action_target
-    : (hasWorkflowEventMappings ? params.priorStatus : fallbackStatus);
+    : params.priorStatus;
   // Workflow mappings still own visible status. Failures never create a runtime
   // pause; operator pauses and routing gates continue to control eligibility.
   const retryDelaySeconds = dispatchFailureBackoffSeconds(params.retryCount ?? 1);
@@ -755,21 +741,31 @@ function formatRelationshipDispatchReason(reason: RelationshipDispatchReason): s
   return `${reason.relationshipLabel} (${reason.relationshipTypeKey}) task #${reason.relatedTaskId}${title} is ${reason.relatedTaskStatus}`;
 }
 
+/** Records why a task is not being dispatched, once per distinct reason, in its history. */
+async function writeDispatchEligibilityNote(db: Db, taskId: number, reasonText: string): Promise<void> {
+  const latest = await db.get(`
+    SELECT new_value
+    FROM task_history
+    WHERE task_id = ? AND changed_by = 'dispatcher' AND field = 'dispatch_eligibility'
+    ORDER BY id DESC
+    LIMIT 1
+  `, taskId) as { new_value?: string | null } | undefined;
+  if (latest?.new_value === reasonText) return;
+  await writeTaskHistory(db, taskId, 'dispatcher', 'dispatch_eligibility', null, reasonText, false);
+}
+
 async function annotateRelationshipDispatchBlocks(db: Db, blockedByTaskId: Map<number, RelationshipDispatchReason[]>): Promise<void> {
   if (!await tableExists(db, 'task_history')) return;
   for (const [taskId, reasons] of blockedByTaskId.entries()) {
     if (reasons.length === 0) continue;
-    const reasonText = `Dispatch ineligible: ${reasons.map(formatRelationshipDispatchReason).join('; ')}`;
-    const latest = await db.get(`
-      SELECT new_value
-      FROM task_history
-      WHERE task_id = ? AND changed_by = 'dispatcher' AND field = 'dispatch_eligibility'
-      ORDER BY id DESC
-      LIMIT 1
-    `, taskId) as { new_value?: string | null } | undefined;
-    if (latest?.new_value === reasonText) continue;
-    await writeTaskHistory(db, taskId, 'dispatcher', 'dispatch_eligibility', null, reasonText, false);
+    await writeDispatchEligibilityNote(db, taskId, `Dispatch ineligible: ${reasons.map(formatRelationshipDispatchReason).join('; ')}`);
   }
+}
+
+async function noteWaitingForStatusOwner(db: Db, task: CandidateTask, owner: TaskStatusOwner): Promise<void> {
+  const ownerLabel = owner.agent_name ?? `agent #${owner.agent_id}`;
+  console.log(`[dispatcher] Task #${task.id} waiting for ${ownerLabel}: Keep same agent requires the owner of "${task.status}"`);
+  await writeDispatchEligibilityNote(db, task.id, `Waiting for ${ownerLabel}: Keep same agent is on and ${ownerLabel} already worked this task in "${task.status}"`);
 }
 
 /**
@@ -975,107 +971,6 @@ async function getAllDispatchableTasks(db: Db, projectId?: number | null, annota
       ...task,
       blocking_count: relationshipEligibility.blockingCountByTaskId.get(task.id) ?? 0,
     }));
-}
-
-/**
- * getMatchingRoutingRules — returns workflow routing rules that match a task's
- * workflow_id/status/task_type, ordered by scope specificity, task-type
- * specificity, priority DESC, and stable id tiebreaker. Each row includes full
- * agent fields for dispatch.
- */
-async function getMatchingRoutingRules(db: Db, task: CandidateTask): Promise<RoutingRuleRow[]> {
-  const hasProjectsTable = await tableHasColumn(db, 'projects', 'id');
-  // Array.prototype.every is SYNCHRONOUS. An async callback returns a Promise, which is
-  // always truthy, so `.every(async ...)` unconditionally returns true and the column check
-  // never actually runs. The columns must be resolved first, then reduced.
-  const REPO_COLUMNS = ['repo_path', 'repo_url', 'repo_access_mode'];
-  const hasProjectRepoColumns = (await Promise.all(
-    REPO_COLUMNS.map((column) => tableHasColumn(db, 'projects', column)),
-  )).every(Boolean);
-  const hasWorkflowRepoColumns = (await Promise.all(
-    REPO_COLUMNS.map((column) => tableHasColumn(db, 'workflows', column)),
-  )).every(Boolean);
-  const hasScopedRoutingColumns = await tableHasColumn(db, 'workflow_task_routing_rules', 'project_id')
-    && await tableHasColumn(db, 'workflow_task_routing_rules', 'workflow_type');
-  const hasRoutingTenantColumn = await tableHasColumn(db, 'workflow_task_routing_rules', 'tenant_id');
-  const routingRuleEnabledCondition = await tableHasColumn(db, 'workflow_task_routing_rules', 'enabled') ? 'AND rr.enabled = 1' : '';
-  const hasAgentTenantColumn = await tableHasColumn(db, 'agents', 'tenant_id');
-  const hasProviderConnectionColumn = await tableHasColumn(db, 'agents', 'provider_connection_id');
-  const projectRepoSelect = hasProjectRepoColumns
-    ? 'p.repo_path as project_repo_path, p.repo_url as project_repo_url, p.repo_access_mode as project_repo_access_mode,'
-    : 'NULL as project_repo_path, NULL as project_repo_url, NULL as project_repo_access_mode,';
-  const workflowRepoSelect = hasWorkflowRepoColumns
-    ? 's.repo_path as workflow_repo_path, s.repo_url as workflow_repo_url, s.repo_access_mode as workflow_repo_access_mode,'
-    : 'NULL as workflow_repo_path, NULL as workflow_repo_url, NULL as workflow_repo_access_mode,';
-  const projectJoin = hasProjectsTable ? 'LEFT JOIN projects p ON p.id = a.project_id' : '';
-  const workflowJoin = hasWorkflowRepoColumns ? 'LEFT JOIN workflows s ON s.id = COALESCE(rr.workflow_id, ?)' : '';
-
-  const tenantCondition = [
-    hasRoutingTenantColumn && task.tenant_id != null ? 'rr.tenant_id = ?' : null,
-    hasAgentTenantColumn && task.tenant_id != null ? 'a.tenant_id = ?' : null,
-  ].filter(Boolean).join(' AND ');
-  const tenantParams = [
-    ...(hasRoutingTenantColumn && task.tenant_id != null ? [task.tenant_id] : []),
-    ...(hasAgentTenantColumn && task.tenant_id != null ? [task.tenant_id] : []),
-  ];
-
-  const runRuleQuery = async (scopeCondition: string, params: unknown[], status: string): Promise<RoutingRuleRow[]> => await db.all(`
-      SELECT rr.*,
-             a.id as agent_id,
-             a.job_instructions, a.enabled, a.timeout_seconds, a.model,
-             a.skill_names,
-             a.session_key as agent_session_key, a.name as agent_name, a.model as agent_model,
-             a.openclaw_agent_id, a.runtime_type, a.runtime_config, a.hooks_url as agent_hooks_url,
-             a.hooks_auth_header as agent_hooks_auth_header,
-             a.workspace_path, a.preferred_provider, ${hasProviderConnectionColumn ? 'a.provider_connection_id' : 'NULL'} as provider_connection_id, a.repo_path, a.repo_url, a.repo_access_mode,
-             ${hasAgentTenantColumn ? 'a.tenant_id' : 'NULL'} as tenant_id,
-             ${projectRepoSelect}
-             ${workflowRepoSelect}
-             a.os_user
-      FROM workflow_task_routing_rules rr
-      JOIN agents a ON a.id = rr.agent_id AND a.enabled = 1
-      ${projectJoin}
-      ${workflowJoin}
-      WHERE ${scopeCondition}
-        ${tenantCondition ? `AND ${tenantCondition}` : ''}
-        ${routingRuleEnabledCondition}
-        AND rr.status = ?
-        AND (rr.task_type = ? OR rr.task_type IS NULL)
-      ORDER BY CASE WHEN rr.workflow_id = ? THEN 0 ELSE 1 END,
-               CASE WHEN rr.task_type = ? THEN 0 ELSE 1 END,
-               rr.priority DESC,
-               rr.id ASC
-    `, ...(hasWorkflowRepoColumns ? [task.workflow_id ?? null] : []), ...params, ...tenantParams, status, task.task_type ?? null, task.workflow_id ?? null, task.task_type ?? null) as RoutingRuleRow[];
-
-  const loadWorkflowScopedRules = async (status: string): Promise<RoutingRuleRow[]> => {
-    if (!task.workflow_id) return [];
-    if (hasScopedRoutingColumns && task.project_id && task.workflow_type) {
-      return await runRuleQuery(
-        'rr.project_id = ? AND rr.workflow_type = ? AND (rr.workflow_id = ? OR rr.workflow_id IS NULL)',
-        [task.project_id, task.workflow_type, task.workflow_id],
-        status,
-      );
-    }
-    return await runRuleQuery('rr.workflow_id = ?', [task.workflow_id], status);
-  };
-
-  try {
-    const workflowRules = await loadWorkflowScopedRules(task.status);
-    if (workflowRules.length > 0) return workflowRules;
-  } catch {
-    // workflow-scoped tables may not exist in minimal test DBs; fall through
-  }
-
-  if (task.status === 'in_progress' && task.workflow_id) {
-    try {
-      const workflowFallback = await loadWorkflowScopedRules('ready');
-      if (workflowFallback.length > 0) return workflowFallback;
-    } catch {
-      // workflow-scoped tables may not exist in minimal test DBs
-    }
-  }
-
-  return [];
 }
 
 async function isWorkflowRepoRequiredForTask(db: Db, task: CandidateTask): Promise<boolean> {
@@ -1815,7 +1710,8 @@ async function claimTaskDispatch(db: Db, job: JobRow, task: CandidateTask, routi
     const instanceId = instanceResult.lastInsertId as number;
     const durableRunId = await ensureJobInstanceDurableRunId(db, instanceId);
     const sessionKey = buildSessionKey(instanceId, durableRunId);
-    const nextTaskStatus = deriveDispatchTaskStatus(task.status);
+    // Dispatch never changes a task's status; outcomes and workflow events do.
+    const nextTaskStatus = task.status;
     const hasFirstDispatchedAt = await tableHasColumn(db, 'tasks', 'first_dispatched_at');
     const hasTotalDispatchCount = await tableHasColumn(db, 'tasks', 'total_dispatch_count');
     const hasClaimedAtColumn = await tableHasColumn(db, 'tasks', 'claimed_at');
@@ -1867,12 +1763,6 @@ async function claimTaskDispatch(db: Db, job: JobRow, task: CandidateTask, routi
       instanceId,
     );
 
-    if (nextTaskStatus !== task.status) {
-      await writeTaskStatusChange(db, task.id, 'dispatcher', task.status, nextTaskStatus, {
-              instanceId,
-              reason: routingReason ?? null,
-            });
-    }
 
     return { instanceId, durableRunId, sessionKey, nextTaskStatus };
   });
@@ -2192,6 +2082,13 @@ export async function dispatchTaskToJob(
       console.error(`[dispatcher] Unhandled error in fireAgentRun for instance #${instanceId}:`, err);
     });
 
+    // Only a launched run makes its agent the owner; a preparation failure above does not.
+    try {
+      await recordDispatchStatusOwner(db, { taskId: task.id, status: task.status, agentId: job.agent_id, instanceId });
+    } catch (err) {
+      console.warn(`[dispatcher] Could not record status owner for task #${task.id}:`, err instanceof Error ? err.message : err);
+    }
+
     await db.run(`
       INSERT INTO dispatch_log (task_id, agent_id, routing_reason, candidate_count, candidates_skipped)
       VALUES (?, ?, ?, ?, ?)
@@ -2240,19 +2137,25 @@ export async function runDispatcher(db: Db, projectId?: number): Promise<Dispatc
         continue;
       }
 
-      const rules = await getMatchingRoutingRules(db, task);
-      if (rules.length === 0) {
+      const matchingRules = await getMatchingAssignmentRules(db, task);
+      if (matchingRules.length === 0) {
         console.log(
           `[dispatcher] Task #${task.id} not dispatched: no matching routing rule for workflow_id=${task.workflow_id ?? 'none'} status=${task.status} task_type=${task.task_type ?? 'null'}`
         );
         result.skipped++;
         continue;
       }
+      // Keep same agent narrows the candidates to the agent that already worked this status.
+      const { candidates: rules, owner: requiredOwner } = await applyKeepSameAgent(db, task, matchingRules);
 
       let dispatched = false;
+      let requiredOwnerBusy = false;
       for (const rule of rules) {
         // Skip if this rule's job agent already has an active run
-        if (await hasActiveInstance(db, rule.agent_id)) continue;
+        if (await hasActiveInstance(db, rule.agent_id)) {
+          if (requiredOwner) requiredOwnerBusy = true;
+          continue;
+        }
 
         // Fast skip only; claimTaskDispatch performs the definitive locked check.
         if (await hasTaskLiveInstance(db, task.id)) break;
@@ -2309,7 +2212,7 @@ export async function runDispatcher(db: Db, projectId?: number): Promise<Dispatc
                   jobForDispatch,
                   task,
                   allTasks.length,
-                  `Rule: ${rule.agent_name ?? `agent`} (agent #${rule.agent_id})`,
+                  `Rule: ${rule.agent_name ?? `agent`} (agent #${rule.agent_id})${requiredOwner ? ' | Keep same agent' : ''}`,
                 );
         if (ok) {
           result.dispatched++;
@@ -2324,6 +2227,9 @@ export async function runDispatcher(db: Db, projectId?: number): Promise<Dispatc
         if (retryState && !dispatchBackoffElapsed(retryState)) break;
       }
 
+      if (!dispatched && requiredOwner && requiredOwnerBusy) {
+        await noteWaitingForStatusOwner(db, task, requiredOwner);
+      }
       if (!dispatched) result.skipped++;
     } catch (err) {
       const msg = `Task ${task.id}: ${String(err)}`;

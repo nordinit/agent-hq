@@ -824,6 +824,27 @@ export function TaskDetailPanel({ task, statuses, onClose, onSave, onDelete, onC
         </div>
       )}
 
+      {/* Status owners: who worked each status, used by Keep same agent */}
+      {(localTask.status_owners?.length ?? 0) > 0 && (
+        <div className="flex items-start gap-3">
+          <span className="text-xs text-slate-500 uppercase tracking-wide w-20 shrink-0 pt-1">Owners</span>
+          <div className="flex flex-wrap gap-1.5">
+            {localTask.status_owners!.map(owner => (
+              <Link
+                key={owner.status}
+                href={`/agents/${owner.agent_id}`}
+                onClick={dismiss}
+                title={`Worked "${owner.status}" (${owner.source === 'dispatch' ? 'dispatched there' : 'moved it there with its own outcome'})`}
+                className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-full bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-slate-100 transition-colors"
+              >
+                <span className="font-mono text-slate-500">{owner.status}</span>
+                {owner.agent_name ?? `Agent #${owner.agent_id}`}
+              </Link>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Branch URL */}
       {localTask.branch_url && (
         <div className="flex items-center gap-3">

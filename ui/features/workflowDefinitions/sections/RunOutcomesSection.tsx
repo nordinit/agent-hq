@@ -114,7 +114,8 @@ export function RunOutcomesTable({
                     <div className="flex flex-wrap gap-1">
                       {outcome.metadata?.failure_like === true && <span className="rounded-full border border-red-500/40 bg-red-500/10 px-2 py-0.5 text-xs text-red-300">failure like</span>}
                       {outcome.metadata?.blocked_like === true && <span className="rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-xs text-amber-300">blocked like</span>}
-                      {outcome.metadata?.failure_like !== true && outcome.metadata?.blocked_like !== true && <span className="text-xs text-slate-600">none</span>}
+                      {outcome.metadata?.runtime_failure === true && <span className="rounded-full border border-red-500/40 bg-red-500/10 px-2 py-0.5 text-xs text-red-300">run failed</span>}
+                      {outcome.metadata?.failure_like !== true && outcome.metadata?.blocked_like !== true && outcome.metadata?.runtime_failure !== true && <span className="text-xs text-slate-600">none</span>}
                     </div>
                   </td>
                   <td className="px-3 py-3 text-center align-top">{outcome.enabled === 1 ? <span className="text-xs text-green-400">yes</span> : <span className="text-xs text-slate-600">no</span>}</td>

@@ -100,6 +100,7 @@ export default function WorkflowDefinitionsPage() {
       key: selectedWorkflowType.key,
       name: selectedWorkflowType.name,
       description: selectedWorkflowType.description,
+      keep_same_agent: selectedWorkflowType.keep_same_agent === 1,
     });
     setTaskTypesText(selectedWorkflowType.task_types.map(taskType => taskType.task_type).join('\n'));
     setCreatingWorkflowType(false);
@@ -268,6 +269,7 @@ export default function WorkflowDefinitionsPage() {
       await api.updateWorkflowType(selectedWorkflowType.key, {
         name: workflowTypeForm.name.trim(),
         description: workflowTypeForm.description.trim(),
+        keep_same_agent: workflowTypeForm.keep_same_agent,
       });
       await load(selectedWorkflowType.key);
       setSuccess(`Saved workflow type ${selectedWorkflowType.key}.`);
@@ -376,6 +378,7 @@ export default function WorkflowDefinitionsPage() {
         metadata: {
           ...(outcomeEditor.failure_like ? { failure_like: true } : {}),
           ...(outcomeEditor.blocked_like ? { blocked_like: true } : {}),
+          ...(outcomeEditor.runtime_failure ? { runtime_failure: true } : {}),
         },
       };
       if (outcomeEditor.id) {
@@ -622,7 +625,7 @@ export default function WorkflowDefinitionsPage() {
         </select>
         <label className="flex items-center gap-2 text-sm text-slate-300"><input type="checkbox" checked={outcomeEditor.enabled} onChange={e => setOutcomeEditor(editor => editor ? { ...editor, enabled: e.target.checked } : editor)} />Enabled</label>
       </div>
-      <div className="grid gap-3 md:grid-cols-2">
+      <div className="grid gap-3 md:grid-cols-3">
         <label className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-300">
           <input
             type="checkbox"
@@ -635,9 +638,17 @@ export default function WorkflowDefinitionsPage() {
           <input
             type="checkbox"
             checked={outcomeEditor.blocked_like}
-            onChange={e => setOutcomeEditor(editor => editor ? { ...editor, blocked_like: e.target.checked, failure_like: e.target.checked ? false : editor.failure_like } : editor)}
+            onChange={e => setOutcomeEditor(editor => editor ? { ...editor, blocked_like: e.target.checked, failure_like: e.target.checked ? false : editor.failure_like, runtime_failure: e.target.checked ? false : editor.runtime_failure } : editor)}
           />
           Blocked like
+        </label>
+        <label className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-300" title="Posting this outcome also marks the agent's run as failed, not just the task">
+          <input
+            type="checkbox"
+            checked={outcomeEditor.runtime_failure}
+            onChange={e => setOutcomeEditor(editor => editor ? { ...editor, runtime_failure: e.target.checked, blocked_like: e.target.checked ? false : editor.blocked_like } : editor)}
+          />
+          Run failed
         </label>
       </div>
       <Button variant="primary" loading={saving === 'outcome'} onClick={saveOutcome}>Save outcome definition</Button>
@@ -826,6 +837,15 @@ export default function WorkflowDefinitionsPage() {
                   <label className="block">
                     <span className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Description</span>
                     <textarea className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white" rows={4} value={workflowTypeForm.description} onChange={e => setWorkflowTypeForm(form => ({ ...form, description: e.target.value }))} />
+                  </label>
+                  <label className="flex items-start gap-2 rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2 text-sm text-slate-200">
+                    <input type="checkbox" className="mt-0.5" checked={workflowTypeForm.keep_same_agent} onChange={e => setWorkflowTypeForm(form => ({ ...form, keep_same_agent: e.target.checked }))} />
+                    <span>
+                      Keep same agent
+                      <span className="mt-0.5 block text-xs text-slate-400">
+                        When a task comes back to a status it was already worked in, only the agent that worked it there can pick it up. If that agent is busy, the task waits. Off: the first free eligible agent takes it.
+                      </span>
+                    </span>
                   </label>
                   <Button variant="primary" loading={saving === 'workflow-type'} onClick={saveWorkflowType}>
                     <Save className="h-3.5 w-3.5" /> Save Details

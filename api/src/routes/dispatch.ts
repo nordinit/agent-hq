@@ -1,8 +1,8 @@
 /**
  * dispatch.ts — HTTP endpoints for the deterministic routing engine
  *
- * POST /api/v1/dispatch/trigger       — run eligibility + dispatch for one project
- * POST /api/v1/dispatch/reconcile     — run eligibility + dispatch for ALL active projects
+ * POST /api/v1/dispatch/trigger       — run dispatch for one project
+ * POST /api/v1/dispatch/reconcile     — run a full reconciler tick for ALL active projects
  * GET  /api/v1/dispatch/log           — paginated dispatch audit log
  * GET  /api/v1/dispatch/status        — current routing system status
  *
@@ -11,7 +11,6 @@
 
 import { Router, Request, Response } from 'express';
 import { getDb } from '../db/client';
-import { runEligibilityPass, EligibilityResult } from '../services/eligibility';
 import { runDispatcher, DispatchResult } from '../services/dispatcher';
 import { notifyTelegram } from '../integrations/telegram';
 import { runReconcilerTick } from '../scheduler/reconciler';
@@ -19,9 +18,9 @@ import { runReconcilerTick } from '../scheduler/reconciler';
 const router = Router();
 
 // ── POST /trigger ─────────────────────────────────────────────────────────────
-// Run eligibility pass + dispatcher for a specific project.
+// Run the dispatcher for a specific project.
 // Body: { project_id: number }
-// Response: { promoted, blocked, stalled, dispatched, skipped }
+// Response: { project_id, dispatched, skipped, errors }
 
 router.post('/trigger', async (req: Request, res: Response) => {
   try {
@@ -32,15 +31,10 @@ router.post('/trigger', async (req: Request, res: Response) => {
 
     const db = getDb();
 
-    const eligResult: EligibilityResult = await runEligibilityPass(db, project_id);
-    const dispResult: DispatchResult    = await runDispatcher(db, project_id);
+    const dispResult: DispatchResult = await runDispatcher(db, project_id);
 
     res.json({
       project_id,
-      promoted:   eligResult.promoted,
-      blocked:    eligResult.blocked,
-      stalled:    eligResult.stalled,
-      unclaimed:  eligResult.unclaimed,
       dispatched: dispResult.dispatched,
       skipped:    dispResult.skipped,
       errors:     dispResult.errors,
@@ -53,7 +47,7 @@ router.post('/trigger', async (req: Request, res: Response) => {
 
 // ── POST /reconcile ───────────────────────────────────────────────────────────
 // Run full sweep across ALL active projects.
-// Response: { projects_checked, promoted, stalled, dispatched, errors }
+// Response: { projects_checked, project_ids, reconcile_at, dispatched, skipped, errors }
 
 router.post('/reconcile', async (_req: Request, res: Response) => {
   try {
@@ -62,17 +56,13 @@ router.post('/reconcile', async (_req: Request, res: Response) => {
     const summary = await runReconcilerTick(undefined, db);
 
     if (summary.dispatched > 0 || summary.errors.length > 0) {
-      await notifyTelegram(`📋 Reconcile complete: ${summary.dispatched} dispatched, ${summary.stalled} stalled, ${summary.errors.length} errors`);
+      await notifyTelegram(`📋 Reconcile complete: ${summary.dispatched} dispatched, ${summary.errors.length} errors`);
     }
 
     res.json({
       projects_checked: summary.projectsChecked,
       project_ids: summary.projectIds,
       reconcile_at: reconcileAt,
-      promoted: summary.promoted,
-      blocked: summary.blocked,
-      stalled: summary.stalled,
-      unclaimed: summary.unclaimed,
       dispatched: summary.dispatched,
       skipped: summary.skipped,
       errors: summary.errors,

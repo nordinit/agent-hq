@@ -15,7 +15,7 @@ getWorkflowMetadata: (params?: { workflow_id?: number | null; workflow_type?: st
 },
 createWorkflowType: (data: { key: string; name: string; description?: string }) =>
   apiFetch<WorkflowType>('/api/v1/workflows/types', { method: 'POST', body: JSON.stringify(data) }),
-updateWorkflowType: (key: string, data: { name?: string; description?: string }) =>
+updateWorkflowType: (key: string, data: { name?: string; description?: string; keep_same_agent?: boolean }) =>
   apiFetch<WorkflowType>(`/api/v1/workflows/types/${encodeURIComponent(key)}`, { method: 'PUT', body: JSON.stringify(data) }),
 deleteWorkflowType: (key: string) =>
   apiFetch<{ ok: boolean }>(`/api/v1/workflows/types/${encodeURIComponent(key)}`, { method: 'DELETE' }),

@@ -20,7 +20,6 @@ function inferWorkflowPhaseHint(outcomeKey: string, _taskType?: string | null): 
   if (outcomeKey === 'completed_for_review' || outcomeKey === 'dev_deploy_queued') return 'implementation';
   if (outcomeKey === 'qa_pass' || outcomeKey === 'qa_fail') return 'review';
   if (outcomeKey === 'deployed_live' || outcomeKey === 'live_verified') return 'release';
-  if (outcomeKey === 'blocked' || outcomeKey === 'failed' || outcomeKey === 'qa_fail' || outcomeKey === 'release_failed' || outcomeKey === 'infra_failed' || outcomeKey === RUNTIME_FAILED_OUTCOME || outcomeKey === 'env_blocked' || outcomeKey === 'approval_blocked' || outcomeKey.startsWith('failed:')) return 'generic';
   return 'generic';
 }
 
@@ -32,22 +31,20 @@ export function isBackendSystemOutcome(outcomeKey: string): boolean {
   return BACKEND_SYSTEM_OUTCOMES.has(outcomeKey);
 }
 
+/**
+ * Whether an outcome means the work failed. Only the outcome's own configuration decides this
+ * (failure_like or runtime_failure), plus the backend's own runtime failure outcome, which Agent HQ
+ * posts itself when a run dies before the agent can.
+ */
 export function isFailureLikeOutcome(outcomeKey: string, configured?: Pick<WorkflowOutcomeDefinition, 'metadata'> | null): boolean {
   return metadataFlag(configured?.metadata, 'failure_like')
     || configured?.metadata?.runtime_failure === true
-    || outcomeKey === 'failed'
-    || outcomeKey === 'qa_fail'
-    || outcomeKey === 'release_failed'
-    || outcomeKey === 'infra_failed'
-    || outcomeKey === RUNTIME_FAILED_OUTCOME
-    || outcomeKey.startsWith('failed:');
+    || outcomeKey === RUNTIME_FAILED_OUTCOME;
 }
 
-export function isBlockerLikeOutcome(outcomeKey: string, configured?: Pick<WorkflowOutcomeDefinition, 'metadata'> | null): boolean {
-  return metadataFlag(configured?.metadata, 'blocked_like')
-    || outcomeKey === 'blocked'
-    || outcomeKey === 'env_blocked'
-    || outcomeKey === 'approval_blocked';
+/** Whether an outcome means the work is blocked. Only the outcome's own configuration decides this. */
+export function isBlockerLikeOutcome(_outcomeKey: string, configured?: Pick<WorkflowOutcomeDefinition, 'metadata'> | null): boolean {
+  return metadataFlag(configured?.metadata, 'blocked_like');
 }
 
 export function isRuntimeFailureOutcome(outcomeKey: string): boolean {

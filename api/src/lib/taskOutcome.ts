@@ -12,6 +12,7 @@ import {
   isRuntimeFailureOutcome,
 } from './outcomeCatalog';
 import { syncTaskActiveAgentFromInstance } from '../domains/tasks/ownership';
+import { recordOutcomeStatusOwner, resolveRequiredStatusOwner } from '../services/dispatch/routing/keepSameAgent';
 import { insertRuntimeLog, resolveRuntimeTenantId, tenantInsertColumns } from './runtimeTenantScope';
 import { assertTaskStatusDefinedForWorkflow, WorkflowAllowedValuesError } from './taskStatusValidation';
 import { nowTimestamp } from './timestamps';
@@ -40,10 +41,6 @@ export interface ApplyTaskOutcomeResult {
   outcome: string;
   /** True when the instance was automatically closed as part of a terminal outcome. */
   instanceClosed?: boolean;
-  /** Whether the system auto-recovered (routed to a non-failed state). */
-  autoRecovered?: boolean;
-  /** Human-readable recovery description. */
-  recoveryDescription?: string;
 }
 
 export class RefusedTaskOutcomeError extends Error {
@@ -63,7 +60,6 @@ type TaskOutcomeTaskRow = {
   agent_id: number | null;
   assigned_agent_id: number | null;
   active_instance_id: number | null;
-  review_owner_agent_id: number | null;
   review_branch: string | null;
   review_commit: string | null;
   review_url: string | null;
@@ -316,7 +312,6 @@ async function reloadTaskOutcomeTaskRow(db: Db, taskId: number): Promise<TaskOut
       agent_id,
       ${assignedAgentSelect},
       active_instance_id,
-      ${await selectTaskColumnOrNull(db, 'review_owner_agent_id')},
       ${await selectTaskColumnOrNull(db, 'recurring_series_id')},
       ${evidenceSelect},
       ${customFieldsSelect}
@@ -341,14 +336,6 @@ async function loadOutcomeMeta(
     })).get(outcome) ?? null;
 }
 
-function routeFallbackOutcomes(outcome: string, semantics: { failureLike: boolean; blockedLike: boolean }): string[] {
-  const fallbacks: string[] = [];
-  if (outcome === 'release_failed') fallbacks.push('qa_fail');
-  if (semantics.blockedLike && outcome !== 'blocked') fallbacks.push('blocked');
-  if (semantics.failureLike && outcome !== 'failed') fallbacks.push('failed');
-  return [...new Set(fallbacks)];
-}
-
 export async function applyTaskOutcome(db: Db, input: ApplyTaskOutcomeInput): Promise<ApplyTaskOutcomeResult> {
   const changedBy = input.changedBy ?? 'system';
   const customFieldsSelect = await tableHasColumn(db, 'tasks', 'custom_fields_json') ? 'custom_fields_json' : 'NULL AS custom_fields_json';
@@ -366,7 +353,6 @@ export async function applyTaskOutcome(db: Db, input: ApplyTaskOutcomeInput): Pr
       agent_id,
       ${assignedAgentSelect},
       active_instance_id,
-      ${await selectTaskColumnOrNull(db, 'review_owner_agent_id')},
       ${await selectTaskColumnOrNull(db, 'recurring_series_id')},
       ${evidenceSelect},
       ${customFieldsSelect}
@@ -423,49 +409,24 @@ export async function applyTaskOutcome(db: Db, input: ApplyTaskOutcomeInput): Pr
   const projectId = reloadedExisting.project_id;
 
   // ── Outcome semantics ─────────────────────────────────────────────────────
-  // Failure/blocker behavior is owned by the configured outcome vocabulary.
+  // Failure/blocker behavior is owned by the configured outcome vocabulary, and every outcome is
+  // routed only by its own configured transition. No outcome borrows another outcome's route.
   const effectiveOutcome = input.outcome;
   const outcomeMeta = await loadOutcomeMeta(db, reloadedExisting, effectiveOutcome);
   const outcomeSemantics = {
     failureLike: isFailureLikeOutcome(effectiveOutcome, outcomeMeta),
     blockedLike: isBlockerLikeOutcome(effectiveOutcome, outcomeMeta),
   };
-  let autoRecovered = false;
-  let recoveryDescription: string | undefined;
-  let routingOutcome = effectiveOutcome;
   const isUnsuccessfulOutcome = outcomeSemantics.failureLike || outcomeSemantics.blockedLike;
 
-  let workflowModelRoute: Awaited<ReturnType<typeof resolveWorkflowModelOutcome>> = null;
-  try {
-    workflowModelRoute = await resolveWorkflowModelOutcome(db, {
-          status: routingBaseStatus,
-          task_type: reloadedExisting.task_type,
-          workflow_id: reloadedExisting.workflow_id,
-          workflow_type: reloadedExisting.workflow_type,
-        }, routingOutcome);
-  } catch (error) {
-    let fallbackRoute: Awaited<ReturnType<typeof resolveWorkflowModelOutcome>> = null;
-    for (const fallbackOutcome of routeFallbackOutcomes(effectiveOutcome, outcomeSemantics)) {
-      try {
-        fallbackRoute = await resolveWorkflowModelOutcome(db, {
-                  status: routingBaseStatus,
-                  task_type: reloadedExisting.task_type,
-                  workflow_id: reloadedExisting.workflow_id,
-                  workflow_type: reloadedExisting.workflow_type,
-                }, fallbackOutcome);
-        if (fallbackRoute) {
-          routingOutcome = fallbackOutcome;
-          break;
-        }
-      } catch {
-        // Try the next fallback below.
-      }
-    }
-    if (!fallbackRoute) throw error;
-    workflowModelRoute = fallbackRoute;
-  }
+  const workflowModelRoute = await resolveWorkflowModelOutcome(db, {
+        status: routingBaseStatus,
+        task_type: reloadedExisting.task_type,
+        workflow_id: reloadedExisting.workflow_id,
+        workflow_type: reloadedExisting.workflow_type,
+      }, effectiveOutcome);
 
-  const gateResult = await requireReleaseGate(db, { ...reloadedExisting, status: routingBaseStatus }, routingOutcome, reloadedExisting.task_type);
+  const gateResult = await requireReleaseGate(db, { ...reloadedExisting, status: routingBaseStatus }, effectiveOutcome, reloadedExisting.task_type);
   if (gateResult.errors.length > 0) {
     const refusal = gateResult.errors[0];
     await resolveRefusedTaskOutcome(db, {
@@ -479,18 +440,8 @@ export async function applyTaskOutcome(db: Db, input: ApplyTaskOutcomeInput): Pr
     throw new RefusedTaskOutcomeError(refusal);
   }
 
-  let canonicalNextStatus = (await workflowModelRoute)?.nextStatus
-    ?? (await canonicalOutcomeRoute(db, routingBaseStatus, routingOutcome, reloadedExisting.task_type, reloadedExisting.workflow_id, reloadedExisting.workflow_type));
-  if (!canonicalNextStatus) {
-    for (const fallbackOutcome of routeFallbackOutcomes(effectiveOutcome, outcomeSemantics)) {
-      const fallbackNextStatus = await canonicalOutcomeRoute(db, routingBaseStatus, fallbackOutcome, reloadedExisting.task_type, reloadedExisting.workflow_id, reloadedExisting.workflow_type);
-      if (fallbackNextStatus) {
-        canonicalNextStatus = fallbackNextStatus;
-        routingOutcome = fallbackOutcome;
-        break;
-      }
-    }
-  }
+  const canonicalNextStatus = workflowModelRoute?.nextStatus
+    ?? (await canonicalOutcomeRoute(db, routingBaseStatus, effectiveOutcome, reloadedExisting.task_type, reloadedExisting.workflow_id, reloadedExisting.workflow_type));
 
   let route: { to_status: string } | undefined;
   if (!canonicalNextStatus) {
@@ -500,36 +451,7 @@ export async function applyTaskOutcome(db: Db, input: ApplyTaskOutcomeInput): Pr
       WHERE from_status = ? AND outcome = ? AND enabled = 1
         AND project_id = ?
       LIMIT 1
-    `, routingBaseStatus, routingOutcome, projectId) as { to_status: string } | undefined;
-
-    if (!route) {
-      for (const fallbackOutcome of routeFallbackOutcomes(effectiveOutcome, outcomeSemantics)) {
-        if (fallbackOutcome === routingOutcome) continue;
-        route = await db.get(`
-          SELECT to_status
-          FROM routing_config
-          WHERE from_status = ? AND outcome = ? AND enabled = 1
-            AND project_id = ?
-          LIMIT 1
-        `, routingBaseStatus, fallbackOutcome, projectId) as { to_status: string } | undefined;
-        if (route) {
-          routingOutcome = fallbackOutcome;
-          break;
-        }
-      }
-    }
-
-    if (!route && effectiveOutcome !== input.outcome) {
-      route = await db.get(`
-        SELECT to_status
-        FROM routing_config
-        WHERE from_status = ? AND outcome = ? AND enabled = 1
-          AND project_id = ?
-        LIMIT 1
-      `, routingBaseStatus, input.outcome, projectId) as { to_status: string } | undefined;
-
-      if (route) routingOutcome = input.outcome;
-    }
+    `, routingBaseStatus, effectiveOutcome, projectId) as { to_status: string } | undefined;
   }
 
   if (!canonicalNextStatus && !route) {
@@ -562,22 +484,8 @@ export async function applyTaskOutcome(db: Db, input: ApplyTaskOutcomeInput): Pr
         workflowId: reloadedExisting.workflow_id,
         workflowType: reloadedExisting.workflow_type,
       });
-  if (isUnsuccessfulOutcome) {
-    autoRecovered = outcomeSemantics.failureLike && nextStatus !== 'failed' && nextStatus !== 'stalled' && nextStatus !== 'blocked';
-    recoveryDescription = outcomeSemantics.blockedLike
-      ? 'Blocked-like outcome, keep task blocked until the blocker is resolved'
-      : autoRecovered
-        ? 'Failure-like outcome routed to remediation instead of terminal failure'
-        : 'Failure-like outcome routed to failure triage';
-  }
-  const reviewOwnerAgentId = reloadedExisting.review_owner_agent_id ?? reloadedExisting.agent_id ?? null;
   const routedAssignment = await resolveTaskRoutingAssignment(db, reloadedExisting.workflow_id, reloadedExisting.project_id, reloadedExisting.task_type, nextStatus);
-  const nextAssignedAgentId = routingOutcome === 'qa_fail' || effectiveOutcome === 'qa_fail'
-    ? (reviewOwnerAgentId ?? reloadedExisting.assigned_agent_id ?? null)
-    : (routedAssignment.agent_id ?? reloadedExisting.assigned_agent_id);
-  const nextReviewOwnerAgentId = routingOutcome === 'qa_fail' || effectiveOutcome === 'qa_fail'
-    ? reviewOwnerAgentId
-    : (effectiveOutcome === 'completed_for_review' ? reviewOwnerAgentId : reloadedExisting.review_owner_agent_id ?? null);
+  const routedAssignedAgentId = routedAssignment.agent_id ?? reloadedExisting.assigned_agent_id;
 
   // Accepted semantic evidence, its transition and run bookkeeping share a
   // transaction/cause. Gate refusals above retain their existing audit behavior.
@@ -585,33 +493,43 @@ export async function applyTaskOutcome(db: Db, input: ApplyTaskOutcomeInput): Pr
   const telemetryOutcomeAgent=telemetryInstanceId==null?undefined:await db.value<number>(
     'SELECT agent_id FROM job_instances WHERE id=? AND task_id=?',telemetryInstanceId,input.taskId);
   return withTelemetryCausation(db, `outcome:${input.taskId}:${randomUUID()}`, async (db) => {
+    // The posting agent owns the next status when the same team works it (see keepSameAgent).
+    if (!input.dryRun && telemetryOutcomeAgent != null) {
+      await recordOutcomeStatusOwner(db, {
+        taskId: input.taskId,
+        fromStatus: priorStatus,
+        status: nextStatus,
+        agentId: telemetryOutcomeAgent,
+        instanceId: telemetryInstanceId ?? null,
+      });
+    }
+    // With Keep same agent on, the board shows the agent the next status will wait for.
+    const nextAssignedAgentId = (await resolveRequiredStatusOwner(db, input.taskId, nextStatus))?.agent_id ?? routedAssignedAgentId;
     // Store failure or blocker detail on the task when failing.
     // Also capture previous_status so retry or reopen can restore workflow
     // position instead of always resetting to 'ready'.
-    const preserveFailureMetadata = isUnsuccessfulOutcome || nextStatus === 'failed' || nextStatus === 'stalled';
+    const preserveFailureMetadata = isUnsuccessfulOutcome;
     const assignmentColumn = hasAssignedAgentColumn ? 'assigned_agent_id' : 'agent_id';
     if (isUnsuccessfulOutcome) {
       await db.run(`
         UPDATE tasks
         SET status = ?,
             ${assignmentColumn} = ?,
-            review_owner_agent_id = ?,
             failure_detail = ?,
             previous_status = ?,
             updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
         WHERE id = ?
-      `, nextStatus, nextAssignedAgentId, nextReviewOwnerAgentId, input.failureDetail ?? input.summary ?? null, preserveFailureMetadata ? priorStatus : null, input.taskId);
+      `, nextStatus, nextAssignedAgentId, input.failureDetail ?? input.summary ?? null, preserveFailureMetadata ? priorStatus : null, input.taskId);
     } else {
       await db.run(`
         UPDATE tasks
         SET status = ?,
             ${assignmentColumn} = ?,
-            review_owner_agent_id = ?,
             failure_detail = NULL,
             previous_status = NULL,
             updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
         WHERE id = ?
-      `, nextStatus, nextAssignedAgentId, nextReviewOwnerAgentId, input.taskId);
+      `, nextStatus, nextAssignedAgentId, input.taskId);
     }
     await syncTaskActiveAgentFromInstance(db, input.taskId);
 
@@ -656,7 +574,8 @@ export async function applyTaskOutcome(db: Db, input: ApplyTaskOutcomeInput): Pr
     let instanceClosed = false;
     const authoritativeInstanceId = input.instanceId ?? reloadedExisting.active_instance_id;
     if (!input.dryRun && authoritativeInstanceId != null && isTerminalOutcome(effectiveOutcome)) {
-      const instanceStatus = effectiveOutcome === 'failed' || effectiveOutcome === 'infra_failed' || isRuntimeFailureOutcome(effectiveOutcome) ? 'failed' : 'done';
+      // The run itself failed only when the outcome is configured to mean that (runtime_failure).
+      const instanceStatus = outcomeMeta?.metadata?.runtime_failure === true || isRuntimeFailureOutcome(effectiveOutcome) ? 'failed' : 'done';
       try {
         const closeResult = await closeInstance({
           db,
@@ -703,7 +622,7 @@ export async function applyTaskOutcome(db: Db, input: ApplyTaskOutcomeInput): Pr
         });
 
     // ── Record failure_stage on instance (#586) ──────────────────────────────
-    if (isUnsuccessfulOutcome || effectiveOutcome.startsWith('failed:')) {
+    if (isUnsuccessfulOutcome) {
       const failInstanceId = input.instanceId ?? reloadedExisting.active_instance_id;
       if (failInstanceId != null) {
         try {
@@ -714,8 +633,7 @@ export async function applyTaskOutcome(db: Db, input: ApplyTaskOutcomeInput): Pr
 
     const finalTaskState = await reloadTaskOutcomeTaskRow(db, input.taskId);
 
-    const failureInfo = isUnsuccessfulOutcome ? `${autoRecovered ? ', auto-recovered' : ''}` : '';
-    const message = `Outcome transition: task #${input.taskId} (${priorStatus} → ${nextStatus}), outcome="${effectiveOutcome}"${input.outcome !== effectiveOutcome ? `, requested_outcome="${input.outcome}"` : ''}${failureInfo}, actor="${changedBy}"${finalTaskState.agent_id ? `, agent_id=${finalTaskState.agent_id}` : ''}${input.instanceId != null ? `, instance_id=${input.instanceId}` : ''}${input.summary ? `, summary: ${input.summary}` : ''}`;
+    const message = `Outcome transition: task #${input.taskId} (${priorStatus} → ${nextStatus}), outcome="${effectiveOutcome}", actor="${changedBy}"${finalTaskState.agent_id ? `, agent_id=${finalTaskState.agent_id}` : ''}${input.instanceId != null ? `, instance_id=${input.instanceId}` : ''}${input.summary ? `, summary: ${input.summary}` : ''}`;
     await insertAuditLog(db, message, input.taskId, input.instanceId);
 
     if (input.summary) {
@@ -739,8 +657,6 @@ export async function applyTaskOutcome(db: Db, input: ApplyTaskOutcomeInput): Pr
       nextStatus,
       outcome: effectiveOutcome,
       instanceClosed,
-      autoRecovered,
-      recoveryDescription,
     };
   }, {outcomeAgentId:telemetryOutcomeAgent});
 }

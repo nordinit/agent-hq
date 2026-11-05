@@ -138,7 +138,7 @@ async function waitForInstanceDispatchPersistence(db: Db, instanceId: number): P
 }
 
 import { prepareRepoWorkspaceDependencies } from './repoWorkspaceDependencies';
-import { reconcileReviewQaRouting } from '../scheduler/reconciler';
+import { reconcileAssignedAgents } from '../scheduler/reconciler';
 jest.mock('./repoWorkspaceDependencies', () => ({ prepareRepoWorkspaceDependencies: jest.fn(async () => []) }));
 const prepare = prepareRepoWorkspaceDependencies as jest.MockedFunction<typeof prepareRepoWorkspaceDependencies>;
 
@@ -266,26 +266,23 @@ it('records failed preparation and releases capacity for a later retry', async (
   expect(dispatch).toHaveBeenCalledTimes(1);
 });
 
-it('shares the claim protocol with the review reconciler', async () => {
+it('dispatches review tasks through the regular dispatcher with one claim', async () => {
   await db.run("UPDATE tasks SET status = 'review', assigned_agent_id = 1 WHERE id = 7");
   await db.run("UPDATE workflow_task_routing_rules SET status = 'review' WHERE agent_id = 1");
-  const reviewDispatch = jest.fn(async () => undefined);
-  const [regular] = await Promise.all([
-    runDispatcher(db, 86), reconcileReviewQaRouting({ dispatchInstance: reviewDispatch }, db),
-  ]);
-  expect(regular.errors).toEqual([]);
-  if (regular.dispatched) await waitForInstanceDispatchPersistence(db, 1);
+  const results = await Promise.all([runDispatcher(db, 86), runDispatcher(db, 86), reconcileAssignedAgents(db)]);
+  const dispatched = results.slice(0, 2).reduce((n, r) => n + (r as { dispatched: number }).dispatched, 0);
+  expect(dispatched).toBe(1);
+  await waitForInstanceDispatchPersistence(db, 1);
   expect(await db.value('SELECT count(*) FROM job_instances')).toBe(1);
-  expect(regular.dispatched + reviewDispatch.mock.calls.length).toBe(1);
+  expect(await db.value('SELECT status FROM tasks WHERE id = 7')).toBe('review');
+  expect(dispatch).toHaveBeenCalledTimes(1);
 });
 
-it('both dispatch checks respect the same recovery blocker before creating review instances', async () => {
+it('holds review tasks during recovery like any other status', async () => {
   await db.run("UPDATE tasks SET status = 'review', assigned_agent_id = 1 WHERE id = 7");
   await db.run("UPDATE workflow_task_routing_rules SET status = 'review' WHERE agent_id = 1");
   await beginMcpRecovery(db, '/gateway', 1, 'interrupted');
-  const reviewDispatch = jest.fn(async () => undefined);
-  await Promise.all([runDispatcher(db, 86), reconcileReviewQaRouting({ dispatchInstance: reviewDispatch }, db)]);
+  await Promise.all([runDispatcher(db, 86), reconcileAssignedAgents(db)]);
   expect(await db.value('SELECT count(*) FROM job_instances')).toBe(0);
-  expect(reviewDispatch).not.toHaveBeenCalled();
   expect(await db.value('SELECT count(*) FROM openclaw_mcp_recovery_tasks WHERE task_id=7')).toBe(1);
 });
