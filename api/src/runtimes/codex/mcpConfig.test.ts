@@ -47,6 +47,35 @@ describe('Codex MCP config materialization', () => {
     expect(config).toContain('"AGENT_HQ_INSTANCE_ID" = "7"');
     expect(config).toContain('"AGENT_HQ_DURABLE_RUN_ID" = "durable-7"');
   });
+  it('pins task and run identity into assigned servers, which Codex does not pass by inheritance', async () => {
+    fetchAssigned.mockResolvedValue({
+      'agent-hq__agent-42': { command: '/opt/agent-hq-mcp', env: { AGENT_HQ_MCP_API_KEY: 'key' } },
+      'research__agent-42': { command: '/opt/research-mcp', env: { RESEARCH_PROFILE: 'r', AGENT_HQ_TASK_ID: 'forged' } },
+    });
+    const result = await materializeCodexMcpConfig({
+      db: {} as never, agentId: 42, instanceId: 7, codexHome, taskId: 3939,
+      runIdentity: { instanceId: 7, durableRunId: 'durable-7' },
+    });
+    expect(result.servers['research__agent-42'].env).toEqual({
+      RESEARCH_PROFILE: 'r',
+      AGENT_HQ_INSTANCE_ID: '7',
+      AGENT_HQ_DURABLE_RUN_ID: 'durable-7',
+      AGENT_HQ_TASK_ID: '3939',
+    });
+    // Agent HQ's own server keeps exactly the identity pinMcpRunIdentity gives it.
+    expect(result.servers['agent-hq__agent-42'].env).toEqual({
+      AGENT_HQ_MCP_API_KEY: 'key', AGENT_HQ_INSTANCE_ID: '7', AGENT_HQ_DURABLE_RUN_ID: 'durable-7',
+    });
+    const config = fs.readFileSync(result.configPath, 'utf8');
+    expect(config).toContain('"AGENT_HQ_TASK_ID" = "3939"');
+  });
+
+  it('pins the instance id even without a durable run or task', async () => {
+    fetchAssigned.mockResolvedValue({ 'research__agent-42': { command: '/opt/research-mcp' } });
+    const pinned = await materializeCodexMcpConfig({ db: {} as never, agentId: 42, instanceId: 7, codexHome });
+    expect(pinned.servers['research__agent-42'].env).toEqual({ AGENT_HQ_INSTANCE_ID: '7' });
+  });
+
   it('translates stdio servers and fail-closed tool allowlists to strict TOML', async () => {
     const result = await materialize({
       'agent-hq__agent-42': {

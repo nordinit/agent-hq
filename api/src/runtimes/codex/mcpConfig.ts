@@ -76,6 +76,31 @@ function renderServer(name: string, server: Record<string, unknown>): string {
   return lines.join('\n');
 }
 
+/**
+ * Claude Code hands every MCP server it starts the run's AGENT_HQ_* identity by
+ * environment inheritance; Codex starts MCP servers with a minimal environment,
+ * so assigned servers never learn which task or run called them (their records
+ * cannot be tied back to the run). Pin the same identity into each assigned
+ * stdio server. Values are per dispatch, which is safe because every dispatch
+ * writes its own runtime profile. Agent HQ's own server keeps the pins
+ * pinMcpRunIdentity gives it.
+ */
+export function pinAssignedServerRunIdentity(
+  servers: Record<string, Record<string, unknown>>,
+  identity: { instanceId: number; durableRunId?: string | null; taskId?: number | null },
+): void {
+  for (const [name, server] of Object.entries(servers)) {
+    const env = isRecord(server.env) ? server.env : {};
+    if (serverSlug(name) === AGENT_HQ_MCP_SLUG || typeof env.AGENT_HQ_MCP_API_KEY === 'string') continue;
+    server.env = {
+      ...env,
+      AGENT_HQ_INSTANCE_ID: String(identity.instanceId),
+      ...(identity.durableRunId ? { AGENT_HQ_DURABLE_RUN_ID: identity.durableRunId } : {}),
+      ...(identity.taskId != null ? { AGENT_HQ_TASK_ID: String(identity.taskId) } : {}),
+    };
+  }
+}
+
 function writeAtomic(filePath: string, content: string, instanceId: number): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
   fs.chmodSync(path.dirname(filePath), 0o700);
@@ -172,6 +197,8 @@ function reusableCredentialSnapshot(
 
 export async function materializeCodexMcpConfig(params: {
   runIdentity?: AgentRunIdentity;
+  /** Task the run works on; pinned with the run identity into assigned servers. */
+  taskId?: number | null;
   db: Db;
   agentId: number;
   instanceId: number;
@@ -191,6 +218,11 @@ export async function materializeCodexMcpConfig(params: {
     await fetchAssignedMcpServers(params.db, params.agentId, previousServers),
   );
   if (params.runIdentity) pinMcpRunIdentity(assigned, params.runIdentity);
+  pinAssignedServerRunIdentity(assigned, {
+    instanceId: params.instanceId,
+    durableRunId: params.runIdentity?.durableRunId,
+    taskId: params.taskId,
+  });
   const warnings: string[] = [];
   const servers: Record<string, Record<string, unknown>> = {};
 
