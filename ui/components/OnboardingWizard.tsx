@@ -33,16 +33,6 @@ export function markOnboarded() {
   }
 }
 
-export function isOnboarded() {
-  if (typeof window === 'undefined') return true; // SSR: don't show
-  return !!localStorage.getItem(ONBOARDED_KEY);
-}
-
-export function getStoredUserName(): string {
-  if (typeof window === 'undefined') return '';
-  return localStorage.getItem(USER_NAME_KEY) ?? '';
-}
-
 // ─── Step types ────────────────────────────────────────────────────────────────
 // provider step is inserted between project-setup and agent (per spec §2.1)
 type Step = 'personalize' | 'project-setup' | 'provider' | 'gateway' | 'agent' | 'done';

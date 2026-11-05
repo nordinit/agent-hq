@@ -9,7 +9,7 @@
     "build": "next build && node scripts/ensure-standalone-static.js",
     "start": "next start -H ${AGENT_HQ_UI_HOST:-127.0.0.1} -p ${PORT:-3500}",
     "start-dev": "node scripts/clear-stale-dev-port.js && AGENT_HQ_INTERNAL_BASE_URL=${AGENT_HQ_INTERNAL_BASE_URL:-http://localhost:3501} NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:3501} npm run start",
-    "lint": "eslint lib/taskStatusEmoji.ts lib/taskStatuses.ts lib/*.test.ts",
+    "lint": "eslint .",
     "test": "node --test --experimental-strip-types lib/*.test.ts",
     "verify": "npm run test && npm run lint"
   },

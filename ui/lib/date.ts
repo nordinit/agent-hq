@@ -1,5 +1,3 @@
-const TZ = 'America/New_York';
-
 /**
  * Parse a date string from the DB (may be missing the 'Z' suffix for UTC).
  * The API stores canonical datetimes as "YYYY-MM-DD HH:MM:SS" without timezone
@@ -19,7 +17,6 @@ export function formatDateTime(dateStr: string | Date): string {
   const d = dateStr instanceof Date ? dateStr : parseDbDate(dateStr as string);
   if (isNaN(d.getTime())) return '—';
   return d.toLocaleString('en-US', {
-    timeZone: TZ,
     month: 'short',
     day: 'numeric',
     year: 'numeric',
@@ -34,7 +31,6 @@ export function formatDate(dateStr: string | Date): string {
   const d = dateStr instanceof Date ? dateStr : parseDbDate(dateStr as string);
   if (isNaN(d.getTime())) return '—';
   return d.toLocaleString('en-US', {
-    timeZone: TZ,
     month: 'short',
     day: 'numeric',
     year: 'numeric',
@@ -46,7 +42,6 @@ export function formatTime(dateStr: string | Date): string {
   const d = dateStr instanceof Date ? dateStr : parseDbDate(dateStr as string);
   if (isNaN(d.getTime())) return '—';
   return d.toLocaleString('en-US', {
-    timeZone: TZ,
     hour: 'numeric',
     minute: '2-digit',
     hour12: true,

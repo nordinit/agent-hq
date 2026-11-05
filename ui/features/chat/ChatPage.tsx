@@ -690,7 +690,6 @@ function ChatPageInner() {
     return () => {
       cancelled = true;
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [useCanonical, selectedInstanceId]);
 
   // ── Live polling for in-progress instances via canonical sessions ──

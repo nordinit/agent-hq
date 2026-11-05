@@ -68,14 +68,6 @@ export function getDefaultVisibleTaskColumns(statuses?: TaskStatusMeta[] | null)
   return getTaskBoardColumns(statuses).map(status => status.key);
 }
 
-export const TASK_STATUSES: TaskStatusDefinition[] = [];
-export const TASK_STATUS_MAP: Record<string, TaskStatusDefinition> = {};
-export const TASK_STATUS_LABELS: Record<string, string> = {};
-export const TASK_STATUS_BADGES: Record<string, string> = {};
-export const TASK_STATUS_DOTS: Record<string, string> = {};
-export const TASK_BOARD_COLUMNS: Array<{ key: string; label: string; color: string }> = [];
-export const DEFAULT_VISIBLE_TASK_COLUMNS: string[] = [];
-
 /**
  * Every status column on the board, across all workflow types in view.
  *
