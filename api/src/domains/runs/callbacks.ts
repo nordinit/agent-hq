@@ -11,7 +11,7 @@ import { notifyTaskStatusChange } from '../../lib/taskNotifications';
 import { writeTaskHistory, writeTaskStatusChange } from '../tasks/history';
 import { getCanonicalTaskRecord } from '../tasks/evidence';
 import { syncTaskActiveAgentFromInstance } from '../tasks/ownership';
-import { applyConfiguredRuntimeFailedEvent } from './runtimeFailureEvent';
+import { applyRuntimeFailedOutcome } from './runtimeFailureEvent';
 import { nowTimestamp } from '../../lib/timestamps';
 import { type Db } from "../../db/adapter/types";
 import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../../db/introspection";
@@ -364,17 +364,11 @@ export async function completeRunInstance(
   }
 
   if (finalStatus === 'failed' && taskId && taskRow && !runtimeEndedWithoutLifecycleOutcome) {
-    await applyConfiguredRuntimeFailedEvent(db, {
+    await applyRuntimeFailedOutcome(db, {
       taskId,
       instanceId,
       changedBy: instance.agent_id ? `agent:${instance.agent_id}` : AGENT_HQ_RUNTIME_SOURCE,
       priorTaskStatus: taskRow.status,
-      tenantId: taskRow.tenant_id,
-      projectId: taskRow.project_id,
-      workflowId: taskRow.workflow_id,
-      workflowType: taskRow.workflow_type,
-      taskType: taskRow.task_type,
-      agentId: taskRow.agent_id,
       summary,
       runtimeEndSource: 'instance_complete',
       runtimeEndError,

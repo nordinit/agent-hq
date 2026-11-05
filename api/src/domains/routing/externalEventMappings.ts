@@ -1,6 +1,6 @@
 import { STARTER_WORKFLOW_OUTCOME_SEEDS } from '../../lib/starterCatalog';
 import { isValidTaskType } from '../../lib/taskTypes';
-import { RUNTIME_FAILED_OUTCOME } from '../../lib/outcomeCatalog';
+import { RUNTIME_FAILED_OUTCOME, isBackendSystemOutcome } from '../../lib/outcomeCatalog';
 import { z } from 'zod';
 import workflowEventDefaults from '../../config/workflow-event-defaults.json';
 import { WORKFLOW_EVENT_ACTION_KINDS } from '../../lib/workflowVocabulary';
@@ -11,7 +11,6 @@ import { tableExists as sharedTableExists, columnExists as sharedColumnExists } 
 export const AGENT_HQ_RUNTIME_SOURCE = 'agent_hq_runtime';
 export const AGENT_HQ_DISPATCHER_SOURCE = 'agent_hq_dispatcher';
 export const DEV_ENV_LEASE_MANAGER_SOURCE = 'dev_environment_lease_manager';
-export const RUNTIME_FAILED_EVENT = 'runtime_failed';
 export const MISSING_OUTCOME_WORKFLOW_EVENTS = ['no_semantic_handoff_posted', 'missing_outcome', 'unknown_outcome'] as const;
 export const PRIMARY_MISSING_OUTCOME_WORKFLOW_EVENT = MISSING_OUTCOME_WORKFLOW_EVENTS[0];
 export const DISPATCH_STARTUP_FAILED_EVENT = 'dispatch_startup_failed';
@@ -272,7 +271,7 @@ async function listWorkflowContextStatusKeys(
 }
 
 async function listKnownOutcomeKeys(db: Db): Promise<Set<string>> {
-  const keys = new Set<string>([RUNTIME_FAILED_OUTCOME]);
+  const keys = new Set<string>();
   for (const seed of STARTER_WORKFLOW_OUTCOME_SEEDS) {
     for (const outcome of seed.outcomes) {
       if ((outcome.enabled ?? 1) === 1 && outcome.behavior !== 'disable') {
@@ -561,6 +560,14 @@ async function normalizePayload(db: Db, input: Record<string, unknown>, existing
         : `Unknown status action_target "${actionTarget}"`,
       400,
     );
+  }
+  // A dead run always posts the built-in runtime_failed outcome; no mapping decides that, and no
+  // mapping may post it for anything else.
+  if (source === AGENT_HQ_RUNTIME_SOURCE && eventName === RUNTIME_FAILED_OUTCOME) {
+    throw withStatus(`"${RUNTIME_FAILED_OUTCOME}" is not a configurable event: a run that dies always posts the built-in ${RUNTIME_FAILED_OUTCOME} outcome. Route that outcome with a transition instead.`, 400);
+  }
+  if (actionKind === 'outcome' && actionTarget && isBackendSystemOutcome(actionTarget)) {
+    throw withStatus(`"${actionTarget}" is posted only by Agent HQ when a run dies and cannot be a mapping action_target`, 400);
   }
   if (actionKind === 'outcome' && actionTarget && !(await listKnownOutcomeKeys(db)).has(actionTarget)) {
     throw withStatus(`Unknown outcome action_target "${actionTarget}"`, 400);

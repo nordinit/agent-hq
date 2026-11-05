@@ -10,6 +10,7 @@ import {
   isBlockerLikeOutcome,
   isFailureLikeOutcome,
   isRuntimeFailureOutcome,
+  isBackendSystemOutcome,
 } from './outcomeCatalog';
 import { syncTaskActiveAgentFromInstance } from '../domains/tasks/ownership';
 import { resolveRequiredStatusOwner } from '../services/dispatch/routing/keepSameAgent';
@@ -85,7 +86,7 @@ type InstanceAuthorityRow = {
 };
 
 type OutcomeAuthorityDecision =
-  | { kind: 'allow'; mode: 'active_instance' | 'linked_instance' }
+  | { kind: 'allow'; mode: 'active_instance' | 'linked_instance' | 'latest_run' }
   | { kind: 'ignore'; reason: ApplyTaskOutcomeResult['reason']; auditMessage: string; auditNote: string };
 
 async function logHistory(
@@ -280,6 +281,17 @@ async function resolveOutcomeAuthority(
     && callbackInstance.task_id === task.id
   ) {
     return { kind: 'allow', mode: 'linked_instance' };
+  }
+
+  // Agent HQ posts runtime_failed after a run dies, often after that run was already unlinked from
+  // the task. It still applies when the dead run was the task's latest and nothing has run since.
+  if (
+    isBackendSystemOutcome(input.outcome)
+    && task.active_instance_id == null
+    && Number(callbackInstance.task_id) === Number(task.id)
+    && !(await db.value('SELECT 1 FROM job_instances WHERE task_id = ? AND id > ? LIMIT 1', task.id, callbackInstance.id))
+  ) {
+    return { kind: 'allow', mode: 'latest_run' };
   }
 
   if (task.agent_id != null && task.agent_id === callbackInstance.agent_id) {
@@ -564,8 +576,9 @@ export async function applyTaskOutcome(db: Db, input: ApplyTaskOutcomeInput): Pr
     let instanceClosed = false;
     const authoritativeInstanceId = input.instanceId ?? reloadedExisting.active_instance_id;
     if (!input.dryRun && authoritativeInstanceId != null && isTerminalOutcome(effectiveOutcome)) {
-      // The run itself failed only when the outcome is configured to mean that (runtime_failure).
-      const instanceStatus = outcomeMeta?.metadata?.runtime_failure === true || isRuntimeFailureOutcome(effectiveOutcome) ? 'failed' : 'done';
+      // An outcome an agent posts describes the task; its run finished. Only the built-in
+      // runtime_failed, posted when the run itself died, marks the run failed.
+      const instanceStatus = isRuntimeFailureOutcome(effectiveOutcome) ? 'failed' : 'done';
       try {
         const closeResult = await closeInstance({
           db,

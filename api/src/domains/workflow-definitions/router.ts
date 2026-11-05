@@ -149,18 +149,12 @@ function normalizeOutcomeMetadata(raw: unknown, fieldName: string): Record<strin
   const parsed = parseMetadataObject(raw, fieldName);
   const failureLike = parsed.failure_like === true;
   const blockedLike = parsed.blocked_like === true;
-  // runtime_failure: posting this outcome also marks the agent's run as failed, not just the task.
-  const runtimeFailure = parsed.runtime_failure === true;
   if (failureLike && blockedLike) {
     throw new Error(`${fieldName} cannot set both failure_like and blocked_like`);
-  }
-  if (runtimeFailure && blockedLike) {
-    throw new Error(`${fieldName} cannot set both runtime_failure and blocked_like`);
   }
   return {
     ...(failureLike ? { failure_like: true } : {}),
     ...(blockedLike ? { blocked_like: true } : {}),
-    ...(runtimeFailure ? { runtime_failure: true } : {}),
   };
 }
 

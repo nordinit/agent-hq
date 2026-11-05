@@ -23,6 +23,7 @@ import { listTransitionRequirements } from './requirements';
 import { listWorkflowEventMappings } from './externalEventMappings';
 import { requireProjectWorkflowTypeScope, withStatus } from './scope';
 import { tableExists } from './policy/metadata';
+import { RUNTIME_FAILED_OUTCOME } from '../../lib/outcomeCatalog';
 
 // ── Inputs to the pure builder ────────────────────────────────────────────────
 
@@ -629,6 +630,14 @@ export function buildWorkflowGraph(input: {
     if (!scopeIsEmpty && !status.terminal && statusRules.filter(isLive).length === 0) {
       addNodeFinding(status.name, 'unassigned_status', 'warn',
         `No agent is assigned to "${status.label}", so tasks that land here are never picked up.`);
+    }
+    // When a run dies, Agent HQ posts the built-in runtime_failed outcome. Like any outcome with no
+    // route, it then leaves the task where it is to be dispatched again. That is a valid choice, so
+    // this is information, not a warning: it says what happens and how to change it.
+    if (!scopeIsEmpty && !status.terminal && statusRules.filter(isLive).length > 0
+      && !liveEdges.some((edge) => edge.from_status === status.name && edge.outcome === RUNTIME_FAILED_OUTCOME)) {
+      addNodeFinding(status.name, 'runtime_failed_unrouted', 'info',
+        `If a run dies in "${status.label}", the task stays here and is dispatched again. Add a ${RUNTIME_FAILED_OUTCOME} transition to send it somewhere else.`);
     }
 
     return {

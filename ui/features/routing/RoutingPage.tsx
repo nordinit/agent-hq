@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { RUNTIME_FAILED_OUTCOME } from '@/lib/systemOutcomes';
 import { useSearchParams } from 'next/navigation';
 import { api, type HistoricalTrace, type Project, type Workflow, type WorkflowType } from '@/lib/api';
 import { formatWorkflowNumber } from '@/lib/workflowLabel';
@@ -153,7 +154,8 @@ export default function RoutingPage() {
   ];
   // resolved flattens the base outcomes plus one copy per task type, so the same key recurs
   // once per type. Without the dedupe the composer lists every outcome about ten times.
-  const graphOutcomeKeys = [...new Set(outcomeCatalog.resolved.map(outcome => outcome.outcome_key))].sort();
+  // runtime_failed is built in, so it is never in the catalog but can always be routed.
+  const graphOutcomeKeys = [...new Set([...outcomeCatalog.resolved.map(outcome => outcome.outcome_key), RUNTIME_FAILED_OUTCOME])].sort();
   const filteredWorkflows = selectedProjectId && scopedWorkflowType
     ? workflows.filter(workflow => workflow.project_id === selectedProjectId && workflow.workflow_type === scopedWorkflowType)
     : [];

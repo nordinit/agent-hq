@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { RUNTIME_FAILED_DESCRIPTION, RUNTIME_FAILED_LABEL, RUNTIME_FAILED_OUTCOME } from './systemOutcomes';
 import { api, type ResolvedWorkflowOutcome, type WorkflowTypeOutcome } from '@/lib/api';
 
 export type WorkflowOutcomeCatalogState = {
@@ -71,6 +72,16 @@ export function mergeOutcomeOptions(catalog: WorkflowOutcomeCatalogState, taskTy
   const deduped = new Map<string, OutcomeOption>();
   for (const option of options) {
     if (!deduped.has(option.value)) deduped.set(option.value, option);
+  }
+  // The built-in runtime_failed is never in a workflow type's catalog but can always be routed.
+  if (!deduped.has(RUNTIME_FAILED_OUTCOME)) {
+    deduped.set(RUNTIME_FAILED_OUTCOME, {
+      value: RUNTIME_FAILED_OUTCOME,
+      label: RUNTIME_FAILED_LABEL,
+      description: RUNTIME_FAILED_DESCRIPTION,
+      taskType: taskType ?? null,
+      source: 'configured',
+    });
   }
   return Array.from(deduped.values()).sort((a, b) => a.label.localeCompare(b.label));
 }

@@ -110,8 +110,9 @@ describe('workflow field schema seeding', () => {
       'retry',
     ]));
     expect(metadata.statuses.map(status => status.name)).not.toContain('qa_pass');
-    expect(metadata.non_failure_outcomes).toEqual(expect.arrayContaining(['qa_fail', 'blocked', 'live_verified']));
-    expect(metadata.non_failure_outcomes).not.toContain('failed');
+    // An agent's outcome, even failed, means its run finished; only runtime_failed means the run failed.
+    expect(metadata.non_failure_outcomes).toEqual(expect.arrayContaining(['qa_fail', 'blocked', 'live_verified', 'failed']));
+    expect(metadata.non_failure_outcomes).not.toContain('runtime_failed');
   });
 
   it('filters stale starter transitions out of custom workflow metadata readbacks', async () => {

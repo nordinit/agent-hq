@@ -98,10 +98,34 @@ function healthy() {
 }
 
 describe('buildWorkflowGraph', () => {
-  it('produces no findings for a well-formed workflow', () => {
+  it('produces no warnings or errors for a well-formed workflow, only where a dead run stays', () => {
     const graph = healthy();
-    expect(graph.lint).toEqual([]);
+    expect(graph.lint).toEqual([expect.objectContaining({ code: 'runtime_failed_unrouted', severity: 'info', node: 'todo' })]);
     expect(graph.stats).toEqual({ node_count: 2, edge_count: 1, error_count: 0, warn_count: 0 });
+  });
+
+  describe('runtime_failed routing', () => {
+    it('says a dead run keeps the task in a worked status with no runtime_failed route', () => {
+      const finding = healthy().lint.find((entry) => entry.code === 'runtime_failed_unrouted');
+      expect(finding?.message).toContain('the task stays here and is dispatched again');
+    });
+
+    it('says nothing once runtime_failed is routed from that status', () => {
+      const graph = build({
+        statuses: [
+          status('todo', { is_default_entry: true, stage_order: 0 }),
+          status('done', { terminal: true, stage_order: 1 }),
+          status('failed', { terminal: true, stage_order: 2 }),
+        ],
+        transitions: [transition(1, 'todo', 'done', 'completed'), transition(2, 'todo', 'failed', 'runtime_failed')],
+        rules: [rule(1, 'todo', 1)],
+      });
+      expect(codes(graph)).not.toContain('runtime_failed_unrouted');
+    });
+
+    it('ignores terminal statuses and statuses nobody works', () => {
+      expect(healthy().lint.filter((entry) => entry.code === 'runtime_failed_unrouted').map((entry) => entry.node)).toEqual(['todo']);
+    });
   });
 
   it('orders nodes by stage_order and exposes it as the layout layer', () => {

@@ -13,7 +13,7 @@ const mockRecordRunCheckIn = jest.fn();
 const mockTaskRequiresSemanticOutcome = jest.fn(() => false);
 const mockScheduleEndedActiveInstanceLinkageCleanup = jest.fn();
 const mockMarkTaskNeedsAttentionForMissingSemanticHandoff = jest.fn();
-const mockApplyConfiguredRuntimeFailedEvent = jest.fn(async () => undefined);
+const mockApplyRuntimeFailedOutcome = jest.fn(async () => undefined);
 const mockIngestHermesTranscriptForRun = jest.fn(() => ({ imported: 0, matchedFile: null, skipped: 'no-session-dir' }));
 const mockResolveWorkflow = jest.fn(() => ({ workflowPhase: 'implementation', requiresSemanticOutcome: false }));
 
@@ -48,7 +48,7 @@ jest.mock('../domains/runs/lifecycleHandoff', () => ({
 }));
 
 jest.mock('../domains/runs/runtimeFailureEvent', () => ({
-  applyConfiguredRuntimeFailedEvent: mockApplyConfiguredRuntimeFailedEvent,
+  applyRuntimeFailedOutcome: mockApplyRuntimeFailedOutcome,
 }));
 
 jest.mock('../lib/taskLifecycle', () => ({
@@ -210,7 +210,7 @@ describe('HermesRuntime', () => {
     mockTaskRequiresSemanticOutcome.mockReturnValue(false);
     mockScheduleEndedActiveInstanceLinkageCleanup.mockClear();
     mockMarkTaskNeedsAttentionForMissingSemanticHandoff.mockClear();
-    mockApplyConfiguredRuntimeFailedEvent.mockClear();
+    mockApplyRuntimeFailedOutcome.mockClear();
     mockIngestHermesTranscriptForRun.mockClear();
     mockIngestHermesTranscriptForRun.mockReturnValue({ imported: 0, matchedFile: null, skipped: 'no-session-dir' });
     mockResolveWorkflow.mockClear();
@@ -444,7 +444,7 @@ describe('HermesRuntime', () => {
       runtimeEndSuccess: false,
       runtimeEndSource: 'hermes',
     }));
-    expect(mockApplyConfiguredRuntimeFailedEvent).toHaveBeenCalledWith(db, expect.objectContaining({
+    expect(mockApplyRuntimeFailedOutcome).toHaveBeenCalledWith(db, expect.objectContaining({
       taskId: 507,
       instanceId: 2940,
       runtimeEndSource: 'hermes',
@@ -505,7 +505,7 @@ describe('HermesRuntime', () => {
       runtimeEndError: expect.stringContaining('Rate limit exceeded'),
       runtimeEndSource: 'hermes',
     }));
-    expect(mockApplyConfiguredRuntimeFailedEvent).toHaveBeenCalledWith(db, expect.objectContaining({
+    expect(mockApplyRuntimeFailedOutcome).toHaveBeenCalledWith(db, expect.objectContaining({
       taskId: 507,
       instanceId: 2940,
       runtimeEndSource: 'hermes',
@@ -577,7 +577,7 @@ describe('HermesRuntime', () => {
         success: true,
       }),
     }));
-    expect(mockApplyConfiguredRuntimeFailedEvent).not.toHaveBeenCalled();
+    expect(mockApplyRuntimeFailedOutcome).not.toHaveBeenCalled();
   });
 
   it('throws when Hermes fails before spawn completes without posting lifecycle callbacks', async () => {

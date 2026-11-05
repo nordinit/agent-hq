@@ -1,7 +1,7 @@
 import { OpenClawRuntime } from './openclaw';
 import { recordRunCheckIn } from '../domains/runs/observability';
 import { markTaskNeedsAttentionForMissingSemanticHandoff } from '../domains/runs/lifecycleHandoff';
-import { applyConfiguredRuntimeFailedEvent } from '../domains/runs/runtimeFailureEvent';
+import { applyRuntimeFailedOutcome } from '../domains/runs/runtimeFailureEvent';
 import { evaluateOpenClawInstanceSessionState } from '../domains/runs/openclawSessionState';
 import { scheduleEndedActiveInstanceLinkageCleanup } from '../lib/taskLifecycle';
 import { ensureCanonicalSessionForInstance } from '../lib/canonicalSessions';
@@ -16,7 +16,7 @@ jest.mock('../domains/runs/observability', () => ({
 }));
 
 jest.mock('../domains/runs/runtimeFailureEvent', () => ({
-  applyConfiguredRuntimeFailedEvent: jest.fn(),
+  applyRuntimeFailedOutcome: jest.fn(),
 }));
 
 jest.mock('../lib/taskLifecycle', () => ({
@@ -261,7 +261,7 @@ describe('OpenClawRuntime terminal failure handling', () => {
       outcome: 'completed',
       summary: 'OpenClaw runtime ended without required lifecycle outcome',
     }));
-    expect(applyConfiguredRuntimeFailedEvent).not.toHaveBeenCalled();
+    expect(applyRuntimeFailedOutcome).not.toHaveBeenCalled();
     expect(scheduleEndedActiveInstanceLinkageCleanup).toHaveBeenCalledWith(db, 383, 1757, {
       changedBy: 'task_lifecycle',
     });
@@ -364,13 +364,9 @@ describe('OpenClawRuntime terminal failure handling', () => {
       outcome: 'failed',
       summary: expect.stringContaining('rate limit exceeded'),
     }));
-    expect(applyConfiguredRuntimeFailedEvent).toHaveBeenCalledWith(db, expect.objectContaining({
+    expect(applyRuntimeFailedOutcome).toHaveBeenCalledWith(db, expect.objectContaining({
       taskId: 383,
       instanceId: 1757,
-      projectId: 86,
-      workflowId: 9,
-      workflowType: 'enhancement',
-      agentId: 42,
       runtimeEndError: expect.stringContaining('rate limit exceeded'),
     }));
     expect(scheduleEndedActiveInstanceLinkageCleanup).toHaveBeenCalledWith(db, 383, 1757, {
@@ -424,7 +420,7 @@ describe('OpenClawRuntime terminal failure handling', () => {
       outcome: 'failed',
       summary: expect.stringContaining("gpt-image-2"),
     }));
-    expect(applyConfiguredRuntimeFailedEvent).toHaveBeenCalledWith(db, expect.objectContaining({
+    expect(applyRuntimeFailedOutcome).toHaveBeenCalledWith(db, expect.objectContaining({
       taskId: 383,
       instanceId: 1757,
       runtimeEndError: "The model 'gpt-image-2' does not exist.",
@@ -480,7 +476,7 @@ describe('OpenClawRuntime terminal failure handling', () => {
 
       expect(recordRunCheckIn).not.toHaveBeenCalled();
       expect(markTaskNeedsAttentionForMissingSemanticHandoff).not.toHaveBeenCalled();
-      expect(applyConfiguredRuntimeFailedEvent).not.toHaveBeenCalled();
+      expect(applyRuntimeFailedOutcome).not.toHaveBeenCalled();
     } finally {
       jest.clearAllTimers();
       jest.useRealTimers();

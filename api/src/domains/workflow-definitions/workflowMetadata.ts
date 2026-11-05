@@ -335,8 +335,10 @@ export async function resolveWorkflowMetadata(
     transitions,
     outcomes,
     relationship_types: relationshipTypes,
+    // Outcomes that mean the run itself finished: every outcome an agent posts. Only the built-in
+    // runtime_failed means the run failed.
     non_failure_outcomes: outcomes
-      .filter(outcome => outcome.outcome_key !== 'failed' && outcome.outcome_key !== 'infra_failed' && !isRuntimeFailureOutcome(outcome.outcome_key))
+      .filter(outcome => !isRuntimeFailureOutcome(outcome.outcome_key))
       .map(outcome => outcome.outcome_key),
     routing_warnings: routingWarnings,
   };

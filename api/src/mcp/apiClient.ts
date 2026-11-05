@@ -10,6 +10,7 @@ import { agentRunHeaders, runIdentitySourceFromEnv, type AgentRunIdentity } from
  */
 
 import { TASK_STATUSES } from '../lib/taskStatuses';
+import { isBackendSystemOutcome } from '../lib/systemOutcomes';
 
 type RecordLike = Record<string, unknown>;
 
@@ -1217,6 +1218,8 @@ export class AgentHqApiClient {
         return asString(transition.from_status) === task.status
           && asString(transition.to_status) === targetStatus
           && asString(transition.outcome)
+          // Agent HQ posts runtime_failed itself; a move never stands in for it.
+          && !isBackendSystemOutcome(asString(transition.outcome) ?? '')
           && (enabled === undefined || enabled === null || enabled === true || enabled === 1 || enabled === '1')
           && (asString(transition.task_type) == null || asString(transition.task_type) === task.task_type);
       })

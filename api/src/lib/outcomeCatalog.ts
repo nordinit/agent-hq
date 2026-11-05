@@ -1,8 +1,9 @@
 import { resolveWorkflowOutcomeMap, type WorkflowOutcomeDefinition } from '../domains/workflow-definitions/outcomes';
 import { type Db } from "../db/adapter/types";
 
-export const RUNTIME_FAILED_OUTCOME = 'runtime_failed';
-export const BACKEND_SYSTEM_OUTCOMES = new Set([RUNTIME_FAILED_OUTCOME]);
+import { RUNTIME_FAILED_OUTCOME, BACKEND_SYSTEM_OUTCOMES, isBackendSystemOutcome } from './systemOutcomes';
+
+export { RUNTIME_FAILED_OUTCOME, BACKEND_SYSTEM_OUTCOMES, isBackendSystemOutcome };
 
 export interface ResolvedTaskOutcomeCatalogEntry extends WorkflowOutcomeDefinition {
   workflowPhaseHint: 'implementation' | 'review' | 'release' | 'pm' | 'generic';
@@ -27,19 +28,12 @@ function metadataFlag(metadata: Record<string, unknown> | undefined, key: 'failu
   return metadata?.[key] === true;
 }
 
-export function isBackendSystemOutcome(outcomeKey: string): boolean {
-  return BACKEND_SYSTEM_OUTCOMES.has(outcomeKey);
-}
-
 /**
- * Whether an outcome means the work failed. Only the outcome's own configuration decides this
- * (failure_like or runtime_failure), plus the backend's own runtime failure outcome, which Agent HQ
- * posts itself when a run dies before the agent can.
+ * Whether an outcome means the work failed. The outcome's own configuration (failure_like) decides,
+ * except for the built-in runtime_failed, which always is.
  */
 export function isFailureLikeOutcome(outcomeKey: string, configured?: Pick<WorkflowOutcomeDefinition, 'metadata'> | null): boolean {
-  return metadataFlag(configured?.metadata, 'failure_like')
-    || configured?.metadata?.runtime_failure === true
-    || outcomeKey === RUNTIME_FAILED_OUTCOME;
+  return metadataFlag(configured?.metadata, 'failure_like') || outcomeKey === RUNTIME_FAILED_OUTCOME;
 }
 
 /** Whether an outcome means the work is blocked. Only the outcome's own configuration decides this. */

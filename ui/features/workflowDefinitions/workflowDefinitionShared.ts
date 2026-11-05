@@ -1,6 +1,7 @@
 'use client';
 
 import type { CustomFieldDefinition, WorkflowTypeOutcome, TaskFieldSchema, TaskRelationshipTypeConfig } from '@/lib/api';
+import { RUNTIME_FAILED_OUTCOME } from '@/lib/systemOutcomes';
 
 export type Notice = { type: 'success' | 'error'; message: string } | null;
 export type WorkflowDefinitionTab = 'overview' | 'task-statuses' | 'task-fields' | 'relationship-types' | 'outcomes' | 'metrics';
@@ -37,7 +38,6 @@ export type OutcomeForm = {
   badge_variant: string;
   failure_like: boolean;
   blocked_like: boolean;
-  runtime_failure: boolean;
 };
 
 export type SchemaDeleteDialogState = {
@@ -48,7 +48,7 @@ export type SchemaDeleteDialogState = {
 
 export const emptyWorkflowTypeForm: WorkflowTypeForm = { key: '', name: '', description: '', keep_same_agent: false };
 export const emptyField: CustomFieldDefinition = { key: '', label: '', type: 'text', required: false, options: [], help_text: '' };
-export const BACKEND_ONLY_OUTCOMES = new Set(['runtime_failed']);
+export const BACKEND_ONLY_OUTCOMES = new Set([RUNTIME_FAILED_OUTCOME]);
 export const COLOR_OPTIONS = [
   'slate', 'red', 'orange', 'amber', 'yellow', 'green', 'blue', 'indigo', 'purple', 'pink', 'rose', 'cyan', 'emerald',
 ];
@@ -143,7 +143,6 @@ export function outcomeToForm(outcome: WorkflowTypeOutcome): OutcomeForm {
     badge_variant: outcome.badge_variant ?? '',
     failure_like: outcome.metadata?.failure_like === true,
     blocked_like: outcome.metadata?.blocked_like === true,
-    runtime_failure: outcome.metadata?.runtime_failure === true,
   };
 }
 
@@ -158,7 +157,6 @@ export function emptyOutcomeForm(taskType = ''): OutcomeForm {
     badge_variant: '',
     failure_like: false,
     blocked_like: false,
-    runtime_failure: false,
   };
 }
 

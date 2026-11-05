@@ -6,6 +6,7 @@ import {
 import { resolveWorkflowOutcomeMap, getLegacyOutcomeMeta, type WorkflowOutcomeDefinition } from '../../domains/workflow-definitions/outcomes';
 import { loadWorkflowTaskTransitionRequirements } from '../../domains/routing/policy/statuses';
 import { type Db } from "../../db/adapter/types";
+import { isBackendSystemOutcome } from '../../lib/outcomeCatalog';
 
 // ── Workflow resolution ──────────────────────────────────────────────────────
 
@@ -216,7 +217,10 @@ async function resolveWorkflowFromResolvedWorkflow(
   taskType: string | null | undefined,
   workflow: ResolvedWorkflowModel,
 ): Promise<ResolvedWorkflow | null> {
-  const transitions = getApplicableWorkflowTransitions(workflow, taskStatus, taskType);
+  // Agents are only told about outcomes they can post: never Agent HQ's own runtime_failed, even
+  // where a transition routes it.
+  const transitions = getApplicableWorkflowTransitions(workflow, taskStatus, taskType)
+    .filter((transition) => !isBackendSystemOutcome(transition.outcome));
   if (transitions.length === 0) return null;
 
   const transitionOutcomes = transitions.map((transition) => transition.outcome);

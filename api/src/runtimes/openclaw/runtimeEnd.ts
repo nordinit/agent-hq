@@ -5,7 +5,7 @@ import { scheduleEndedActiveInstanceLinkageCleanup } from '../../lib/taskLifecyc
 import { recordRunCheckIn } from '../../domains/runs/observability';
 import { derivePostRuntimeInstanceStatus, determineRuntimeEndEvidenceRecorded } from '../../domains/runs/runtimeEnd';
 import { markTaskNeedsAttentionForMissingSemanticHandoff, taskRequiresSemanticOutcome } from '../../domains/runs/lifecycleHandoff';
-import { applyConfiguredRuntimeFailedEvent } from '../../domains/runs/runtimeFailureEvent';
+import { applyRuntimeFailedOutcome } from '../../domains/runs/runtimeFailureEvent';
 import { normalizeTokenUsage } from '../../domains/runs/tokenUsage';
 import { getCanonicalTaskRecord } from '../../domains/tasks/evidence';
 import { resolveWorkflow } from '../../services/contracts/workflowContract';
@@ -366,16 +366,11 @@ export async function handleOpenClawRuntimeEnd(
                       });
         }
         if (!missingRequiredLifecycleOutcome) {
-          await applyConfiguredRuntimeFailedEvent(db, {
+          await applyRuntimeFailedOutcome(db, {
             taskId: taskRow.task_id,
             changedBy: taskRow.agent_id ? `agent:${taskRow.agent_id}` : 'openclaw-runtime',
             instanceId,
             priorTaskStatus: taskRow.task_status ?? existing.status,
-            projectId: taskRow.project_id,
-            workflowId: taskRow.workflow_id,
-            workflowType: taskRow.workflow_type,
-            taskType: taskRow.task_type,
-            agentId: taskRow.task_agent_id,
             summary: failureSummary ?? 'OpenClaw runtime failed',
             runtimeEndSource,
             runtimeEndError: normalizedEvent.error ?? null,

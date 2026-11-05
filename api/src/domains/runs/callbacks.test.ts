@@ -151,7 +151,7 @@ describe('startRunInstance task ownership repair', () => {
   );
 });
 
-describe('completeRunInstance runtime failure workflow event', () => {
+describe('completeRunInstance runtime failure', () => {
   let db: Db;
 
   beforeEach(async () => {
@@ -163,21 +163,21 @@ describe('completeRunInstance runtime failure workflow event', () => {
     await teardownTestDb();
   });
 
-  async function seedInProgressRun(actionKind: 'status' | 'ignore' | 'outcome', actionTarget: string | null): Promise<void> {
+  async function seedInProgressRun(): Promise<void> {
     await seedReadyTaskRun(db, INSTANCE_ID);
     await db.run(`UPDATE tasks SET status = 'in_progress' WHERE id = ?`, TASK_ID);
     await db.run(`UPDATE job_instances SET session_key = 'run:3461' WHERE id = ?`, INSTANCE_ID);
-    await db.run(`
-      INSERT INTO external_event_mappings (
-        tenant_id, project_id, source, event_name, task_type, status_includes_json, status_excludes_json,
-        action_kind, action_target, apply_review_evidence, apply_failure_detail, enabled, priority
-      )
-      VALUES (?, NULL, 'agent_hq_runtime', 'runtime_failed', NULL, '[]', '[]', ?, ?, 0, 1, 1, 200)
-    `, TENANT_ID, actionKind, actionTarget);
   }
 
-  it('applies the configured visible status for a runtime_failed workflow event', async () => {
-    await seedInProgressRun('status', 'blocked');
+  async function addTransition(outcome: string, toStatus: string): Promise<void> {
+    await db.run(`INSERT INTO workflow_task_transitions
+      (tenant_id, workflow_id, task_type, from_status, outcome, to_status, enabled, priority)
+      VALUES (?, ?, 'backend', 'in_progress', ?, ?, 1, 100)`, TENANT_ID, WORKFLOW_ID, outcome, toStatus);
+  }
+
+  it('posts the built-in runtime_failed outcome and routes it like any other outcome', async () => {
+    await seedInProgressRun();
+    await addTransition('runtime_failed', 'blocked');
 
     await expect(completeRunInstance(db, INSTANCE_ID, {
       status: 'failed',
@@ -186,70 +186,29 @@ describe('completeRunInstance runtime failure workflow event', () => {
 
     const task = await db.get(`SELECT status, failure_detail FROM tasks WHERE id = ?`, TASK_ID) as { status: string; failure_detail: string | null };
     expect(task.status).toBe('blocked');
-    expect(task.failure_detail).toContain('Runtime failure workflow event');
-    expect(task.failure_detail).toContain('Event: runtime_failed');
+    expect(task.failure_detail).toContain('Run failed before its agent posted an outcome');
+    expect(await db.value('SELECT status FROM job_instances WHERE id = ?', INSTANCE_ID)).toBe('failed');
+    expect(await db.value('SELECT task_outcome FROM job_instances WHERE id = ?', INSTANCE_ID)).toBe('runtime_failed');
 
-    const history = await db.all(`
-      SELECT field, new_value
-      FROM task_history
-      WHERE task_id = ?
-      ORDER BY id
-    `, TASK_ID) as Array<{ field: string; new_value: string | null }>;
-    expect(history).toEqual(expect.arrayContaining([
-      { field: 'workflow_event_source', new_value: 'agent_hq_runtime' },
-      { field: 'workflow_event_name', new_value: 'runtime_failed' },
-      { field: 'workflow_event_action_kind', new_value: 'status' },
-      { field: 'workflow_event_action_target', new_value: 'blocked' },
-      { field: 'status', new_value: 'blocked' },
-    ]));
-
-    const note = await db.get(`SELECT content FROM task_notes WHERE task_id = ? ORDER BY id DESC LIMIT 1`, TASK_ID) as { content: string };
-    expect(note.content).toContain('Classification: runtime/control-plane failure event, not an agent-authored product failure outcome');
+    const note = await db.get(`SELECT content FROM task_notes WHERE task_id = ? AND content LIKE 'Run failed%' ORDER BY id DESC LIMIT 1`, TASK_ID) as { content: string };
+    expect(note.content).toContain('not an outcome the agent reported');
   });
 
-  it('records runtime_failed workflow event history when configured action is ignore', async () => {
-    await seedInProgressRun('ignore', null);
-
-    await completeRunInstance(db, INSTANCE_ID, {
-      status: 'failed',
-      summary: 'Runtime monitor failed',
-    });
-
-    const task = await db.get(`SELECT status FROM tasks WHERE id = ?`, TASK_ID) as { status: string };
-    expect(task.status).toBe('in_progress');
-
-    const history = await db.all(`
-      SELECT field, new_value
-      FROM task_history
-      WHERE task_id = ?
-      ORDER BY id
-    `, TASK_ID) as Array<{ field: string; new_value: string | null }>;
-    expect(history).toEqual(expect.arrayContaining([
-      { field: 'workflow_event_source', new_value: 'agent_hq_runtime' },
-      { field: 'workflow_event_name', new_value: 'runtime_failed' },
-      { field: 'workflow_event_action_kind', new_value: 'ignore' },
-      { field: 'workflow_event_action_target', new_value: null },
-    ]));
-    expect(history.some((entry) => entry.field === 'status' && entry.new_value === 'failed')).toBe(false);
-  });
-
-  it('finishes the failed run and audits an outcome mapping the workflow does not allow', async () => {
-    await seedInProgressRun('outcome', 'runtime_failed');
-    await db.run(`INSERT INTO workflow_task_transitions
-      (tenant_id, workflow_id, task_type, from_status, outcome, to_status, enabled, priority)
-      VALUES (?, ?, 'backend', 'in_progress', 'blocked', 'blocked', 1, 100)`, TENANT_ID, WORKFLOW_ID);
+  it('keeps the task where it is to be dispatched again when no transition routes runtime_failed', async () => {
+    await seedInProgressRun();
+    // A blocked route exists, and runtime_failed does not borrow it.
+    await addTransition('blocked', 'blocked');
 
     await expect(completeRunInstance(db, INSTANCE_ID, {
       status: 'failed',
       summary: 'OpenClaw state-lifecycle coordinator contention',
     })).resolves.toEqual({ ok: true, id: INSTANCE_ID, status: 'failed' });
 
-    expect(await db.get('SELECT status FROM job_instances WHERE id = ?', INSTANCE_ID))
-      .toEqual({ status: 'failed' });
+    expect(await db.value('SELECT status FROM job_instances WHERE id = ?', INSTANCE_ID)).toBe('failed');
     expect(await db.get('SELECT status, failure_detail FROM tasks WHERE id = ?', TASK_ID))
-      .toEqual({ status: 'in_progress', failure_detail: expect.stringContaining('Rejected mapping #') });
+      .toEqual({ status: 'in_progress', failure_detail: expect.stringContaining('will be dispatched again') });
     expect(await db.get(`SELECT new_value FROM task_history
-      WHERE task_id = ? AND field = 'workflow_event_mapping_rejected'`, TASK_ID))
-      .toEqual({ new_value: expect.stringContaining('Cannot apply outcome "runtime_failed"') });
+      WHERE task_id = ? AND field = 'runtime_failed_unrouted'`, TASK_ID))
+      .toEqual({ new_value: expect.stringContaining('Cannot apply outcome "runtime_failed" from "in_progress"') });
   });
 });

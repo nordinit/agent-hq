@@ -21,6 +21,7 @@ import { enrichTask, TASK_SELECT } from './readModel';
 import { INLINE_EVIDENCE_FIELD_KEYS } from '../../lib/starterCatalog';
 import { toCanonicalTimestampOrNow } from '../../lib/timestamps';
 import { type Db } from "../../db/adapter/types";
+import { isBackendSystemOutcome } from '../../lib/outcomeCatalog';
 
 async function loadTask(taskId: number, db: Db): Promise<Record<string, unknown> | undefined> {
   return await db.get(`${TASK_SELECT} WHERE t.id = ?`, taskId) as Record<string, unknown> | undefined;
@@ -213,6 +214,14 @@ export async function postTaskOutcome(
   db: Db, taskId: number, body: Record<string, unknown>, changedBy: string,
   options: PostTaskOutcomeOptions = {},
 ) {
+  // runtime_failed is Agent HQ's own outcome for a run that died; nothing outside Agent HQ posts it.
+  const requestedOutcome = typeof body.outcome === 'string' ? body.outcome.trim() : '';
+  if (isBackendSystemOutcome(requestedOutcome)) {
+    throw errorWithBody(400, {
+      error: `"${requestedOutcome}" is posted only by Agent HQ when a run dies. Post the outcome that describes the work instead.`,
+      code: 'system_outcome_reserved',
+    });
+  }
   if (options.mcpIdentity) changedBy = options.mcpIdentity.auditActor;
   if (options.projectLifecycle) {
     await resolveProjectOutcomeInstance(db, taskId, options);

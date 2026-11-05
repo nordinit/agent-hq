@@ -3,7 +3,7 @@ import { resolveWorkflow } from '../../services/contracts/workflowContract';
 import { getCanonicalTaskRecord } from '../tasks/evidence';
 import { markTaskNeedsAttentionForMissingSemanticHandoff, taskRequiresSemanticOutcome } from './lifecycleHandoff';
 import { recordRunCheckIn } from './observability';
-import { applyConfiguredRuntimeFailedEvent } from './runtimeFailureEvent';
+import { applyRuntimeFailedOutcome } from './runtimeFailureEvent';
 import { normalizeTokenUsage } from './tokenUsage';
 import { toCanonicalTimestampOrNow } from '../../lib/timestamps';
 import { tableHasColumn } from '../../lib/durableRunIdentity';
@@ -248,14 +248,11 @@ export async function applyRuntimeEndToJobInstance(
                     },
                   });
       } else if (shouldPostTerminalFailureOutcome) {
-        await applyConfiguredRuntimeFailedEvent(db, {
+        await applyRuntimeFailedOutcome(db, {
           taskId: taskRow.task_id,
           changedBy,
           instanceId: params.instanceId,
           priorTaskStatus: taskRow.task_status ?? existing.status,
-          projectId: taskRow.project_id,
-          taskType: taskRow.task_type,
-          agentId: taskRow.task_agent_id,
           summary: failureSummary ?? `${params.runtimeName} runtime failed`,
           runtimeEndSource,
           runtimeEndError: params.event.error ?? null,

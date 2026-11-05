@@ -23,18 +23,6 @@
   },
   {
     "source": "agent_hq_runtime",
-    "event_name": "runtime_failed",
-    "status_includes": [],
-    "status_excludes": [],
-    "action_kind": "outcome",
-    "action_target": "runtime_failed",
-    "apply_review_evidence": 0,
-    "apply_failure_detail": 1,
-    "enabled": 1,
-    "priority": 100
-  },
-  {
-    "source": "agent_hq_runtime",
     "event_name": "no_semantic_handoff_posted",
     "status_includes": [],
     "status_excludes": [],

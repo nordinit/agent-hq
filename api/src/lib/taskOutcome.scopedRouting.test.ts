@@ -759,10 +759,7 @@ describe('applyTaskOutcome scoped routing_config resolution', () => {
     expect(task.status).toBe('in_progress');
   });
 
-  it.each([
-    ['configured as a run failure', '{"failure_like":true,"runtime_failure":true}', 'failed'],
-    ['named failed but only failure-like', '{"failure_like":true}', 'done'],
-  ])('marks the run failed only when the outcome is %s', async (_label, metadata, expectedRunStatus) => {
+  it('an outcome an agent posts closes its run as done, even a failure-like one', async () => {
     db = await createDb();
     await db.run(`INSERT INTO job_instances (id, task_id, agent_id, status) VALUES (96, 417, 7, 'running')`);
     await db.run(`UPDATE tasks SET status = 'in_progress', active_instance_id = 96, agent_id = 7 WHERE id = 417`);
@@ -772,12 +769,46 @@ describe('applyTaskOutcome scoped routing_config resolution', () => {
     `);
     await db.run(`
       INSERT INTO workflow_type_outcomes (tenant_id, workflow_type_key, task_type, outcome_key, label, description, enabled, behavior, badge_variant, stage_order, is_system, metadata_json)
-      VALUES (1, 'generic', NULL, 'failed', 'Failed', 'The task failed', 1, 'base', 'failed', 1, 0, ?)
-    `, metadata);
+      VALUES (1, 'generic', NULL, 'failed', 'Failed', 'The task failed', 1, 'base', 'failed', 1, 0, '{"failure_like":true}')
+    `);
 
     await applyTaskOutcome(db, { taskId: 417, outcome: 'failed', changedBy: 'agent-7', instanceId: 96, summary: 'Could not finish' });
 
-    expect(await db.value(`SELECT status FROM job_instances WHERE id = 96`)).toBe(expectedRunStatus);
+    expect(await db.value(`SELECT status FROM job_instances WHERE id = 96`)).toBe('done');
+    expect(await db.value(`SELECT status FROM tasks WHERE id = 417`)).toBe('failed');
+  });
+
+  describe('the built-in runtime_failed outcome', () => {
+    async function deadRunWithLinkCleared(): Promise<void> {
+      db = await createDb();
+      // The run died and was already unlinked from the task when Agent HQ posts runtime_failed.
+      await db.run(`INSERT INTO job_instances (id, task_id, agent_id, status) VALUES (97, 417, 7, 'failed')`);
+      await db.run(`UPDATE tasks SET status = 'in_progress', active_instance_id = NULL, agent_id = NULL WHERE id = 417`);
+      await db.run(`
+        INSERT INTO workflow_task_transitions (tenant_id, workflow_id, task_type, from_status, outcome, to_status, enabled)
+        VALUES (1, 10, 'backend', 'in_progress', 'runtime_failed', 'failed', 1)
+      `);
+    }
+
+    it('applies for the task\'s latest run after that run was unlinked', async () => {
+      await deadRunWithLinkCleared();
+      const result = await applyTaskOutcome(db, { taskId: 417, outcome: 'runtime_failed', changedBy: 'agent_hq_runtime', instanceId: 97, summary: 'Run died' });
+      expect(result).toMatchObject({ applied: true, nextStatus: 'failed' });
+    });
+
+    it('is ignored once a newer run exists for the task', async () => {
+      await deadRunWithLinkCleared();
+      await db.run(`INSERT INTO job_instances (id, task_id, agent_id, status) VALUES (98, 417, 7, 'done')`);
+      const result = await applyTaskOutcome(db, { taskId: 417, outcome: 'runtime_failed', changedBy: 'agent_hq_runtime', instanceId: 97, summary: 'Run died' });
+      expect(result).toMatchObject({ applied: false, ignored: true });
+      expect(await db.value(`SELECT status FROM tasks WHERE id = 417`)).toBe('in_progress');
+    });
+
+    it('cannot be posted by an agent or API caller', async () => {
+      db = await createDb();
+      await expect(postTaskOutcome(db, 417, { outcome: 'runtime_failed', summary: 'I crashed' }, 'agent-7', { mcpIdentity: mcpIdentity(7) }))
+        .rejects.toMatchObject({ status: 400, body: expect.objectContaining({ code: 'system_outcome_reserved' }) });
+    });
   });
 
   it('maps MCP payload fields into existing outcome handling', async () => {

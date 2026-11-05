@@ -6,7 +6,8 @@ import { getBadgeVariantClass } from '@/lib/badgeVariants';
 import { TableColumnFilter, matchesColumnFilter } from '@/components/TableColumnFilter';
 import { ColumnHeaderLabel } from '@/components/ui/table-column-help';
 import { TABLE_DELETE_ACTION_CLASS, TABLE_EDIT_ACTION_CLASS } from '@/components/workflowConfig';
-import { Pencil, Trash2 } from 'lucide-react';
+import { Lock, Pencil, Trash2 } from 'lucide-react';
+import { RUNTIME_FAILED_DESCRIPTION, RUNTIME_FAILED_LABEL, RUNTIME_FAILED_OUTCOME } from '@/lib/systemOutcomes';
 import { OUTCOME_COLUMN_HELP } from '../workflowDefinitionShared';
 
 export function RunOutcomesTable({
@@ -18,7 +19,10 @@ export function RunOutcomesTable({
   onEdit,
   onDelete,
   saving,
+  showBuiltIn = false,
 }: {
+  /** Show the built-in runtime_failed outcome as a locked first row. */
+  showBuiltIn?: boolean;
   outcomes: WorkflowTypeOutcome[];
   emptyMessage: string;
   editorPanel: ReactNode;
@@ -78,12 +82,31 @@ export function RunOutcomesTable({
             </tr>
           </thead>
           <tbody>
+            {showBuiltIn && (
+              <tr className="border-b border-slate-700/50 bg-slate-900/40">
+                <td className="px-3 py-3 align-top"><span className="font-mono text-xs text-slate-500">system</span></td>
+                <td className="px-3 py-3 align-top"><code className="font-mono text-xs text-slate-300">{RUNTIME_FAILED_OUTCOME}</code></td>
+                <td className="max-w-[260px] px-3 py-3 align-top">
+                  <p className="text-xs font-medium text-slate-200">{RUNTIME_FAILED_LABEL}</p>
+                  <p className="mt-1 text-xs text-slate-500">{RUNTIME_FAILED_DESCRIPTION}</p>
+                </td>
+                <td className="px-3 py-3 align-top"><span className="rounded bg-slate-700/50 px-1.5 py-0.5 text-xs text-slate-300">built in</span></td>
+                <td className="px-3 py-3 align-top"><span className={`rounded-full px-2 py-0.5 text-xs ${getBadgeVariantClass('failed')}`}>failed</span></td>
+                <td className="px-3 py-3 align-top"><span className="rounded-full border border-red-500/40 bg-red-500/10 px-2 py-0.5 text-xs text-red-300">failure like</span></td>
+                <td className="px-3 py-3 text-center align-top"><span className="text-xs text-green-400">yes</span></td>
+                <td className="px-3 py-3 text-right align-top">
+                  <span className="inline-flex items-center gap-1 text-xs text-slate-500" title="Built into Agent HQ; it cannot be edited or deleted">
+                    <Lock className="h-3.5 w-3.5" /> locked
+                  </span>
+                </td>
+              </tr>
+            )}
             {addingOutcome && (
               <tr>
                 <td colSpan={8} className="p-3">{editorPanel}</td>
               </tr>
             )}
-            {outcomes.length === 0 && !addingOutcome && (
+            {outcomes.length === 0 && !addingOutcome && !showBuiltIn && (
               <tr>
                 <td colSpan={8} className="px-3 py-6 text-sm text-slate-400">{emptyMessage}</td>
               </tr>
@@ -114,8 +137,7 @@ export function RunOutcomesTable({
                     <div className="flex flex-wrap gap-1">
                       {outcome.metadata?.failure_like === true && <span className="rounded-full border border-red-500/40 bg-red-500/10 px-2 py-0.5 text-xs text-red-300">failure like</span>}
                       {outcome.metadata?.blocked_like === true && <span className="rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-xs text-amber-300">blocked like</span>}
-                      {outcome.metadata?.runtime_failure === true && <span className="rounded-full border border-red-500/40 bg-red-500/10 px-2 py-0.5 text-xs text-red-300">run failed</span>}
-                      {outcome.metadata?.failure_like !== true && outcome.metadata?.blocked_like !== true && outcome.metadata?.runtime_failure !== true && <span className="text-xs text-slate-600">none</span>}
+                      {outcome.metadata?.failure_like !== true && outcome.metadata?.blocked_like !== true && <span className="text-xs text-slate-600">none</span>}
                     </div>
                   </td>
                   <td className="px-3 py-3 text-center align-top">{outcome.enabled === 1 ? <span className="text-xs text-green-400">yes</span> : <span className="text-xs text-slate-600">no</span>}</td>

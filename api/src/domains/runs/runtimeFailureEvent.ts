@@ -1,129 +1,77 @@
-import { AGENT_HQ_RUNTIME_SOURCE, RUNTIME_FAILED_EVENT, resolveWorkflowEventMapping } from '../routing/externalEventMappings';
-import { notifyTaskStatusChange } from '../../lib/taskNotifications';
-import { applyTaskOutcome } from '../../lib/taskOutcome';
-import { writeTaskHistory, writeTaskStatusChange } from '../tasks/history';
+import { AGENT_HQ_RUNTIME_SOURCE } from '../routing/externalEventMappings';
+import { applyTaskOutcome, RefusedTaskOutcomeError } from '../../lib/taskOutcome';
+import { RUNTIME_FAILED_OUTCOME } from '../../lib/outcomeCatalog';
+import { writeTaskHistory } from '../tasks/history';
 import { resolveRuntimeTenantId, tenantInsertColumns } from '../../lib/runtimeTenantScope';
 import { type Db } from "../../db/adapter/types";
 import { WorkflowAllowedValuesError } from '../../lib/taskStatusValidation';
 
-export interface RuntimeFailureWorkflowEventParams {
+export interface RuntimeFailureParams {
   taskId: number;
   instanceId: number;
   changedBy: string;
   priorTaskStatus: string;
-  tenantId?: number | null;
-  projectId: number | null;
-  workflowId?: number | null;
-  workflowType?: string | null;
-  taskType: string | null;
-  agentId: number | null;
   summary: string | null;
   runtimeEndSource: string;
   runtimeEndError: string | null;
 }
 
-export async function applyConfiguredRuntimeFailedEvent(
+/**
+ * A run died before its agent posted an outcome. Agent HQ posts the built-in runtime_failed
+ * outcome for it, and that outcome routes like any other: a configured runtime_failed transition
+ * from the task's status moves the task. Without one the outcome is refused, exactly as any outcome
+ * with no route is, and the task stays where it is to be dispatched again.
+ */
+export async function applyRuntimeFailedOutcome(
   db: Db,
-  params: RuntimeFailureWorkflowEventParams,
+  params: RuntimeFailureParams,
 ): Promise<void> {
-  const mapping = await resolveWorkflowEventMapping(db, {
-      source: AGENT_HQ_RUNTIME_SOURCE,
-      eventName: RUNTIME_FAILED_EVENT,
-      tenantId: params.tenantId ?? null,
-      projectId: params.projectId,
-      workflowId: params.workflowId ?? null,
-      workflowType: params.workflowType ?? null,
-      taskType: params.taskType,
-      currentStatus: params.priorTaskStatus,
-    });
-
   const changedBy = params.changedBy || AGENT_HQ_RUNTIME_SOURCE;
   const summary = params.summary ?? 'Runtime reported failed terminal state';
   const failureDetail = [
-    'Runtime failure workflow event',
-    `Source: ${AGENT_HQ_RUNTIME_SOURCE}`,
-    `Event: ${RUNTIME_FAILED_EVENT}`,
+    'Run failed before its agent posted an outcome',
+    `Outcome: ${RUNTIME_FAILED_OUTCOME} (posted by Agent HQ)`,
     `Runtime end source: ${params.runtimeEndSource}`,
     `Instance ID: ${params.instanceId}`,
     `Message: ${summary}`,
     ...(params.runtimeEndError ? [`Runtime error: ${params.runtimeEndError}`] : []),
   ].join('\n');
 
-  await writeTaskHistory(db, params.taskId, changedBy, 'workflow_event_source', null, AGENT_HQ_RUNTIME_SOURCE, false);
-  await writeTaskHistory(db, params.taskId, changedBy, 'workflow_event_name', null, RUNTIME_FAILED_EVENT, false);
-  await writeTaskHistory(db, params.taskId, changedBy, 'workflow_event_runtime_end_source', null, params.runtimeEndSource, false);
-  await writeTaskHistory(db, params.taskId, changedBy, 'workflow_event_instance_id', null, params.instanceId, false);
-  await writeTaskHistory(db, params.taskId, changedBy, 'workflow_event_mapping_id', null, mapping?.id ?? null, false);
-  await writeTaskHistory(db, params.taskId, changedBy, 'workflow_event_action_kind', null, mapping?.action_kind ?? null, false);
-  await writeTaskHistory(db, params.taskId, changedBy, 'workflow_event_action_target', null, mapping?.action_target ?? null, false);
+  await writeTaskHistory(db, params.taskId, changedBy, 'runtime_failed_instance_id', null, params.instanceId, false);
+  await writeTaskHistory(db, params.taskId, changedBy, 'runtime_failed_end_source', null, params.runtimeEndSource, false);
 
   try {
-    const tenantId = (await resolveRuntimeTenantId(db, { taskId: params.taskId })) ?? params.tenantId ?? null;
+    const tenantId = await resolveRuntimeTenantId(db, { taskId: params.taskId });
     const tenant = await tenantInsertColumns(db, 'task_notes', tenantId);
     await db.run(`INSERT INTO task_notes (${tenant.columnSql}task_id, author, content) VALUES (${tenant.valueSql}?, ?, ?)`, ...tenant.values, params.taskId, changedBy, [
-            'Runtime workflow event received',
-            `Source: ${AGENT_HQ_RUNTIME_SOURCE}`,
-            `Event: ${RUNTIME_FAILED_EVENT}`,
+            'Run failed',
             `Instance ID: ${params.instanceId}`,
             `Runtime end source: ${params.runtimeEndSource}`,
             `Message: ${summary}`,
-            mapping ? `Resolved mapping: #${mapping.id}` : 'Resolved mapping: none',
-            `Action: ${mapping?.action_kind ?? 'none'}${mapping?.action_target ? ` → ${mapping.action_target}` : ''}`,
-            'Classification: runtime/control-plane failure event, not an agent-authored product failure outcome',
+            `Agent HQ posted ${RUNTIME_FAILED_OUTCOME}: a runtime or control-plane failure, not an outcome the agent reported.`,
           ].join('\n'));
   } catch {
     // task_notes may not exist in minimal tests; task_history remains the durable audit trail.
   }
 
-  if (!mapping || mapping.action_kind === 'ignore') return;
-
-  if (mapping.action_kind === 'status' && mapping.action_target) {
-    if (params.priorTaskStatus === mapping.action_target) return;
-    await db.run(`
-      UPDATE tasks
-      SET status = ?,
-          failure_detail = CASE WHEN ? THEN ? ELSE failure_detail END,
-          updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
-      WHERE id = ?
-    `, mapping.action_target, mapping.apply_failure_detail ? 1 : 0, failureDetail, params.taskId);
-    await writeTaskStatusChange(db, params.taskId, changedBy, params.priorTaskStatus, mapping.action_target, {
-            instanceId: params.instanceId,
-            reason: `Workflow event ${RUNTIME_FAILED_EVENT} via ${AGENT_HQ_RUNTIME_SOURCE}. ${summary}`,
-            projectId: params.projectId,
-            agentId: params.agentId,
-          });
-    await notifyTaskStatusChange(db, {
-            taskId: params.taskId,
-            fromStatus: params.priorTaskStatus,
-            toStatus: mapping.action_target,
-            source: changedBy,
-          });
-    return;
-  }
-
-  if (mapping.action_kind === 'outcome' && mapping.action_target) {
-    try {
-      await applyTaskOutcome(db, {
-        taskId: params.taskId,
-        outcome: mapping.action_target,
-        changedBy,
-        summary: `Workflow event ${RUNTIME_FAILED_EVENT} via ${AGENT_HQ_RUNTIME_SOURCE}. ${summary}`,
-        instanceId: params.instanceId,
-        failureDetail: mapping.apply_failure_detail ? failureDetail : undefined,
-      });
-    } catch (error) {
-      // A stale/default event mapping must not interrupt terminal run processing.
-      // Keep the workflow's allowed outcomes authoritative and audit the rejected
-      // mapping; database and other unexpected failures must still propagate.
-      if (!(error instanceof WorkflowAllowedValuesError)
-        || error.code !== 'task_outcome_not_allowed_for_workflow') throw error;
-      await writeTaskHistory(db, params.taskId, changedBy, 'workflow_event_mapping_rejected',
-        mapping.id, error.message, false);
-      if (mapping.apply_failure_detail) {
-        await db.run('UPDATE tasks SET failure_detail = ? WHERE id = ?',
-          `${failureDetail}\nRejected mapping #${mapping.id}: ${error.message}`, params.taskId);
-      }
-      console.warn(`[runtime-failure] Rejected workflow event mapping #${mapping.id} for task #${params.taskId}: ${error.message}`);
-    }
+  try {
+    await applyTaskOutcome(db, {
+      taskId: params.taskId,
+      outcome: RUNTIME_FAILED_OUTCOME,
+      changedBy,
+      summary,
+      instanceId: params.instanceId,
+      failureDetail,
+    });
+  } catch (error) {
+    // No route (or a gate on the route) refuses runtime_failed like any other outcome. The task
+    // stays and is dispatched again; record why. Database and other failures still propagate.
+    const refused = error instanceof RefusedTaskOutcomeError
+      || (error instanceof WorkflowAllowedValuesError && error.code === 'task_outcome_not_allowed_for_workflow');
+    if (!refused) throw error;
+    const reason = `${error.message}. The task stays in "${params.priorTaskStatus}" and will be dispatched again.`;
+    await writeTaskHistory(db, params.taskId, changedBy, 'runtime_failed_unrouted', null, reason, false);
+    await db.run('UPDATE tasks SET failure_detail = ? WHERE id = ?', `${failureDetail}\n${reason}`, params.taskId);
+    console.warn(`[runtime-failure] Task #${params.taskId}: ${reason}`);
   }
 }
