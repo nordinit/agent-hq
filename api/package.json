@@ -12,7 +12,7 @@
     "mcp": "tsx src/mcp/server.ts",
     "dev": "tsx watch src/index.ts",
     "dev:dev": "PORT=3511 tsx watch src/index.ts",
-    "build": "node -e \"fs.rmSync('dist',{recursive:true,force:true})\" && tsc",
+    "build": "node -e \"fs.rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.build.json",
     "db:migrate": "node dist/db/migrate.js",
     "db:install": "node dist/db/migrate.js --install",
     "db:migrate:preflight": "node dist/db/migrate.js",
@@ -23,7 +23,6 @@
     "lint": "tsc --noEmit && npm run lint:sql",
     "lint:sql": "node --import tsx src/tooling/sqlPortabilityLint.ts",
     "test": "jest",
-    "test:chat-deep-link": "jest --runInBand --config '{\"preset\":\"ts-jest\",\"testEnvironment\":\"node\",\"testMatch\":[\"**/src/lib/chatDeepLink.test.js\"]}'",
     "seed:dev": "npx tsx src/db/seed-dev.ts"
   },
   "jest": {
@@ -57,11 +56,8 @@
     "dotenv": "^17.3.1",
     "express": "^4.22.3",
     "multer": "^2.4.0",
-    "node-fetch": "^3.3.2",
     "pg": "^8.22.0",
-    "pg-copy-streams": "^7.0.0",
     "re2js": "2.8.6",
-    "simple-git": "^3.36.0",
     "ws": "^8.21.0",
     "zod": "^4.3.6"
   },

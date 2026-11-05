@@ -4,7 +4,7 @@ FROM node:22-alpine AS builder
 WORKDIR /build/api
 COPY api/package.json api/package-lock.json ./
 RUN npm ci
-COPY api/tsconfig.json ./
+COPY api/tsconfig.json api/tsconfig.build.json ./
 COPY api/src/ ./src/
 RUN npm run build
 
