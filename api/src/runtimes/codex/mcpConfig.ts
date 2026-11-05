@@ -9,6 +9,7 @@ import {
   NO_ALLOWED_MCP_TOOLS_SENTINEL,
   type CodexMcpMaterialization,
 } from './types';
+import { CODEX_MCP_TOOLS_APPROVAL_MODE } from './policy';
 
 export const CODEX_CONFIG_FILENAME = 'config.toml';
 export const CODEX_MCP_SNAPSHOT_FILENAME = 'agent-hq-mcp-servers.json';
@@ -61,6 +62,10 @@ function renderServer(name: string, server: Record<string, unknown>): string {
     // intentionally unqualified here.
     lines.push(`enabled_tools = ${tomlStringArray(include)}`);
   }
+  // Agent HQ's allowlist above is the gate for assigned tools. Without an
+  // explicit mode Codex 0.164 asks for approval, which approval_policy "never"
+  // turns into a failed call for every MCP tool.
+  lines.push(`default_tools_approval_mode = ${tomlString(CODEX_MCP_TOOLS_APPROVAL_MODE)}`);
 
   for (const field of ['startup_timeout_sec', 'tool_timeout_sec'] as const) {
     const value = server[field];

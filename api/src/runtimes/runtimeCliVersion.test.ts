@@ -28,19 +28,21 @@ describe('runtime CLI version policy', () => {
   it('assesses both lower and exclusive upper compatibility boundaries', () => {
     expect(assessRuntimeCliVersion('claude-code', '2.1.220 (Claude Code)').ok).toBe(true);
     expect(assessRuntimeCliVersion('claude-code', '2.2.0 (Claude Code)').ok).toBe(false);
-    expect(assessRuntimeCliVersion('codex', 'codex-cli 0.146.0').ok).toBe(true);
-    expect(assessRuntimeCliVersion('codex', 'codex-cli 0.147.0').ok).toBe(false);
+    expect(assessRuntimeCliVersion('codex', 'codex-cli 0.164.0').ok).toBe(true);
+    expect(assessRuntimeCliVersion('codex', 'codex-cli 0.165.0').ok).toBe(false);
+    // The adapter policy was re-verified for 0.164; the previous pin no longer applies.
+    expect(assessRuntimeCliVersion('codex', 'codex-cli 0.146.0').ok).toBe(false);
   });
 
   it('probes an explicitly allowlisted fixture without starting a model turn', async () => {
-    const executable = fixture('codex-cli 0.146.3');
+    const executable = fixture('codex-cli 0.164.3');
     process.env.AGENT_HQ_ALLOWED_CODEX_BINARIES = executable;
     await expect(probeAllowedRuntimeCliVersion({
       runtime: 'codex',
       command: executable,
     })).resolves.toMatchObject({
       ok: true,
-      version: 'codex-cli 0.146.3',
+      version: 'codex-cli 0.164.3',
       executablePath: fs.realpathSync(executable),
       executableFingerprint: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
       details: {
@@ -51,7 +53,7 @@ describe('runtime CLI version policy', () => {
   });
 
   it('rejects a request-selected fixture before executing it when not allowlisted', async () => {
-    const executable = fixture('codex-cli 0.146.0');
+    const executable = fixture('codex-cli 0.164.0');
     delete process.env.AGENT_HQ_ALLOWED_CODEX_BINARIES;
     await expect(probeAllowedRuntimeCliVersion({
       runtime: 'codex',

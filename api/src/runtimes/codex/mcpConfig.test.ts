@@ -66,6 +66,8 @@ describe('Codex MCP config materialization', () => {
     expect(toml).toContain('[mcp_servers."agent-hq__agent-42"]');
     expect(toml).toContain('env = { "AGENT_HQ_MCP_API_KEY" = "ahq_mcp_secret" }');
     expect(toml).toContain('enabled_tools = ["issue_create", "issue_update"]');
+    // Codex 0.164 fails every MCP call under approval_policy "never" without this.
+    expect(toml.match(/^default_tools_approval_mode = "approve"$/gm)).toHaveLength(2);
     expect(toml).not.toContain('agentHqAssignment');
     expect(result.requiredServerNames).toEqual(['agent-hq__agent-42']);
     expect(fs.statSync(result.configPath).mode & 0o777).toBe(0o600);

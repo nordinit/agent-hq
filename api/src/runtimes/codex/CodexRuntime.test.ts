@@ -30,14 +30,14 @@ const mockResolveRuntimeExecutable = jest.fn((..._args: unknown[]) => ({
 }));
 const mockProbeRuntimeCliVersion = jest.fn(async (..._args: unknown[]) => ({
   ok: true,
-  version: 'codex-cli 0.146.0',
+  version: 'codex-cli 0.164.0',
   executablePath: '/opt/agent-hq/bin/codex',
   executableFingerprint: 'sha256:test-codex-executable',
-  message: 'codex-cli 0.146.0 (supported)',
+  message: 'codex-cli 0.164.0 (supported)',
   details: {
-    minimum_supported: '0.146.0',
-    maximum_exclusive: '0.147.0',
-    detected: '0.146.0',
+    minimum_supported: '0.164.0',
+    maximum_exclusive: '0.165.0',
+    detected: '0.164.0',
     executable_path: '/opt/agent-hq/bin/codex',
     executable_fingerprint: 'sha256:test-codex-executable',
   },
@@ -160,14 +160,14 @@ beforeEach(() => {
   mockProbeRuntimeCliVersion.mockReset();
   mockProbeRuntimeCliVersion.mockResolvedValue({
     ok: true,
-    version: 'codex-cli 0.146.0',
+    version: 'codex-cli 0.164.0',
     executablePath: '/opt/agent-hq/bin/codex',
     executableFingerprint: 'sha256:test-codex-executable',
-    message: 'codex-cli 0.146.0 (supported)',
+    message: 'codex-cli 0.164.0 (supported)',
     details: {
-      minimum_supported: '0.146.0',
-      maximum_exclusive: '0.147.0',
-      detected: '0.146.0',
+      minimum_supported: '0.164.0',
+      maximum_exclusive: '0.165.0',
+      detected: '0.164.0',
       executable_path: '/opt/agent-hq/bin/codex',
       executable_fingerprint: 'sha256:test-codex-executable',
     },
@@ -420,14 +420,14 @@ describe('CodexRuntime', () => {
   it('rejects an unsupported Codex CLI before profile materialization or model spend', async () => {
     mockProbeRuntimeCliVersion.mockResolvedValueOnce({
       ok: false,
-      version: 'codex-cli 0.147.0',
+      version: 'codex-cli 0.165.0',
       executablePath: '/opt/agent-hq/bin/codex',
       executableFingerprint: 'sha256:test-codex-executable',
-      message: 'codex-cli 0.147.0 is outside the verified range',
+      message: 'codex-cli 0.165.0 is outside the verified range',
       details: {
-        minimum_supported: '0.146.0',
-        maximum_exclusive: '0.147.0',
-        detected: '0.147.0',
+        minimum_supported: '0.164.0',
+        maximum_exclusive: '0.165.0',
+        detected: '0.165.0',
         executable_path: '/opt/agent-hq/bin/codex',
         executable_fingerprint: 'sha256:test-codex-executable',
       },
@@ -455,14 +455,14 @@ describe('CodexRuntime', () => {
     const fingerprintFromProbe = 'sha256:version-checked-codex';
     mockProbeRuntimeCliVersion.mockResolvedValueOnce({
       ok: true,
-      version: 'codex-cli 0.146.0',
+      version: 'codex-cli 0.164.0',
       executablePath: pathFromProbe,
       executableFingerprint: fingerprintFromProbe,
       message: 'supported',
       details: {
-        minimum_supported: '0.146.0',
-        maximum_exclusive: '0.147.0',
-        detected: '0.146.0',
+        minimum_supported: '0.164.0',
+        maximum_exclusive: '0.165.0',
+        detected: '0.164.0',
         executable_path: pathFromProbe,
         executable_fingerprint: fingerprintFromProbe,
       },

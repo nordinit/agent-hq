@@ -15,7 +15,9 @@ export type VersionVerifiedRuntime = Extract<PolicyControlledRuntime, 'claude-co
 
 export const VERIFIED_RUNTIME_CLI_RANGES: Record<VersionVerifiedRuntime, VerifiedCliRange> = {
   'claude-code': { minimum: [2, 1, 220], maximumExclusive: [2, 2, 0] },
-  codex: { minimum: [0, 146, 0], maximumExclusive: [0, 147, 0] },
+  // Each Codex minor changes feature names, model-driven tool modes and MCP
+  // approval defaults; the adapter policy is verified against 0.164 only.
+  codex: { minimum: [0, 164, 0], maximumExclusive: [0, 165, 0] },
 };
 
 export interface RuntimeCliVersionResult {

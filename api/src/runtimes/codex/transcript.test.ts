@@ -28,6 +28,19 @@ describe('decodeCodexJsonEvent', () => {
     })]);
   });
 
+  it('surfaces non-fatal Codex error items as system errors', () => {
+    expect(decodeCodexJsonEvent({
+      type: 'item.completed',
+      item: { id: 'item_0', type: 'error', message: 'Model metadata for `x` not found.' },
+    })).toEqual([{
+      kind: 'system',
+      role: 'system',
+      content: 'Model metadata for `x` not found.',
+      isError: true,
+    }]);
+    expect(decodeCodexJsonEvent({ type: 'item.completed', item: { id: 'e', type: 'error' } })).toEqual([]);
+  });
+
   it('keeps reasoning distinct from the final assistant answer', () => {
     expect(decodeCodexJsonEvent({
       type: 'item.completed',

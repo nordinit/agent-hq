@@ -46,7 +46,7 @@ afterEach(() => {
 describe('runtime driver diagnostics', () => {
   it('checks Codex command, version, workspace, and config home without starting a turn', async () => {
     const codexHome = temporaryDirectory();
-    const codexBin = fakeRuntimeCli('codex-cli 0.146.0', true);
+    const codexBin = fakeRuntimeCli('codex-cli 0.164.0', true);
     allowRuntimeCli('codex', codexBin);
     const result = await diagnoseRuntimeDriver({
       runtimeType: 'codex',
@@ -63,7 +63,7 @@ describe('runtime driver diagnostics', () => {
 
     expect(result.ok).toBe(true);
     expect(result.executable_path).toBe(fs.realpathSync(codexBin));
-    expect(result.version).toBe('codex-cli 0.146.0');
+    expect(result.version).toBe('codex-cli 0.164.0');
     expect(result.checks).toEqual(expect.arrayContaining([
       expect.objectContaining({ key: 'command', status: 'pass' }),
       expect.objectContaining({ key: 'version', status: 'pass' }),
@@ -113,7 +113,7 @@ describe('runtime driver diagnostics', () => {
   });
 
   it('fails closed for a newer unverified CLI contract family', async () => {
-    const codexBin = fakeRuntimeCli('codex-cli 0.147.0', true);
+    const codexBin = fakeRuntimeCli('codex-cli 0.165.0', true);
     allowRuntimeCli('codex', codexBin);
     const result = await diagnoseRuntimeDriver({
       runtimeType: 'codex',
@@ -155,7 +155,7 @@ describe('runtime driver diagnostics', () => {
     fs.writeFileSync(attacker, [
       '#!/bin/sh',
       `touch ${JSON.stringify(marker)}`,
-      `printf '%s\\n' 'codex-cli 0.146.0'`,
+      `printf '%s\\n' 'codex-cli 0.164.0'`,
       'exit 0',
       '',
     ].join('\n'), { mode: 0o755 });

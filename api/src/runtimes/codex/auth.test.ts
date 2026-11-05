@@ -49,7 +49,7 @@ const credential = {
   idToken: 'id-token',
 };
 
-function fakeCodex(version = 'codex-cli 0.146.0', authReady = true): string {
+function fakeCodex(version = 'codex-cli 0.164.0', authReady = true): string {
   const executable = path.join(root, `codex-${version.replace(/[^a-z0-9]+/gi, '-')}`);
   fs.writeFileSync(executable, [
     '#!/bin/sh',
@@ -178,7 +178,7 @@ describe('Codex managed auth', () => {
   });
 
   it('fails before auth materialization when the installed CLI family is unverified', async () => {
-    const result = await prepareCodexAuthProfiles({ codexBin: fakeCodex('codex-cli 0.147.0') }, {
+    const result = await prepareCodexAuthProfiles({ codexBin: fakeCodex('codex-cli 0.165.0') }, {
       agentSlug: 'cinder',
       agentId: 7,
       tenantId: 1,
@@ -190,7 +190,7 @@ describe('Codex managed auth', () => {
       ok: false,
       status: 'failed',
       source: 'runtime-cli-version',
-      details: { runtime_cli_version: 'codex-cli 0.147.0' },
+      details: { runtime_cli_version: 'codex-cli 0.165.0' },
     });
     expect(resolveOAuth).not.toHaveBeenCalled();
   });
@@ -211,7 +211,7 @@ describe('Codex managed auth', () => {
 
   it('fails without a provider when the effective CODEX_HOME is unauthenticated', async () => {
     const result = await prepareCodexAuthProfiles({
-      codexBin: fakeCodex('codex-cli 0.146.0', false),
+      codexBin: fakeCodex('codex-cli 0.164.0', false),
       codexHomeRoot: root,
     }, {
       agentSlug: 'cinder',

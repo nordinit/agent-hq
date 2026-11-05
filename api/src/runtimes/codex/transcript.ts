@@ -37,6 +37,13 @@ export function decodeCodexJsonEvent(event: CodexJsonEvent): RuntimeTranscriptEv
   const itemType = text(item.type);
   const itemId = text(item.id) || undefined;
 
+  // Codex 0.164 reports non-fatal problems (missing model metadata, code mode
+  // unavailable) as `error` items; turn failures still arrive as turn.failed.
+  if (type === 'item.completed' && itemType === 'error') {
+    const value = text(item.message);
+    return value ? [{ kind: 'system', role: 'system', content: value, isError: true }] : [];
+  }
+
   if (type === 'item.completed' && itemType === 'agent_message') {
     const value = text(item.text);
     return value ? [{ kind: 'text', role: 'assistant', content: value }] : [];

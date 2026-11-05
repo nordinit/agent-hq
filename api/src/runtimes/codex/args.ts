@@ -2,6 +2,7 @@ import type { CodexArgsInput, CodexReasoningEffort } from './types';
 import {
   CODEX_DISABLED_AMBIENT_FEATURES,
   CODEX_FAST_MODE_FEATURE,
+  CODEX_POLICY_CONFIG_OVERRIDES,
 } from './policy';
 
 function tomlString(value: string): string {
@@ -36,12 +37,12 @@ export function buildCodexArgs(input: CodexArgsInput): string[] {
   const { config } = input;
   const args = ['exec'];
 
-  // `--profile` belongs to the exec parent command in Codex 0.146.0 and is not
-  // accepted after the `resume` subcommand. Select it before branching.
+  // `--profile` belongs to the exec parent command (verified on Codex 0.164.0)
+  // and is not accepted after the `resume` subcommand. Select it before branching.
   if (input.configProfile) args.push('--profile', input.configProfile);
   if (config.resumeSessionId) args.push('resume');
 
-  // Installed Codex 0.146 suppresses the selected v2 profile when
+  // Codex 0.164 still suppresses the selected v2 profile when
   // `--ignore-user-config` is present, which would silently remove assigned
   // MCP. Project/system config and capability-bearing user config are gated
   // separately; higher-precedence CLI policy remains pinned here.
@@ -55,13 +56,16 @@ export function buildCodexArgs(input: CodexArgsInput): string[] {
   if (!config.resumeSessionId) args.push('--color', 'never');
 
   // These are config overrides rather than short flags because `exec resume`
-  // does not expose --sandbox/--approval flags in Codex CLI 0.146.0.
+  // does not expose --sandbox/--approval flags (Codex CLI 0.164.0).
   args.push('-c', `approval_policy=${tomlString(config.approvalPolicy)}`);
   args.push('-c', `sandbox_mode=${tomlString(config.sandboxMode)}`);
   args.push('-c', `service_tier=${tomlString(input.fastMode === true ? 'fast' : 'default')}`);
   args.push('-c', 'allow_login_shell=false');
   args.push('-c', `shell_environment_policy.inherit=${tomlString('core')}`);
   args.push('-c', 'shell_environment_policy.ignore_default_excludes=false');
+  for (const [key, value] of CODEX_POLICY_CONFIG_OVERRIDES) {
+    args.push('-c', `${key}=${value}`);
+  }
 
   const effort = normalizeCodexReasoningEffort(input.reasoningEffort) ?? config.reasoningEffort;
   if (effort) args.push('-c', `model_reasoning_effort=${tomlString(effort)}`);

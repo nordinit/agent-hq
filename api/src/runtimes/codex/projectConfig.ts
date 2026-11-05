@@ -54,7 +54,7 @@ export function codexSystemConfigPaths(): string[] {
 }
 
 /**
- * Codex 0.146 loads `.codex/config.toml` project layers that can add MCP
+ * Codex (0.146 and later) loads `.codex/config.toml` project layers that can add MCP
  * servers, hooks, plugins, models, and sandbox settings after Agent HQ builds
  * its boundary. The installed CLI's `--ignore-user-config` also suppresses the
  * selected v2 profile (and therefore assigned MCP), so it is not a usable

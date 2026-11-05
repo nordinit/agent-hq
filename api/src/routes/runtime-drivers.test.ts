@@ -19,7 +19,7 @@ jest.mock('../domains/runtimes/driverDiagnostics', () => ({
     duration_ms: 1,
     command: 'codex',
     executable_path: '/usr/local/bin/codex',
-    version: 'codex-cli 0.146.0',
+    version: 'codex-cli 0.164.0',
     workspace_path: input.workspacePath,
     checks: [],
   })),

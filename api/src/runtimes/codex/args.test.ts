@@ -3,11 +3,16 @@ import { normalizeCodexRuntimeConfig } from './config';
 import {
   CODEX_DISABLED_AMBIENT_FEATURES,
   CODEX_FAST_MODE_FEATURE,
+  CODEX_POLICY_CONFIG_OVERRIDES,
 } from './policy';
 
 const disabledFeatureArgs = CODEX_DISABLED_AMBIENT_FEATURES.flatMap((feature) => [
   '--disable',
   feature,
+]);
+const policyOverrideArgs = CODEX_POLICY_CONFIG_OVERRIDES.flatMap(([key, value]) => [
+  '-c',
+  `${key}=${value}`,
 ]);
 
 describe('buildCodexArgs', () => {
@@ -41,6 +46,7 @@ describe('buildCodexArgs', () => {
       'shell_environment_policy.inherit="core"',
       '-c',
       'shell_environment_policy.ignore_default_excludes=false',
+      ...policyOverrideArgs,
       '-c',
       'model_reasoning_effort="high"',
       '--model',
@@ -83,6 +89,7 @@ describe('buildCodexArgs', () => {
       'shell_environment_policy.inherit="core"',
       '-c',
       'shell_environment_policy.ignore_default_excludes=false',
+      ...policyOverrideArgs,
       '--model',
       'gpt-5.4',
       '019c1234-1234-7000-8000-123456789abc',
@@ -128,6 +135,27 @@ describe('buildCodexArgs', () => {
       args[index - 1] === '--disable' ? [value] : []
     ));
     expect(disabled).not.toContain(CODEX_FAST_MODE_FEATURE);
+  });
+
+  it('pins the 0.164 surfaces that feature flags no longer gate', () => {
+    const args = buildCodexArgs({ config: normalizeCodexRuntimeConfig({}) });
+    for (const pair of [
+      'agents.enabled=false',
+      'skills.include_instructions=false',
+      'skills.bundled.enabled=false',
+      'web_search="disabled"',
+    ]) {
+      expect(args).toEqual(expect.arrayContaining(['-c', pair]));
+    }
+    const disabled = args.flatMap((value, index) => (
+      args[index - 1] === '--disable' ? [value] : []
+    ));
+    // Code-mode-only models fail closed without the host; it must stay enabled.
+    expect(disabled).not.toContain('code_mode_host');
+    for (const feature of ['sleep_tool', 'view_image', 'tool_search_always_defer_mcp_tools', 'daemon_auto_start']) {
+      expect(disabled).toContain(feature);
+    }
+    expect(new Set(disabled).size).toBe(disabled.length);
   });
 
   it('normalizes only the canonical OpenAI provider prefix', () => {
