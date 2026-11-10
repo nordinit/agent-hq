@@ -1,7 +1,7 @@
 import type { Db } from '../../db/adapter/types';
 /** Read-only migration report. Never includes key hashes, plaintext keys or executable bodies. */
 export async function executionReadiness(db: Db, tenantId: number) {
-    const keys = await db.all(`SELECT k.id,k.agent_id,k.key_role,k.revoked_at,k.expires_at FROM mcp_api_keys k WHERE k.tenant_id=? ORDER BY k.id`, tenantId);
+    const keys = await db.all(`SELECT k.id,k.agent_id,k.role AS key_role,k.revoked_at,k.expires_at FROM mcp_api_keys k WHERE k.tenant_id=? ORDER BY k.id`, tenantId);
     const agents = await db.all(`SELECT a.id,a.name,a.project_id,a.runtime_type,a.enabled,
     EXISTS(SELECT 1 FROM agent_mcp_capability_policies p WHERE p.agent_id=a.id AND p.capability_key='host.execute' AND p.enabled=1) AS host_execution_granted,
     EXISTS(SELECT 1 FROM execution_bindings b JOIN executable_revisions r ON r.id=b.revision_id

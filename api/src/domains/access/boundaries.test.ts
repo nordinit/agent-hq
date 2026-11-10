@@ -15,6 +15,7 @@ describe('separate project observation and executable authority',()=>{
   let server:Server,base:string,networkEffects=0,networkCredential='';const keys:Record<string,string>={};
   beforeEach(async()=>{
     const db=await setupTestDb();
+    keys.operator=process.env.AGENT_HQ_OPERATOR_TOKEN!;
     networkEffects=0;
     networkCredential='';
     await db.run("INSERT INTO tenants(id,name,slug,is_default) VALUES(1,'One','one',1),(2,'Two','two',0)");
@@ -42,6 +43,15 @@ describe('separate project observation and executable authority',()=>{
     return {status:r.status,body:await r.json().catch(()=>null) as any};
   };
   async function tool(){const db=getDb();const r=await db.run("INSERT INTO tools(tenant_id,name,slug,implementation_type,implementation_body,input_schema,permissions,enabled) VALUES(1,'Fixture','fixture','bash','printf original',?, 'read_only',1)",JSON.stringify({type:'object',properties:{value:{type:'string'}},additionalProperties:false}));return Number(r.lastInsertId);}
+  it('provides operator readiness metadata without credential values',async()=>{
+    const result=await request('operator','GET','/execution/readiness');
+    expect(result.status).toBe(200);
+    expect(result.body.keys.length).toBeGreaterThan(0);
+    expect(result.body.keys[0].key_role).toBeDefined();
+    expect(result.body.automatic_grants).toBe(false);
+    expect(result.body.keys.some((key:Record<string,unknown>)=>'key_hash' in key||'key_prefix' in key)).toBe(false);
+    expect((await request('observer','GET','/execution/readiness')).status).toBe(403);
+  });
   it('reads a second project without writes, execution, callbacks, raw config or another tenant',async()=>{
     const r=await request('observer','GET','/projects/301');expect(r.status).toBe(200);expect(r.body.name).toBe('Pred Mkt Trader');
     expect(r.body).not.toHaveProperty('runtime_config');expect(r.body).not.toHaveProperty('custom_fields_json');expect(r.body.custom_fields).toEqual({qualified:7});

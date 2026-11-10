@@ -4,7 +4,7 @@ This plugin fetches Agent HQ-assigned capability tools from the materialized end
 
 ## Credential
 
-Every Agent HQ `/api/v1` request must authenticate, so the plugin needs a credential: the operator token (`AGENT_HQ_OPERATOR_TOKEN`) or an Agent HQ MCP key with administrative access. It is read, in order, from:
+Every Agent HQ `/api/v1` request must authenticate. This host integration uses the operator token (`AGENT_HQ_OPERATOR_TOKEN`); a business administrator key alone cannot invoke executable tools. The token is read, in order, from:
 
 1. `apiToken` in the plugin's OpenClaw config.
 2. `apiTokenFile` in the plugin's OpenClaw config: a file holding the token alone, or dotenv lines with `AGENT_HQ_OPERATOR_TOKEN` (such as the `~/.agent-hq/.env` that `agent-hq start` writes). Re-read on every fetch, so a rotated token is picked up without a restart.
@@ -12,7 +12,7 @@ Every Agent HQ `/api/v1` request must authenticate, so the plugin needs a creden
 
 Prefer `apiTokenFile`: it keeps the secret out of the gateway's environment and out of `openclaw.json`, a file that is often copied around while debugging.
 
-Shell and script tools inherit the gateway's environment minus any Agent HQ credential: variables named `AGENT_HQ_*` containing `TOKEN`, `KEY`, `SECRET`, `PASSWORD`, `CREDENTIAL` or `DATABASE_URL` are removed, so a tool never receives the plugin's token. A tool definition that needs one must set it in its own `env`.
+The plugin executes no registry shell, script or HTTP definition locally. It sends the approved revision ID and input to the Agent HQ execution broker, which rechecks publication, assignment, revocation and the recipient's explicit execution capabilities. Published launch environments are resolved server-side. Legacy executable payloads are refused.
 
 The API URL comes from `apiUrl` in the plugin config, then `AGENT_HQ_API_URL`, then `http://127.0.0.1:3501`.
 
@@ -57,13 +57,10 @@ The recommended setup is `profile: "coding"` plus `alsoAllow: ["agent-hq-capabil
 2. Resolves the active OpenClaw agent id from the OpenClaw tool context.
 3. Calls `GET /api/v1/tools/materialized/agents/:openclawAgentId`.
 4. Uses Agent HQ's `agents.openclaw_agent_id` mapping to scope assignments.
-5. Returns the assigned tools for that agent as native OpenClaw tools.
-6. Executes the tool according to `execution_type`:
-   - `shell`
-   - `script`
-   - `http`
+5. Returns approved assigned tools for that agent as native OpenClaw tools.
+6. Invokes `POST /api/v1/execution/agents/:agentId/invoke` with the immutable revision ID and input. No local executable source is accepted.
 
-Agent HQ remains the source of truth for assigned tool metadata, schemas, and execution definitions.
+Agent HQ remains the source of truth for assigned tool metadata, schemas, publication and execution authority. Existing assignments require explicit publication, binding and recipient capability grants before invocation.
 
 ## Notes
 
