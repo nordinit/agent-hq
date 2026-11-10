@@ -1,65 +1,21 @@
 #!/usr/bin/env node
-/**
- * bin/agent-tool-mcp.ts — standalone stdio MCP server exposing one agent's
- * registry tools (the `tools` + `agent_tool_assignments` rows).
- *
- * Why this exists: api/src/runtimes/toolInjection.ts serves the same tools via
- * the Claude Agent SDK's `createSdkMcpServer()`, which only works while the
- * agent runs INSIDE that SDK process. The claude-code runtime is moving to the
- * CLI, so the tools have to travel over a real transport. Making it a separate
- * process also (a) lets Codex/Hermes mount the same server from their own
- * mcp-config, and (b) puts execution back in the run's cwd — in-process
- * execution inherited the API server's cwd and blurred the workspace boundary.
- *
- * Mount it from a run-scoped mcp-config.json:
- *   { "command": "node", "args": ["dist/bin/agent-tool-mcp.js", "--agent-id", "42"], "cwd": "<run cwd>" }
- *
- * NOTHING in this file may write to stdout. stdout is the JSON-RPC channel and
- * a stray console.log corrupts the protocol mid-session; every diagnostic goes
- * to console.error (same rule as src/mcp/server.ts).
- *
- * This module deliberately does NOT import '@anthropic-ai/claude-agent-sdk',
- * and does NOT import runtimes/toolInjection — the execution helpers below are
- * copied rather than imported. That import edge would drag the runtime
- * directory (and the SDK) into every process that mounts this server, and
- * several runtime test files replace 'child_process' wholesale
- * (`jest.mock('child_process', () => ({ spawn }))`), which would leave
- * toolInjection's execSync/execFileSync undefined for anything importing it.
- */
-
-import { execFileSync, execSync } from 'child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'fs';
-import os from 'os';
-import path from 'path';
+import {executionBrokerClient} from '../domains/execution/brokerClient';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { getDb } from '../db/client';
-import { fetchEffectiveAgentToolRows } from '../domains/teams/effectiveCapabilities';
-import { type Db } from '../db/adapter/types';
-import { sanitizedRuntimeProcessEnv } from '../runtimes/environment';
 
 export const SERVER_NAME = 'agent-hq-agent-tools';
 export const SERVER_VERSION = '1.0.0';
 
-const DEFAULT_TOOL_TIMEOUT_MS = 180_000;
-const MAX_OUTPUT_BYTES = 1024 * 1024;
-
-/**
- * MCP tool names reach the model as `mcp__<server>__<tool>`; the Messages API
- * rejects anything outside `[A-Za-z0-9_-]{1,64}`, and a single bad name fails
- * the whole request rather than that one tool. Registry slugs are free text
- * (there is no slug validation on POST /api/v1/tools), so they are normalised
- * before registration. The bound is deliberately below 64 to leave room for the
- * server-name prefix the CLI prepends.
- */
+/** Standalone stdio bridge: discovery and execution use an authenticated broker.
+ * This process has no database client or local code executor. stdout is JSON-RPC only. */
 const MAX_MCP_TOOL_NAME_LENGTH = 48;
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
 /**
- * Shape returned by fetchAgentTools(). Copied from runtimes/toolInjection.ts
- * rather than imported — see the header note on the import edge.
+ * Registry metadata shape retained for schema/name normalization. The live bridge
+ * receives only broker discovery metadata and never loads executable bodies.
  */
 export interface AgentToolRecord {
   id: number;
@@ -119,71 +75,8 @@ function parseJsonRecord(value: string | null | undefined): Record<string, unkno
   }
 }
 
-function readTimeoutMs(value: unknown): number {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : DEFAULT_TOOL_TIMEOUT_MS;
-}
-
 function trimmedString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
-}
-
-// ── DB fetch ─────────────────────────────────────────────────────────────────
-
-/**
- * All enabled tools an agent can run, tenant-scoped: its own assignments plus
- * those of every team it belongs to.
- *
- * Resolution is shared with the dispatcher via domains/teams — NOT copied, as
- * the execution helpers below are. That module imports only a type from
- * db/adapter, so it does not reintroduce the runtime/SDK import edge this file
- * exists to avoid, and sharing it is what keeps the set this server exposes
- * identical to the set the dispatcher materialized. A copy that drifted would
- * mean an agent seeing tools it was never granted.
- *
- * Tenant scoping lives in that resolver's join conditions: an assignment
- * pointing at another tenant's tool yields nothing rather than executing it.
- * The counts below exist only to make such rows visible in the log instead of
- * vanishing silently.
- */
-export async function fetchAgentTools(db: Db, agentId: number): Promise<AgentToolRecord[]> {
-  const rows = await fetchEffectiveAgentToolRows(db, agentId) as unknown as AgentToolRecord[];
-
-  try {
-    const stale = await db.get(`
-      SELECT
-        (SELECT COUNT(*)
-           FROM agent_tool_assignments ata
-           JOIN agents a ON a.id = ata.agent_id
-           JOIN tools t ON t.id = ata.tool_id
-          WHERE ata.agent_id = ?
-            AND ata.enabled = 1
-            AND t.enabled = 1
-            AND t.tenant_id <> a.tenant_id) AS agent_count,
-        (SELECT COUNT(*)
-           FROM team_members tm
-           JOIN teams te ON te.id = tm.team_id
-           JOIN agents a ON a.id = tm.agent_id
-           JOIN team_tool_assignments tta ON tta.team_id = te.id
-           JOIN tools t ON t.id = tta.tool_id
-          WHERE tm.agent_id = ?
-            AND tm.enabled = 1
-            AND te.enabled = 1
-            AND te.deleted_at IS NULL
-            AND tta.enabled = 1
-            AND t.enabled = 1
-            AND (t.tenant_id <> a.tenant_id OR te.tenant_id <> a.tenant_id)) AS team_count
-    `, agentId, agentId) as { agent_count?: number; team_count?: number } | undefined;
-    const agentCount = Number(stale?.agent_count ?? 0);
-    const teamCount = Number(stale?.team_count ?? 0);
-    if (agentCount > 0) {
-      console.error(`[agent-tool-mcp] Suppressed ${agentCount} cross-tenant tool assignment(s) for agent #${agentId}`);
-    }
-    if (teamCount > 0) {
-      console.error(`[agent-tool-mcp] Suppressed ${teamCount} cross-tenant team tool assignment(s) for agent #${agentId}`);
-    }
-  } catch { /* best-effort stale assignment evidence only */ }
-
-  return rows;
 }
 
 // ── input_schema → MCP schema ────────────────────────────────────────────────
@@ -334,177 +227,6 @@ export function buildToolDefinitions(
   return definitions;
 }
 
-// ── Execution ────────────────────────────────────────────────────────────────
-
-function toolExecutionEnv(input: Record<string, unknown>): NodeJS.ProcessEnv {
-  return {
-    ...sanitizedRuntimeProcessEnv(),
-    TOOL_INPUT: JSON.stringify(input),
-    ...Object.fromEntries(
-      Object.entries(input).map(([k, v]) => [
-        `TOOL_${k.toUpperCase().replace(/[^A-Z0-9_]/g, '_')}`,
-        typeof v === 'string' ? v : JSON.stringify(v),
-      ]),
-    ),
-  };
-}
-
-/**
- * A shell tool's command plus its declared timeout.
- *
- * Two stored forms are in the wild for bash/shell rows: the raw command as
- * plain text, and the capability-tool payload `{command, timeoutMs, ...}` that
- * src/capability-tools/materialize.ts reads (see its `shell` tests). Both are
- * accepted. `cwd` and `env` from that payload are deliberately ignored — the
- * point of running out-of-process is that tools execute in the run's cwd, and
- * honouring a stored cwd would hand that boundary back to the tool row.
- */
-function resolveShellCommand(implementationBody: string): { command: string; timeout: number } {
-  const body = parseJsonRecord(implementationBody);
-  const declared = trimmedString(body.command);
-  if (declared) return { command: declared, timeout: readTimeoutMs(body.timeoutMs) };
-  return { command: implementationBody, timeout: DEFAULT_TOOL_TIMEOUT_MS };
-}
-
-/**
- * Run a tool implementation and return an MCP result.
- *
- * Never throws: a thrown error would cross the JSON-RPC boundary as a protocol
- * error and abort the model's turn, where `isError: true` lets the model read
- * the failure and retry. Stderr is appended because the exit status of a failed
- * shell tool is otherwise unactionable.
- */
-export function executeAgentTool(
-  tool: AgentToolRecord,
-  input: Record<string, unknown>,
-  workingDirectory?: string,
-): McpTextResult {
-  try {
-    switch (tool.implementation_type) {
-      // 'shell' shares this branch with 'bash'. toolInjection's switch omitted
-      // it, so every stored shell tool failed at call time as "unsupported"
-      // even though the schema CHECK, the capability materializer and the
-      // OpenClaw endpoint all treat shell as a shell command.
-      case 'bash':
-      case 'shell': {
-        const { command, timeout } = resolveShellCommand(tool.implementation_body);
-        if (!command) {
-          return {
-            content: [{ type: 'text', text: 'Error: tool has no implementation body' }],
-            isError: true,
-          };
-        }
-
-        const result = execSync(command, {
-          encoding: 'utf-8',
-          timeout,
-          cwd: workingDirectory || process.cwd(),
-          env: toolExecutionEnv(input),
-          maxBuffer: MAX_OUTPUT_BYTES,
-        });
-
-        return { content: [{ type: 'text', text: result }] };
-      }
-
-      case 'script': {
-        const body = parseJsonRecord(tool.implementation_body);
-        const command = trimmedString(body.command);
-        const inline = typeof body.inline === 'string' && body.inline.trim() ? body.inline : undefined;
-        const args = Array.isArray(body.args)
-          ? body.args.filter((entry): entry is string => typeof entry === 'string')
-          : [];
-        const timeout = readTimeoutMs(body.timeoutMs);
-        const cwd = workingDirectory || process.cwd();
-        const env = toolExecutionEnv(input);
-
-        if (command && !inline) {
-          const result = execFileSync(command, args, {
-            encoding: 'utf-8',
-            timeout,
-            cwd,
-            env,
-            maxBuffer: MAX_OUTPUT_BYTES,
-          });
-          return { content: [{ type: 'text', text: result }] };
-        }
-
-        if (!inline) {
-          return {
-            content: [{ type: 'text', text: 'Error: script tool has no inline body or command' }],
-            isError: true,
-          };
-        }
-
-        const tempDir = mkdtempSync(path.join(os.tmpdir(), 'agent-hq-tool-'));
-        const tempFile = path.join(tempDir, 'inline-script');
-        try {
-          writeFileSync(tempFile, inline, 'utf8');
-          const result = execFileSync(command || '/bin/sh', [tempFile, ...args], {
-            encoding: 'utf-8',
-            timeout,
-            cwd,
-            env,
-            maxBuffer: MAX_OUTPUT_BYTES,
-          });
-          return { content: [{ type: 'text', text: result }] };
-        } finally {
-          rmSync(tempDir, { recursive: true, force: true });
-        }
-      }
-
-      case 'function': {
-        return {
-          content: [{ type: 'text', text: 'Error: function tools are not yet supported at runtime' }],
-          isError: true,
-        };
-      }
-
-      default:
-        return {
-          content: [{ type: 'text', text: `Error: unsupported implementation type "${tool.implementation_type}"` }],
-          isError: true,
-        };
-    }
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    const stderr = (err as { stderr?: unknown })?.stderr;
-    const errorText = stderr ? `${message}\n\nStderr:\n${stderr}` : message;
-
-    return {
-      content: [{ type: 'text', text: `Error executing tool "${tool.slug}": ${errorText}` }],
-      isError: true,
-    };
-  }
-}
-
-// ── Registration ─────────────────────────────────────────────────────────────
-
-/**
- * The slice of McpServer this module uses. Structural so the registration pass
- * can be exercised without standing up a transport.
- */
-export interface ToolRegistrarLike {
-  registerTool(
-    name: string,
-    config: { description?: string; inputSchema?: unknown },
-    cb: (args: Record<string, unknown>) => Promise<McpTextResult> | McpTextResult,
-  ): unknown;
-}
-
-export function registerAgentTools(
-  server: ToolRegistrarLike,
-  definitions: readonly AgentToolDefinition[],
-  workingDirectory?: string,
-): void {
-  for (const definition of definitions) {
-    server.registerTool(
-      definition.name,
-      { description: definition.description, inputSchema: definition.inputSchema },
-      async (args: Record<string, unknown>) => executeAgentTool(definition.tool, isRecord(args) ? args : {}, workingDirectory),
-    );
-  }
-}
-
 // ── Process bootstrap ────────────────────────────────────────────────────────
 
 function readFlag(argv: readonly string[], flag: string): string | undefined {
@@ -525,9 +247,8 @@ export function resolveAgentId(argv: readonly string[], env: NodeJS.ProcessEnv):
 }
 
 /**
- * Where tools execute. Defaults to the process cwd, which is the run's cwd
- * because the CLI spawns MCP servers there — the `--cwd` flag exists only for
- * hosts that cannot set a child's working directory.
+ * Compatibility parser for older launch configurations. Tool working directories
+ * are now selected by the published broker definition; this flag grants no authority.
  */
 export function resolveWorkingDirectory(argv: readonly string[], env: NodeJS.ProcessEnv): string {
   return trimmedString(readFlag(argv, '--cwd')) ?? trimmedString(env.AGENT_HQ_TOOL_CWD) ?? process.cwd();
@@ -558,23 +279,21 @@ async function main(): Promise<void> {
     process.exit(2);
   }
 
-  const workingDirectory = resolveWorkingDirectory(argv, process.env);
-  const tools = await fetchAgentTools(getDb(), agentId);
-  const definitions = buildToolDefinitions(tools, { hardcodedToolSlugs: resolveHardcodedToolSlugs(process.env) });
-
+  const broker=executionBrokerClient();
+  const payload=await broker('GET','/agent-tools');
+  if(Number(payload.agent_id)!==agentId)throw new Error('Execution broker identity does not match this run.');
   const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION });
-  registerAgentTools(server as unknown as ToolRegistrarLike, definitions, workingDirectory);
-
+  for(const definition of buildToolDefinitions(payload.tools??[],{hardcodedToolSlugs:resolveHardcodedToolSlugs(process.env)})) {
+    const tool=definition.tool as AgentToolRecord & {revision_id:number};
+    server.registerTool(definition.name,{description:definition.description,inputSchema:definition.inputSchema},async(input:Record<string,unknown>)=>{
+      try{return await broker('POST','/invoke',{tool_id:tool.id,revision_id:tool.revision_id,input});}
+      catch{return {isError:true,content:[{type:'text' as const,text:'Execution broker refused the invocation.'}]};}
+    });
+  }
   const transport = new StdioServerTransport();
   await server.connect(transport);
 
-  // Serving zero tools is a legitimate state (an agent with no assignments), so
-  // it is logged rather than treated as a startup failure — exiting here would
-  // surface to the CLI as a dead MCP server.
-  console.error(
-    `[agent-tool-mcp] agent #${agentId}: serving ${definitions.length} tool(s) from ${workingDirectory}` +
-    (definitions.length > 0 ? `: ${definitions.map((definition) => definition.name).join(', ')}` : ''),
-  );
+  console.error('[agent-tool-mcp] Serving approved tools through the execution broker.');
 
   const shutdown = async (signal: string) => {
     console.error(`[agent-tool-mcp] Received ${signal}, shutting down...`);

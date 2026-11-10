@@ -1,3 +1,4 @@
+import {approveExecutableFixture} from '../test-support/executionFixtures';
 import express from 'express';
 import type { Server } from 'http';
 import fs from 'fs';
@@ -119,6 +120,8 @@ describe('tenant workspace isolation', () => {
       `, first.tenant.id, ATLAS_SYSTEM_ROLE) as { id: number; workspace_path: string };
       expect(atlasAgent.workspace_path).toContain(path.join('openclaw', 'workspace-atlas-acme'));
       expect(fs.existsSync(atlasAgent.workspace_path)).toBe(true);
+      const localServer=await db.get<{id:number}>('SELECT id FROM mcp_servers WHERE tenant_id=? AND slug=?',first.tenant.id,'agent-hq');
+      await approveExecutableFixture(db,first.tenant.id,atlasAgent.id,'mcp_server',localServer!.id);
       const atlasSync = await materializeAgentMcpConfig({
               db,
               agentId: atlasAgent.id,
@@ -194,15 +197,8 @@ describe('tenant workspace isolation', () => {
         expect(runtimeConfig.provisioning_template?.mcp_server_slugs).toEqual(['agent-hq']);
         expect(runtimeConfig.provisioning_template?.tool_slugs).toEqual(definition.toolSlugs);
         expect(runtimeConfig.provisioning_template?.skill_names).toEqual(definition.skillNames);
-        const agentSync = await materializeAgentMcpConfig({
-                  db,
-                  agentId: agent.id,
-                  workingDirectory: agent.workspace_path,
-                });
-        expect(agentSync.ok).toBe(true);
-        expect(agentSync.count).toBe(1);
-        const mcpConfig = JSON.parse(fs.readFileSync(path.join(agent.workspace_path, '.mcp.json'), 'utf8')) as { mcpServers: Record<string, unknown> };
-        expect(Object.keys(mcpConfig.mcpServers).filter((key) => key.startsWith('agent-hq__agent-'))).toEqual([`agent-hq__agent-${agent.id}`]);
+        await expect(materializeAgentMcpConfig({db,agentId:agent.id,workingDirectory:agent.workspace_path})).rejects.toThrow('explicit host.execute');
+        expect(Number((await db.get<{n:number}>('SELECT count(*) AS n FROM execution_bindings WHERE subject_kind=? AND subject_id=?','agent',agent.id))!.n)).toBe(0);
         const assignedToolSlugs = (await db.all(`
           SELECT t.slug
           FROM agent_tool_assignments ata
@@ -853,6 +849,9 @@ describe('tenant workspace isolation', () => {
         ON CONFLICT DO NOTHING
       `, acmeDeveloper.id, defaultServer.id);
 
+      const localServer=await db.get<{id:number}>('SELECT id FROM mcp_servers WHERE tenant_id=? AND slug=?',acme.tenant.id,'agent-hq');
+      await db.run('UPDATE agents SET enabled=1 WHERE id=?',acmeDeveloper.id);
+      await approveExecutableFixture(db,acme.tenant.id,acmeDeveloper.id,'mcp_server',localServer!.id);
       const workingDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-hq-tenant-mcp-materialize-'));
       const result = await materializeAgentMcpConfig({
               db,

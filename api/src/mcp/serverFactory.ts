@@ -69,9 +69,11 @@ export function createAgentHqMcpServer(options: CreateAgentHqMcpServerOptions): 
         });
       }
       try {
-        return textResult({ ok: true, data: await fn() });
+        const data=await fn();
+        const failed=!!data&&typeof data==='object'&&((data as any).isError===true||((data as any).ok===false&&'error' in data));
+        return {...textResult({ok:!failed,data}),...(failed?{isError:true}:{})};
       } catch (err: unknown) {
-        return textResult(formatMcpToolError(err));
+        return { ...textResult(formatMcpToolError(err)), isError:true };
       }
     };
   }

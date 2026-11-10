@@ -1,3 +1,4 @@
+import {issueExecutionCredential} from '../../domains/execution/credentials';
 import { pinMcpRunIdentity, type AgentRunIdentity } from '../../lib/agentRunIdentity';
 /**
  * runtimes/claudeCode/mcpConfig.ts — materialize Agent HQ's assigned MCP servers
@@ -193,7 +194,8 @@ function reusableApiKeyFromServers(servers: Record<string, Record<string, unknow
     if (!CREDENTIAL_SERVER_SLUGS.includes(mcpServerSlug(serverName) as typeof CREDENTIAL_SERVER_SLUGS[number])) {
       continue;
     }
-    const env = isRecord(server.env) ? server.env : {};
+    let env = isRecord(server.env) ? server.env : {};
+    if(typeof env.AGENT_HQ_MCP_UPSTREAM==='string'){try{const upstream=JSON.parse(env.AGENT_HQ_MCP_UPSTREAM);if(isRecord(upstream.env))env=upstream.env;}catch{/* unusable wrapper snapshot */}}
     const apiKey = typeof env.AGENT_HQ_MCP_API_KEY === 'string'
       ? env.AGENT_HQ_MCP_API_KEY.trim()
       : '';
@@ -518,6 +520,8 @@ export async function materializeClaudeCodeMcpConfig(params: {
     if (params.runIdentity) pinMcpRunIdentity(servers, params.runIdentity);
 
     if (registryToolServer) {
+      if(!params.runIdentity)throw new Error('Registry execution requires a pinned run identity.');
+      registryToolServer.env={AGENT_HQ_MCP_API_KEY:await issueExecutionCredential(params.db,params.agentId,params.instanceId,params.runIdentity.durableRunId),AGENT_HQ_INSTANCE_ID:String(params.instanceId),AGENT_HQ_DURABLE_RUN_ID:params.runIdentity.durableRunId,AGENT_HQ_API_URL:process.env.AGENT_HQ_INTERNAL_BASE_URL??'http://127.0.0.1:3501'};
       servers[`${REGISTRY_TOOL_MCP_SLUG}__agent-${params.agentId}`] = registryToolServer;
     }
 

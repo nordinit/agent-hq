@@ -1,206 +1,28 @@
 import { definePluginEntry } from 'openclaw/plugin-sdk/plugin-entry';
-import { execFile, execFileSync } from 'node:child_process';
-import { promisify } from 'node:util';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
-import os from 'node:os';
-import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { resolveAgentHqApiAccess } from './api-credential.js';
-import {
-  buildToolExecutionEnv,
-  normalizeMaterializedTools,
-  resolveOpenClawAgentId,
-  resolveExecutionTimeoutMs,
-  toOpenClawToolDefinition,
-} from './tool-contract.js';
-
-const execFileAsync = promisify(execFile);
-
-function textResult(text, data) {
-  return {
-    content: [{ type: 'text', text }],
-    data,
-  };
+import { resolveOpenClawAgentId, toOpenClawToolDefinition } from './tool-contract.js';
+// Definitions contain broker identities, never shell bodies or privileged launch environments.
+function discover(agentId, config) {
+    const access = resolveAgentHqApiAccess(config);
+    const script = `const [url]=process.argv.slice(1); fetch(url,{headers:{authorization:'Bearer '+process.env.AGENT_HQ_PLUGIN_API_TOKEN}}).then(async r=>{if(!r.ok)throw Error('Discovery denied');process.stdout.write(await r.text());}).catch(()=>process.exit(1));`;
+    const output = execFileSync(process.execPath, ['-e', script, access.baseUrl + '/api/v1/tools/materialized/agents/' + encodeURIComponent(agentId)], { encoding: 'utf8', timeout: 10000, maxBuffer: 1048576, env: { PATH: process.env.PATH, AGENT_HQ_PLUGIN_API_TOKEN: access.token ?? '' } });
+    return JSON.parse(output).tools ?? [];
 }
-
-function jsonResult(payload) {
-  return textResult(JSON.stringify(payload, null, 2), payload);
+async function invoke(tool, input, config) {
+    if (tool.execution_type !== 'broker')
+        throw new Error('Legacy local tool payloads are disabled; rematerialize approved broker tools.');
+    const access = resolveAgentHqApiAccess(config), ref = tool.execution_payload;
+    const response = await fetch(access.baseUrl + '/api/v1/execution/agents/' + ref.agent_id + '/invoke', { method: 'POST', headers: { authorization: 'Bearer ' + access.token, 'content-type': 'application/json' }, body: JSON.stringify({ tool_id: ref.tool_id, revision_id: ref.revision_id, input }), signal: AbortSignal.timeout(190000) });
+    if (!response.ok)
+        throw new Error('Execution broker denied this invocation (' + response.status + ').');
+    return await response.json();
 }
-
-function fetchMaterializedToolsForOpenClawAgent(openclawAgentId, pluginConfig) {
-  let access;
-  try {
-    access = resolveAgentHqApiAccess(pluginConfig);
-  } catch (err) {
-    throw new Error(`Failed to read the Agent HQ API token for OpenClaw agent "${openclawAgentId}": ${err instanceof Error ? err.message : String(err)}`);
-  }
-  const url = `${access.baseUrl}/api/v1/tools/materialized/agents/${encodeURIComponent(openclawAgentId)}`;
-  // The token travels in the child's environment, not its argv, which other local users can list.
-  const script = `
-    const [url] = process.argv.slice(1);
-    const token = process.env.AGENT_HQ_PLUGIN_API_TOKEN;
-    const headers = { Accept: 'application/json' };
-    if (token) headers.Authorization = 'Bearer ' + token;
-    fetch(url, { headers }).then(async (response) => {
-      const body = await response.text();
-      if (!response.ok) {
-        const detail = body ? ': ' + body.slice(0, 1000) : '';
-        throw new Error(response.status + ' ' + response.statusText + detail);
-      }
-      process.stdout.write(body);
-    }).catch((err) => {
-      console.error(err instanceof Error ? err.message : String(err));
-      process.exit(1);
-    });
-  `;
-
-  try {
-    const stdout = execFileSync(process.execPath, ['-e', script, url], {
-      encoding: 'utf8',
-      timeout: 10_000,
-      env: { ...process.env, AGENT_HQ_PLUGIN_API_TOKEN: access.token ?? '' },
-      maxBuffer: 1024 * 1024,
-    });
-    return normalizeMaterializedTools(JSON.parse(stdout));
-  } catch (err) {
-    const stderr = typeof err === 'object' && err !== null && 'stderr' in err
-      ? String(err.stderr)
-      : '';
-    const detail = stderr.trim() || (err instanceof Error ? err.message : String(err));
-    throw new Error(`Failed to fetch materialized tools for OpenClaw agent "${openclawAgentId}": ${detail}`);
-  }
-}
-
-function buildToolEnv(input, executionEnv = {}) {
-  return buildToolExecutionEnv(input, executionEnv, process.env);
-}
-
-async function executeShellTool(tool, input) {
-  const execution = tool.execution_payload;
-  const timeoutMs = resolveExecutionTimeoutMs(execution);
-  const { stdout, stderr } = await execFileAsync('/bin/sh', ['-lc', execution.command], {
-    cwd: execution.cwd || process.cwd(),
-    env: buildToolEnv(input, execution.env),
-    timeout: timeoutMs,
-    maxBuffer: 1024 * 1024,
-  });
-
-  return jsonResult({
-    ok: true,
-    tool: tool.slug,
-    execution_type: tool.execution_type,
-    stdout: stdout ?? '',
-    stderr: stderr ?? '',
-  });
-}
-
-async function executeScriptTool(tool, input) {
-  const execution = tool.execution_payload;
-  const cwd = execution.cwd || process.cwd();
-  const env = buildToolEnv(input, execution.env);
-  const timeoutMs = resolveExecutionTimeoutMs(execution);
-
-  if (execution.command && !execution.inline) {
-    const { stdout, stderr } = await execFileAsync(execution.command, execution.args ?? [], {
-      cwd,
-      env,
-      timeout: timeoutMs,
-      maxBuffer: 1024 * 1024,
-    });
-    return jsonResult({ ok: true, tool: tool.slug, execution_type: tool.execution_type, stdout: stdout ?? '', stderr: stderr ?? '' });
-  }
-
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'agent-hq-tool-'));
-  const tempFile = path.join(tempDir, 'inline-script');
-  try {
-    await writeFile(tempFile, String(execution.inline ?? ''), 'utf8');
-    const command = execution.command || '/bin/sh';
-    const args = execution.command ? [tempFile, ...(execution.args ?? [])] : [tempFile];
-    const { stdout, stderr } = await execFileAsync(command, args, {
-      cwd,
-      env,
-      timeout: timeoutMs,
-      maxBuffer: 1024 * 1024,
-    });
-    return jsonResult({ ok: true, tool: tool.slug, execution_type: tool.execution_type, stdout: stdout ?? '', stderr: stderr ?? '' });
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
-}
-
-async function executeHttpTool(tool, input) {
-  const execution = tool.execution_payload;
-  const timeoutMs = resolveExecutionTimeoutMs(execution);
-  const method = String(execution.method || 'POST').toUpperCase();
-  const headers = { ...(execution.headers || {}) };
-  const bodyPayload = execution.body !== undefined ? execution.body : input;
-  const body = method === 'GET' || method === 'HEAD' ? undefined : JSON.stringify(bodyPayload);
-  if (body && !Object.keys(headers).some((key) => key.toLowerCase() === 'content-type')) {
-    headers['Content-Type'] = 'application/json';
-  }
-
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetch(execution.url, {
-      method,
-      headers,
-      body,
-      signal: controller.signal,
-    });
-    const responseText = await response.text();
-    return jsonResult({
-      ok: response.ok,
-      tool: tool.slug,
-      execution_type: tool.execution_type,
-      status: response.status,
-      status_text: response.statusText,
-      body: responseText,
-    });
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-async function executeMaterializedTool(tool, input) {
-  switch (tool.execution_type) {
-    case 'shell':
-      return executeShellTool(tool, input);
-    case 'script':
-      return executeScriptTool(tool, input);
-    case 'http':
-      return executeHttpTool(tool, input);
-    default:
-      throw new Error(`Unsupported execution_type: ${tool.execution_type}`);
-  }
-}
-
-function buildNativeTool(tool) {
-  const definition = toOpenClawToolDefinition(tool);
-  return {
-    ...definition,
-    execute: async (_toolCallId, input) => executeMaterializedTool(tool, input ?? {}),
-  };
-}
-
-function resolveMaterializedToolsForContext(context, pluginConfig) {
-  const openclawAgentId = resolveOpenClawAgentId(context);
-  if (!openclawAgentId) {
-    const keys = context && typeof context === 'object' ? Object.keys(context).sort().join(', ') : 'none';
-    throw new Error(
-      `Agent HQ capability tools require an OpenClaw agent id in plugin tool context; available context keys: ${keys}`,
-    );
-  }
-
-  const tools = fetchMaterializedToolsForOpenClawAgent(openclawAgentId, pluginConfig);
-  if (tools.length === 0) return null;
-  return tools.map(buildNativeTool);
-}
-
-export default definePluginEntry({
-  id: 'agent-hq-capability-tools',
-  name: 'Agent HQ capability tools',
-  description: 'Registers Agent HQ-assigned capability tools as native OpenClaw tools for the active agent.',
-  register(api) {
-    api.registerTool((context) => resolveMaterializedToolsForContext(context, api.pluginConfig));
-  },
-});
+export default definePluginEntry({ id: 'agent-hq-capability-tools', name: 'Agent HQ capability tools', description: 'Invoke published Agent HQ capabilities through the authorization broker.', register(api) {
+        api.registerTool(context => {
+            const id = resolveOpenClawAgentId(context);
+            if (!id)
+                throw new Error('Agent identity is required.');
+            return discover(id, api.pluginConfig).map(tool => ({ ...toOpenClawToolDefinition(tool), execute: async (_call, input) => invoke(tool, input ?? {}, api.pluginConfig) }));
+        });
+    } });

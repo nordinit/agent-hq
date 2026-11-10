@@ -1,7 +1,8 @@
+import {navigationGroup} from '../domains/access/operations';
 import { getToolPermissionRequirement } from './toolPermissions';
 import { toJSONSchema, type ZodTypeAny, z } from 'zod';
 import { AgentHqApiClient } from './apiClient';
-import { getMcpCatalog, type McpCatalogArg, type McpCatalogTool } from './catalog';
+import { getMcpCatalog, toolOperationMetadata, type McpCatalogArg, type McpCatalogTool } from './catalog';
 import { registerAgentHqMcpCatalog } from './registerCatalog';
 import { registerAgentHqMcpDomains } from './registerDomains';
 import { McpRegistrar, McpToolResult } from './registrar';
@@ -38,6 +39,7 @@ function serializeArgs(schema: Record<string, ZodTypeAny>): McpCatalogArg[] {
 function sortTool(tool: McpCatalogTool): McpCatalogTool {
   return {
     ...tool,
+    ...toolOperationMetadata(tool.canonical_name),navigation_group:navigationGroup(tool.domain),
     aliases: [...tool.aliases].sort(),
     args: [...tool.args].sort((a, b) => a.name.localeCompare(b.name)),
     rest_paths: tool.rest_paths ? [...tool.rest_paths].sort() : undefined,

@@ -43,7 +43,7 @@ export function registerToolRegistryTools(ctx: McpDomainContext) {
     'Update an Agent HQ tool definition.',
     {
       tool_id: z.number().int().positive().describe('Tool ID'),
-      patch: z.record(z.string(), z.unknown()).describe('Partial update payload'),
+      patch: z.object({name:z.string().min(1).optional(),slug:z.string().min(1).optional(),description:z.string().optional(),implementation_type:z.enum(['bash','shell','script','http','function','mcp']).optional(),implementation_body:z.string().optional(),input_schema:z.record(z.string(),z.unknown()).optional(),permissions:z.enum(['read_only','read_write','exec','network']).optional(),tags:z.array(z.string()).optional(),enabled:z.boolean().optional()}).strict().describe('Partial update payload'),
     },
     ({ tool_id, patch }) => wrap(() => api.updateTool(tool_id, patch))(),
     { domain: 'tools', rest_paths: ['/api/v1/tools/:id'] },

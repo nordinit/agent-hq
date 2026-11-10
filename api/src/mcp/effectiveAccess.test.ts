@@ -1,3 +1,4 @@
+import {replaceDelegatorFixturePolicy} from '../test-support/executionFixtures';
 import express from 'express';
 import type { Server } from 'http';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -5,7 +6,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { setupTestDb, teardownTestDb } from '../db/testDb';
 import { getDb } from '../db/client';
-import { authorizeMcpApiRequestIfPresent, issueMcpApiKeyForAgent, replaceAgentMcpPermissionPolicy } from '../lib/mcpApiAuth';
+import { authorizeMcpApiRequestIfPresent, issueMcpApiKeyForAgent } from '../lib/mcpApiAuth';
 // Requests authenticate as the operator unless they carry an MCP key of their own.
 import { authenticateTestApiRequest, operatorFetch as fetch } from '../lib/testApiAuth';
 import workflowDefinitionsRouter from '../domains/workflow-definitions/router';
@@ -78,7 +79,7 @@ describe('identity permissions across API and MCP transports', () => {
     expect(admin.tool_names).toContain('agent_hq_api_request');
     expect(scoped.identity.key_role).toBe('scoped');
     expect(admin.policy_fingerprint).not.toBe(scoped.policy_fingerprint);
-    await replaceAgentMcpPermissionPolicy(getDb(), 7, []);
+    await replaceDelegatorFixturePolicy(getDb(), 7, []);
     const empty = await new AgentHqApiClient(baseUrl, key).getEffectiveAccess();
     expect(empty.tool_names).toEqual([]);
     expect(empty.policy_fingerprint).not.toBe(scoped.policy_fingerprint);
@@ -87,13 +88,13 @@ describe('identity permissions across API and MCP transports', () => {
   });
 
   test('HTTP and long-lived local servers list identical schemas and refresh live grants/revocations', async () => {
-    await replaceAgentMcpPermissionPolicy(getDb(), 7, ['workflow_definitions.read_project_scope']);
+    await replaceDelegatorFixturePolicy(getDb(), 7, ['workflow_definitions.read_project_scope']);
     const remote = await connect('http');
     const local = await connect('local');
     expect(await remote.listTools()).toEqual(await local.listTools());
-    await replaceAgentMcpPermissionPolicy(getDb(), 7, ['workflow_definitions.read_project_scope', 'workflow_definitions.manage_project_scope']);
+    await replaceDelegatorFixturePolicy(getDb(), 7, ['workflow_definitions.read_project_scope', 'workflow_definitions.manage_project_scope']);
     for (const client of [remote, local]) expect((await client.listTools()).tools.map(tool => tool.name)).toContain('agent_hq_create_workflow_type');
-    await replaceAgentMcpPermissionPolicy(getDb(), 7, []);
+    await replaceDelegatorFixturePolicy(getDb(), 7, []);
     for (const client of [remote, local]) {
       const rejected = await client.callTool({ name: 'agent_hq_create_workflow_type', arguments: { key: 'stale-list', name: 'Stale', project_id: 1 } });
       expect(rejected.isError).toBe(true);
@@ -103,7 +104,7 @@ describe('identity permissions across API and MCP transports', () => {
   });
 
   test('actual workflow task type and schema CRUD stays inside the assigned project', async () => {
-    await replaceAgentMcpPermissionPolicy(getDb(), 7, ['workflow_definitions.read_project_scope', 'workflow_definitions.manage_project_scope']);
+    await replaceDelegatorFixturePolicy(getDb(), 7, ['workflow_definitions.read_project_scope', 'workflow_definitions.manage_project_scope']);
     const client = await connect('http');
     expect(await call(client, 'create_workflow_type', { key: 'permissions-test', name: 'Permissions test', project_id: 1 })).toMatchObject({ ok: true });
     expect(await call(client, 'update_workflow_type_task_types', { workflow_type_key: 'permissions-test', task_types: ['example'] })).toMatchObject({ ok: true });
@@ -125,7 +126,7 @@ describe('identity permissions across API and MCP transports', () => {
     await db.run(`INSERT INTO agents (id, tenant_id, project_id, name, session_key, enabled) VALUES (8, 1, 2, 'Second operator', 'agent:second:main', 1)`);
     const secondKey = (await issueMcpApiKeyForAgent(db, 8)).apiKey;
     for (const agentId of [7, 8]) {
-      await replaceAgentMcpPermissionPolicy(db, agentId, ['workflow_definitions.read_project_scope', 'workflow_definitions.manage_project_scope']);
+      await replaceDelegatorFixturePolicy(db, agentId, ['workflow_definitions.read_project_scope', 'workflow_definitions.manage_project_scope']);
     }
     const first = await connect('http');
     const second = await connect('local', secondKey);
@@ -166,7 +167,7 @@ describe('identity permissions across API and MCP transports', () => {
 
   test('definition discovery and edits exclude unused definitions and other tenants', async () => {
     const db = getDb();
-    await replaceAgentMcpPermissionPolicy(db, 7, ['workflow_definitions.read_project_scope', 'workflow_definitions.manage_project_scope']);
+    await replaceDelegatorFixturePolicy(db, 7, ['workflow_definitions.read_project_scope', 'workflow_definitions.manage_project_scope']);
     await db.run(`INSERT INTO workflow_types (tenant_id, project_id, key, name) VALUES
       (1, NULL, 'unused', 'Unused'), (1, 2, 'other-project', 'Other project'),
       (2, 3, 'foreign', 'Foreign'),
@@ -203,7 +204,7 @@ describe('identity permissions across API and MCP transports', () => {
     const admin = await (await preview({ key_role: 'admin' })).json() as any;
     expect(scoped.tools.find((tool: any) => tool.name === 'agent_hq_api_request').available).toBe(false);
     expect(admin.tools.find((tool: any) => tool.name === 'agent_hq_api_request').available).toBe(true);
-    const draft = await (await preview({ enabled_capabilities: ['workflow_definitions.manage_project_scope'] })).json() as any;
+    const draft = await (await preview({ enabled_capabilities: ['workflow_definitions.manage_project_scope','runs.dispatch','host.execute'] })).json() as any;
     expect(draft.draft).toBe(true);
     expect(draft.tools.find((tool: any) => tool.name === 'agent_hq_create_workflow_type').available).toBe(true);
     expect((await new AgentHqApiClient(baseUrl, key).getEffectiveAccess()).policy_mode).toBe('default');

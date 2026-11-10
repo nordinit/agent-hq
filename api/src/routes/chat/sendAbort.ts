@@ -11,6 +11,8 @@ import { getCanonicalChatSessionKey, buildDerivedDirectSessionKey } from '../../
 import { getChatSessionStartedAt, getResumableChatSessionId } from '../../domains/chat/sessions';
 import { resolveAgentRowById } from '../../domains/chat/sessions';
 import { nowTimestamp } from '../../lib/timestamps';
+import {requirePublishedProfile} from '../../domains/execution/authority';
+import {gatewayWsPatchSession} from '../../runtimes/openclaw/gatewayClient';
 
 /**
  * Chat instance row joined with the runtime columns that decide how a message
@@ -142,6 +144,9 @@ async function sendToInstance(
       if (!inst) {
         return res.status(404).json({ ok: false, error: 'Instance not found' });
       }
+      const tenantId=await resolveTenantIdFromRequest(db,req);
+      if(inst.tenant_id!==tenantId)return res.status(404).json({ok:false,error:'Instance not found'});
+      await requirePublishedProfile(db,inst.agent_id,'agent_runtime',inst.agent_id);
 
       let attachmentLines = '';
       if (attachmentIds.length > 0) {
@@ -180,6 +185,10 @@ async function sendToInstance(
       const canonicalKey = resolveOpenClawSessionKey(inst.session_key, inst.agent_session_key);
       if (!canonicalKey || inst.tenant_id == null) {
         return res.status(409).json({ ok: false, error: 'Chat runtime target is unavailable' });
+      }
+      if(inst.model) {
+        const patch=await gatewayWsPatchSession({sessionKey:canonicalKey,model:inst.model});
+        if(!patch.ok)return res.status(502).json({ok:false,error:'Could not apply the approved chat model.'});
       }
       const result = await sendOpenClawTurn({
         sessionKey: canonicalKey,
@@ -233,6 +242,8 @@ export function registerSendAbortRoutes(router: Router): void {
       const db = getDb();
       const agent = await resolveAgentRowById(agentId);
       if (!agent) return res.status(404).json({ ok: false, error: 'Agent not found' });
+      if(agent.tenant_id!==await resolveTenantIdFromRequest(db,req))return res.status(404).json({ok:false,error:'Agent not found'});
+      await requirePublishedProfile(db,agentId,'agent_runtime',agentId);
 
       const baseSessionKey = typeof agent.session_key === 'string' ? agent.session_key : '';
       const sessionKey = (await getCanonicalChatSessionKey(agentId, channel))

@@ -17,6 +17,7 @@ export interface ResolutionEntry {
   effective: boolean;
   sources: Array<{ source_id: string; state: 'active' | 'overridden' | 'opted_out' | 'disabled'; explanation: string }>;
   description?: string;
+  execution_approval?: {state:'approval_present'|'held';revision_id:string|null;digest:string|null;reason:string};
 }
 export interface AgentResolution {
   agent: { id: number; name: string; enabled: boolean; runtime_type: string; model: string | null };
@@ -88,6 +89,14 @@ export async function getAgentResolution(db: Db, agentId: number, tenantId: numb
   const graph = workflowId === null ? null : await getWorkflowGraph(db, { project_id: agent.project_id, workflow_id: workflowId, tenant_id: tenantId });
   const routing = graph?.nodes.flatMap(node => node.assignments.filter(a => a.agent_id === agentId).map(a => ({ status: node.id, task_type: a.task_type, rule_id: a.rule_id, effective: a.enabled && a.effective_for_workflow }))) ?? [];
   const findings: AgentResolution['findings'] = [];
+  const approvals=await db.all<{resource_kind:string;resource_id:number;revision_id:string;digest:string}>(`SELECT b.resource_kind,b.resource_id,b.revision_id,r.digest FROM execution_bindings b JOIN executable_revisions r ON r.id=b.revision_id AND r.tenant_id=b.tenant_id WHERE b.tenant_id=? AND b.enabled=1 AND (b.expires_at IS NULL OR b.expires_at>now()) AND r.published_at IS NOT NULL AND r.revoked_at IS NULL AND ((b.subject_kind='agent' AND b.subject_id=?) OR (b.subject_kind='team' AND b.subject_id=ANY(?::bigint[]))) ORDER BY CASE WHEN b.subject_kind='agent' THEN 0 ELSE 1 END,b.id`,tenantId,agentId,teams.map(t=>Number(t.id)));
+  const executionGranted=policy.capabilities.some(c=>c.key==='host.execute'&&c.enabled)&&policy.capabilities.some(c=>c.key==='tools.execute'&&c.enabled);
+  for(const entry of entries.filter(e=>e.kind==='tool'||e.kind==='mcp')) {
+    const approval=approvals.find(a=>a.resource_kind===(entry.kind==='tool'?'tool':'mcp_server')&&a.resource_id===Number(entry.id.split(':')[1]));
+    const present=entry.effective&&executionGranted&&!!approval;
+    entry.execution_approval={state:present?'approval_present':'held',revision_id:approval?.revision_id??null,digest:approval?.digest??null,reason:present?'Published binding and explicit authority are present. Invocation rechecks assignment, dependency integrity and run scope.':'Execution is held until an active published binding, assignment and explicit execution grants are present.'};
+    if(entry.effective&&!present)findings.push({code:'execution_held',severity:'warning',entry_id:entry.id,message:`${entry.label}: configured, but execution approval or authority is missing.`});
+  }
   if (workflowOwner !== null && !teams.some(t => Number(t.id) === workflowOwner)) findings.push({ code: 'workflow_team_not_member', severity: 'warning', message: 'This agent is not an enabled member of the workflow’s owning team. Team context falls back to its other memberships.' });
   const lifecycleAllowed = policy.capabilities.some(c => c.enabled && ['admin.full_access', 'tasks.write_active_lifecycle', 'tasks.write_project_lifecycle'].includes(c.key));
   if (routing.some(r => r.effective) && !lifecycleAllowed) findings.push({ code: 'routing_without_lifecycle_permission', severity: 'warning', message: 'Routing rules reference this agent, but its Agent HQ MCP policy grants no lifecycle write capability. It cannot submit task outcomes or evidence through those MCP endpoints.' });

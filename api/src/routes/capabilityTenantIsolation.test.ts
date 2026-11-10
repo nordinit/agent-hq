@@ -1,3 +1,4 @@
+import {approveExecutableFixture} from '../test-support/executionFixtures';
 import express from 'express';
 import type { Server } from 'http';
 import toolsRouter, { agentToolsRouter } from './tools';
@@ -65,6 +66,7 @@ describe('tenant-owned skills and tools capability inventory', () => {
     await db.run(`INSERT INTO agent_tool_assignments (agent_id, tool_id) VALUES (10, 20)`);
     await db.run(`INSERT INTO agent_tool_assignments (agent_id, tool_id) VALUES (10, 21)`);
 
+    await approveExecutableFixture(db,1,10,'tool',20);
     const materialized = await fetchAgentTools(db, 10);
     expect(materialized.map((tool) => tool.id)).toEqual([20]);
     expect(materialized[0]).toMatchObject({ tenant_id: 1, agent_tenant_id: 1, slug: 'tenant_tool' });
@@ -122,6 +124,7 @@ describe('tenant-owned skills and tools capability inventory', () => {
       });
       expect(assignTenantATool.status).toBe(201);
 
+      await approveExecutableFixture(db,1,10,'tool',toolA.id);
       const materializedA = await fetch(`${baseUrl}/api/v1/agents/10/tools/materialized`);
       expect(materializedA.status).toBe(200);
       const materializedABody = await materializedA.json() as { tools: Array<{ name: string }> };

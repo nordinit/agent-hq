@@ -194,10 +194,10 @@ describe('agent MCP permissions routes', () => {
       });
       expect(body.capabilities.find((capability) => capability.key === 'mcp_capability_policies.write')).toMatchObject({
         group: 'MCP capability policy',
-        label: 'Edit MCP capability policy',
+        label: 'Legacy policy editing (retired)',
         enabled: false,
         explicit_enabled: null,
-        description: expect.stringContaining('Self-edits'),
+        description: expect.stringContaining('permissions.manage'),
         endpoints: expect.arrayContaining([
           'POST /api/v1/agents/:id/mcp-permissions',
           'PUT /api/v1/agents/:id/mcp-permissions',

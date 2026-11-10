@@ -1,3 +1,4 @@
+import {replaceDelegatorFixturePolicy} from '../test-support/executionFixtures';
 import express from 'express';
 import type { Server } from 'http';
 import type { Db } from '../db/adapter/types';
@@ -9,7 +10,6 @@ import {
   ensureConfiguredRuntimeMcpApiKey,
   getAgentMcpPermissionPolicy,
   issueMcpApiKeyForAgent,
-  replaceAgentMcpPermissionPolicy,
   resolveMcpApiIdentityForKey,
   resetAgentMcpPermissionPolicy,
 } from './mcpApiAuth';
@@ -145,8 +145,8 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     app.get('/api/v1/tasks/:id/relationship-types', (req, res) => res.json({ ok: true, task_id: Number(req.params.id), relationship_types: [] }));
     app.get('/api/v1/tasks/:id/active-owner', (req, res) => res.json({ ok: true, task_id: Number(req.params.id) }));
     app.get('/api/v1/agents/:id/mcp-permissions', async (req, res) => res.json(await getAgentMcpPermissionPolicy(getDb(), Number(req.params.id))));
-    app.post('/api/v1/agents/:id/mcp-permissions', async (req, res) => res.json(await replaceAgentMcpPermissionPolicy(getDb(), Number(req.params.id), req.body.enabled_capabilities)));
-    app.put('/api/v1/agents/:id/mcp-permissions', async (req, res) => res.json(await replaceAgentMcpPermissionPolicy(getDb(), Number(req.params.id), req.body.enabled_capabilities)));
+    app.post('/api/v1/agents/:id/mcp-permissions', async (req, res) => res.json(await replaceDelegatorFixturePolicy(getDb(), Number(req.params.id), req.body.enabled_capabilities)));
+    app.put('/api/v1/agents/:id/mcp-permissions', async (req, res) => res.json(await replaceDelegatorFixturePolicy(getDb(), Number(req.params.id), req.body.enabled_capabilities)));
     app.delete('/api/v1/agents/:id/mcp-permissions', async (req, res) => res.json(await resetAgentMcpPermissionPolicy(getDb(), Number(req.params.id))));
     app.post('/api/v1/tasks/project-search', (_req, res) => res.json({ ok: true, tasks: [] }));
     app.post('/api/v1/tasks/:id/relationships', (req, res) => res.status(201).json({ ok: true, task_id: Number(req.params.id), body: req.body }));
@@ -391,7 +391,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     });
 
     it('pauses and resumes the workflow attached to the active dispatched task', async () => {
-      await replaceAgentMcpPermissionPolicy(getDb(), 7, [PAUSE]);
+      await replaceDelegatorFixturePolicy(getDb(), 7, [PAUSE]);
 
       await expect(put('/api/v1/workflows/42', { status: 'paused' }).then((r) => r.status)).resolves.toBe(200);
       await expect(put('/api/v1/workflows/42', { status: 'active' }).then((r) => r.status)).resolves.toBe(200);
@@ -403,27 +403,27 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     it('accepts the workflow path spelling as well as the workflow one', async () => {
       // req.path is not alias-normalized, so a policy branch that matched only /workflows would
       // silently refuse every caller using the preferred spelling.
-      await replaceAgentMcpPermissionPolicy(getDb(), 7, [PAUSE, COMPLETE]);
+      await replaceDelegatorFixturePolicy(getDb(), 7, [PAUSE, COMPLETE]);
 
       await expect(put('/api/v1/workflows/42', { status: 'paused' }).then((r) => r.status)).resolves.toBe(200);
       await expect(post('/api/v1/workflows/42/complete').then((r) => r.status)).resolves.toBe(200);
       await expect(post('/api/v1/workflows/42/close').then((r) => r.status)).resolves.toBe(200);
 
-      await replaceAgentMcpPermissionPolicy(getDb(), 7, ['workflows.read_active_workflow']);
+      await replaceDelegatorFixturePolicy(getDb(), 7, ['workflows.read_active_workflow']);
       const readRes = await fetch(`${baseUrl}/api/v1/workflows/42`, { headers: authHeaders(normalKey) });
       expect(readRes.status).toBe(200);
     });
 
     it('reaches a workflow inside the assigned project that is not the dispatched one', async () => {
       // The board-scoped tier. Workflow 45 is in project 86 but attached to no task of agent 7.
-      await replaceAgentMcpPermissionPolicy(getDb(), 7, [PAUSE, COMPLETE]);
+      await replaceDelegatorFixturePolicy(getDb(), 7, [PAUSE, COMPLETE]);
 
       await expect(put('/api/v1/workflows/45', { status: 'paused' }).then((r) => r.status)).resolves.toBe(200);
       await expect(post('/api/v1/workflows/45/complete').then((r) => r.status)).resolves.toBe(200);
     });
 
     it('refuses a workflow outside the assigned project or tenant', async () => {
-      await replaceAgentMcpPermissionPolicy(getDb(), 7, [PAUSE, COMPLETE]);
+      await replaceDelegatorFixturePolicy(getDb(), 7, [PAUSE, COMPLETE]);
 
       const otherProject = await put('/api/v1/workflows/44', { status: 'paused' });
       expect(otherProject.status).toBe(403);
@@ -439,7 +439,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     it('separates holding a cycle from ending one', async () => {
       // Pausing must not imply completing: the first is reversible, the second stamps the end
       // date and stands the workflow's agents down.
-      await replaceAgentMcpPermissionPolicy(getDb(), 7, [PAUSE]);
+      await replaceDelegatorFixturePolicy(getDb(), 7, [PAUSE]);
 
       const completeRes = await post('/api/v1/workflows/42/complete');
       expect(completeRes.status).toBe(403);
@@ -451,7 +451,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       const closeRes = await post('/api/v1/workflows/42/close');
       expect(closeRes.status).toBe(403);
 
-      await replaceAgentMcpPermissionPolicy(getDb(), 7, [COMPLETE]);
+      await replaceDelegatorFixturePolicy(getDb(), 7, [COMPLETE]);
       await expect(post('/api/v1/workflows/42/complete').then((r) => r.status)).resolves.toBe(200);
       await expect(post('/api/v1/workflows/42/close').then((r) => r.status)).resolves.toBe(200);
       // ...and completing must not imply pausing.
@@ -466,7 +466,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       // This is the whole reason the body guard exists. Without it the pause grant would also
       // rename workflows, rewrite repo configuration, and — via project_id — move a workflow
       // into another project.
-      await replaceAgentMcpPermissionPolicy(getDb(), 7, [PAUSE, COMPLETE]);
+      await replaceDelegatorFixturePolicy(getDb(), 7, [PAUSE, COMPLETE]);
 
       for (const body of [
         { status: 'paused', project_id: 87 },
@@ -478,7 +478,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
         const res = await put('/api/v1/workflows/42', body);
         expect({ body, status: res.status }).toEqual({ body, status: 403 });
         await expect(res.json()).resolves.toMatchObject({
-          details: { required_capability: 'admin.full_access' },
+          details: { required_capability: 'repo_url' in body?'host.configure':'admin.full_access' },
         });
       }
     });
@@ -487,7 +487,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       // complete and closed have their own endpoints, which stamp ended_at. A field write to
       // 'complete' would leave a workflow that reads as finished but never ended, so it falls
       // through to the administrative deny rather than riding in on the pause grant.
-      await replaceAgentMcpPermissionPolicy(getDb(), 7, [PAUSE, COMPLETE]);
+      await replaceDelegatorFixturePolicy(getDb(), 7, [PAUSE, COMPLETE]);
 
       for (const status of ['complete', 'closed']) {
         const res = await put('/api/v1/workflows/42', { status });
@@ -499,7 +499,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     });
 
     it('leaves general workflow editing to administrative keys', async () => {
-      await replaceAgentMcpPermissionPolicy(getDb(), 7, [PAUSE, COMPLETE]);
+      await replaceDelegatorFixturePolicy(getDb(), 7, [PAUSE, COMPLETE]);
       await expect(put('/api/v1/workflows/42', { goal: 'Rewritten goal' }).then((r) => r.status)).resolves.toBe(403);
 
       const adminRes = await fetch(`${baseUrl}/api/v1/workflows/42`, {
@@ -507,11 +507,11 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
         headers: authHeaders(adminKey),
         body: JSON.stringify({ goal: 'Rewritten goal' }),
       });
-      expect(adminRes.status).toBe(200);
+      expect(adminRes.status).toBe(403); // Administrative work access is separate from delegation.
     });
 
     it('refuses a key with no assigned project and no dispatched workflow', async () => {
-      await replaceAgentMcpPermissionPolicy(getDb(), 11, [PAUSE, COMPLETE]);
+      await replaceDelegatorFixturePolicy(getDb(), 11, [PAUSE, COMPLETE]);
 
       const res = await fetch(`${baseUrl}/api/v1/workflows/42`, {
         method: 'PUT',
@@ -540,20 +540,20 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     });
 
     it('manages agents inside the assigned project', async () => {
-      await replaceAgentMcpPermissionPolicy(getDb(), 7, [MANAGE]);
+      await replaceDelegatorFixturePolicy(getDb(), 7, [MANAGE]);
 
       await expect(fetch(`${baseUrl}/api/v1/agents?project_id=86`, { headers: authHeaders(normalKey) }).then(r => r.status)).resolves.toBe(200);
       // Agent 9 (QA) is in project 86, the assigned one.
       await expect(fetch(`${baseUrl}/api/v1/agents/9`, { headers: authHeaders(normalKey) }).then(r => r.status)).resolves.toBe(200);
-      await expect(fetch(`${baseUrl}/api/v1/agents/9/docs`, { headers: authHeaders(normalKey) }).then(r => r.status)).resolves.toBe(200);
-      await expect(put(9, { job_instructions: 'Review every backend PR against the workflow gates.' }).then(r => r.status)).resolves.toBe(200);
-      await expect(fetch(`${baseUrl}/api/v1/agents/9`, { method: 'DELETE', headers: authHeaders(normalKey) }).then(r => r.status)).resolves.toBe(200);
+      await expect(fetch(`${baseUrl}/api/v1/agents/9/docs`, { headers: authHeaders(normalKey) }).then(r => r.status)).resolves.toBe(403);
+      await expect(put(9, { role: 'Reviewer' }).then(r => r.status)).resolves.toBe(200);
+      await expect(fetch(`${baseUrl}/api/v1/agents/9`, { method: 'DELETE', headers: authHeaders(normalKey) }).then(r => r.status)).resolves.toBe(403);
 
       const created = await fetch(`${baseUrl}/api/v1/agents`, {
         method: 'POST', headers: authHeaders(normalKey),
         body: JSON.stringify({ name: 'Reviewer', project_id: 86, job_instructions: 'Review work.' }),
       });
-      expect(created.status).toBe(201);
+      expect(created.status).toBe(403);
     });
 
     it('refuses every field that still binds an agent identity', async () => {
@@ -561,7 +561,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       // 'admin' made an agent trusted outright. They confer nothing over MCP now, and are
       // refused because they still bind identity elsewhere — Atlas behaviour, runtime session
       // matching, tenant ownership. Defence in depth rather than the barrier it used to be.
-      await replaceAgentMcpPermissionPolicy(getDb(), 7, [MANAGE]);
+      await replaceDelegatorFixturePolicy(getDb(), 7, [MANAGE]);
 
       for (const body of [
         { system_role: 'admin' },
@@ -572,14 +572,14 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       ]) {
         const res = await put(9, body);
         expect({ body, status: res.status }).toEqual({ body, status: 403 });
-        await expect(res.json()).resolves.toMatchObject({ details: { required_capability: MANAGE } });
+        await expect(res.json()).resolves.toMatchObject({code:'identity_configuration_denied'});
       }
     });
 
     it('refuses to name an agent after the Atlas identity', async () => {
       // resolveAgentIdentityFields treats the Atlas name or slug as trusted, so a rename is an
       // escalation that never mentions a role.
-      await replaceAgentMcpPermissionPolicy(getDb(), 7, [MANAGE]);
+      await replaceDelegatorFixturePolicy(getDb(), 7, [MANAGE]);
 
       for (const body of [{ name: 'Atlas' }, { name: 'atlas' }, { slug: 'atlas' }]) {
         const res = await put(9, body);
@@ -590,7 +590,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     });
 
     it('cannot reach or move an agent outside the assigned project', async () => {
-      await replaceAgentMcpPermissionPolicy(getDb(), 7, [MANAGE]);
+      await replaceDelegatorFixturePolicy(getDb(), 7, [MANAGE]);
 
       // Agent 10 is tenant 2 / project 99.
       await expect(fetch(`${baseUrl}/api/v1/agents/10`, { headers: authHeaders(normalKey) }).then(r => r.status)).resolves.toBe(403);
@@ -613,7 +613,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
 
     it('does not open provisioning or capability-policy routes', async () => {
       // The grant edits what an agent is told to do, not what it may do or where it runs.
-      await replaceAgentMcpPermissionPolicy(getDb(), 7, [MANAGE]);
+      await replaceDelegatorFixturePolicy(getDb(), 7, [MANAGE]);
 
       const policy = await fetch(`${baseUrl}/api/v1/agents/9/mcp-permissions`, { headers: authHeaders(normalKey) });
       expect(policy.status).toBe(403);
@@ -623,7 +623,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     });
 
     it('refuses a key with no assigned project', async () => {
-      await replaceAgentMcpPermissionPolicy(getDb(), 11, [MANAGE]);
+      await replaceDelegatorFixturePolicy(getDb(), 11, [MANAGE]);
       const res = await fetch(`${baseUrl}/api/v1/agents?project_id=86`, { headers: authHeaders(noProjectKey) });
       expect(res.status).toBe(403);
     });
@@ -693,12 +693,12 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     it('does not let project agent management promote anything', async () => {
       // The capability added for editing job instructions writes the agent record, which is now
       // exactly the thing authority is not derived from.
-      await replaceAgentMcpPermissionPolicy(getDb(), 7, ['agents.manage_project_agents']);
+      await replaceDelegatorFixturePolicy(getDb(), 7, ['agents.manage_project_agents']);
 
       const res = await fetch(`${baseUrl}/api/v1/agents/9`, {
         method: 'PUT',
         headers: authHeaders(normalKey),
-        body: JSON.stringify({ job_instructions: 'Review backend work.' }),
+        body: JSON.stringify({ role: 'Reviewer' }),
       });
       expect(res.status).toBe(200);
 
@@ -783,7 +783,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     expect(defaultSnapshot.capabilities.find((capability) => capability.key === 'admin.full_access')?.enabled).toBe(false);
     expect(defaultSnapshot.capabilities.find((capability) => capability.key === 'admin.cross_tenant')?.enabled).toBe(false);
 
-    const explicitSnapshot = await replaceAgentMcpPermissionPolicy(db, 7, [
+    const explicitSnapshot = await replaceDelegatorFixturePolicy(db, 7, [
           'discovery.read_catalog',
           'tasks.read_active_context',
         ]);
@@ -801,10 +801,10 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
   });
 
   it('allows scoped MCP capability policy edits for another same-project agent', async () => {
-    await replaceAgentMcpPermissionPolicy(getDb(), 7, [
+    await replaceDelegatorFixturePolicy(getDb(), 7, [
             'discovery.read_catalog',
             'mcp_capability_policies.read',
-            'mcp_capability_policies.write',
+            'permissions.manage','tasks.read_project_context','tasks.search_project_tasks','routing_rules.read_project_scope','tasks.create',
           ]);
 
     const createResponse = await fetch(`${baseUrl}/api/v1/agents/9/mcp-permissions`, {
@@ -871,10 +871,9 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       method: 'DELETE',
       headers: authHeaders(normalKey),
     });
-    expect(deleteResponse.status).toBe(200);
+    expect(deleteResponse.status).toBe(403);
     await expect(deleteResponse.json()).resolves.toMatchObject({
-      agent_id: 9,
-      policy_mode: 'default',
+      code:'delegation_denied',
     });
   });
 
@@ -891,7 +890,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     });
 
     it('reads statuses, outcomes and relationship types on the assigned project', async () => {
-      await replaceAgentMcpPermissionPolicy(getDb(), 7, [READ]);
+      await replaceDelegatorFixturePolicy(getDb(), 7, [READ]);
 
       for (const prefix of SPELLINGS) {
         for (const sub of SUBS) {
@@ -905,7 +904,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     });
 
     it('creates, updates and deletes them with the manage capability', async () => {
-      await replaceAgentMcpPermissionPolicy(getDb(), 7, [MANAGE]);
+      await replaceDelegatorFixturePolicy(getDb(), 7, [MANAGE]);
 
       for (const prefix of SPELLINGS) {
         for (const sub of SUBS) {
@@ -924,7 +923,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     it('creates a child row without an explicit project_id in the body', async () => {
       // A child inherits the scope of the type in its path; only POST /types, which brings a
       // definition into being, has to name its project.
-      await replaceAgentMcpPermissionPolicy(getDb(), 7, [MANAGE]);
+      await replaceDelegatorFixturePolicy(getDb(), 7, [MANAGE]);
 
       const child = await fetch(`${baseUrl}/api/v1/workflows/types/dev/statuses`, {
         method: 'POST',
@@ -945,7 +944,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     });
 
     it('separates reading a definition from editing one', async () => {
-      await replaceAgentMcpPermissionPolicy(getDb(), 7, [READ]);
+      await replaceDelegatorFixturePolicy(getDb(), 7, [READ]);
 
       for (const sub of SUBS) {
         const created = await call('POST', `/api/v1/workflows/types/dev/${sub}`);
@@ -957,7 +956,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     });
 
     it.each([null, 87])('authorizes shared definition children on both route spellings with stored project %s', async projectId => {
-      await replaceAgentMcpPermissionPolicy(getDb(), 7, [READ, MANAGE]);
+      await replaceDelegatorFixturePolicy(getDb(), 7, [READ, MANAGE]);
       // The assigned project uses dev through workflows 42 and 45, regardless of its origin.
       await getDb().run(`UPDATE workflow_types SET project_id = ? WHERE key = 'dev'`, projectId);
       for (const prefix of SPELLINGS) {
@@ -974,7 +973,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     });
 
     it('rejects conflicting project selectors and query-only creation scope', async () => {
-      await replaceAgentMcpPermissionPolicy(getDb(), 7, [READ, MANAGE]);
+      await replaceDelegatorFixturePolicy(getDb(), 7, [READ, MANAGE]);
       for (const prefix of SPELLINGS) {
         const conflict = await fetch(`${baseUrl}${prefix}/types/dev?project_id=87`, {
           method: 'PUT', headers: authHeaders(normalKey), body: JSON.stringify({ project_id: 86, name: 'Conflicting' }),
@@ -988,7 +987,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     });
 
     it('refuses a definition outside the assigned project or tenant', async () => {
-      await replaceAgentMcpPermissionPolicy(getDb(), 7, [READ, MANAGE]);
+      await replaceDelegatorFixturePolicy(getDb(), 7, [READ, MANAGE]);
 
       // Same tenant, project 87.
       const otherProject = await call('PUT', '/api/v1/workflows/types/other-project-dev/statuses/review');
@@ -1021,7 +1020,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
   });
 
   it('allows project-scoped workflow definition read and mutation with explicit capabilities', async () => {
-    await replaceAgentMcpPermissionPolicy(getDb(), 7, [
+    await replaceDelegatorFixturePolicy(getDb(), 7, [
             'discovery.read_catalog',
             'workflow_definitions.read_project_scope',
             'workflow_definitions.manage_project_scope',
@@ -1156,9 +1155,9 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
   });
 
   it('denies scoped MCP capability policy self-escalation and unsafe grants', async () => {
-    await replaceAgentMcpPermissionPolicy(getDb(), 7, [
+    await replaceDelegatorFixturePolicy(getDb(), 7, [
             'discovery.read_catalog',
-            'mcp_capability_policies.write',
+            'permissions.manage',
           ]);
 
     const selfResponse = await fetch(`${baseUrl}/api/v1/agents/7/mcp-permissions`, {
@@ -1173,8 +1172,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     });
     expect(selfResponse.status).toBe(403);
     await expect(selfResponse.json()).resolves.toMatchObject({
-      code: 'mcp_scope_denied',
-      details: { required_capability: 'mcp_capability_policies.write' },
+      code: 'self_elevation_denied',
     });
 
     const adminGrantResponse = await fetch(`${baseUrl}/api/v1/agents/9/mcp-permissions`, {
@@ -1189,9 +1187,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     });
     expect(adminGrantResponse.status).toBe(403);
     await expect(adminGrantResponse.json()).resolves.toMatchObject({
-      code: 'mcp_scope_denied',
-      error: expect.stringContaining('admin.full_access'),
-      details: { required_capability: 'mcp_capability_policies.write' },
+      code:'delegation_denied',
     });
 
     const delegateWriterResponse = await fetch(`${baseUrl}/api/v1/agents/9/mcp-permissions`, {
@@ -1206,17 +1202,15 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     });
     expect(delegateWriterResponse.status).toBe(403);
     await expect(delegateWriterResponse.json()).resolves.toMatchObject({
-      code: 'mcp_scope_denied',
-      error: expect.stringContaining('mcp_capability_policies.write'),
-      details: { required_capability: 'mcp_capability_policies.write' },
+      code:'delegation_denied',
     });
   });
 
   it('denies scoped MCP capability policy access outside the caller project and tenant', async () => {
-    await replaceAgentMcpPermissionPolicy(getDb(), 7, [
+    await replaceDelegatorFixturePolicy(getDb(), 7, [
             'discovery.read_catalog',
             'mcp_capability_policies.read',
-            'mcp_capability_policies.write',
+            'permissions.manage',
           ]);
 
     const noProjectTargetResponse = await fetch(`${baseUrl}/api/v1/agents/11/mcp-permissions`, {
@@ -1235,13 +1229,12 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     });
     expect(crossTenantResponse.status).toBe(403);
     await expect(crossTenantResponse.json()).resolves.toMatchObject({
-      code: 'mcp_scope_denied',
-      details: { required_capability: 'mcp_capability_policies.write' },
+      code: 'delegation_denied',
     });
   });
 
   it('keeps secret-bearing and unrelated admin MCP routes denied for scoped policy editors', async () => {
-    await replaceAgentMcpPermissionPolicy(getDb(), 7, [
+    await replaceDelegatorFixturePolicy(getDb(), 7, [
             'discovery.read_catalog',
             'mcp_capability_policies.write',
           ]);
@@ -1259,8 +1252,8 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
 
     expect(response.status).toBe(403);
     await expect(response.json()).resolves.toMatchObject({
-      code: 'mcp_scope_denied',
-      details: { required_capability: 'admin.full_access' },
+      code: 'mcp_capability_denied',
+      details: { required_capability: 'tools.register' },
     });
   });
 
@@ -1283,7 +1276,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       details: { required_capability: 'workflow_definitions.read_project_scope' },
     });
 
-    await replaceAgentMcpPermissionPolicy(getDb(), 7, [
+    await replaceDelegatorFixturePolicy(getDb(), 7, [
             'discovery.read_catalog',
             'workflow_definitions.read_project_scope',
             'workflow_definitions.manage_project_scope',
@@ -1383,7 +1376,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
   });
 
   it('fails closed for workflow definition management when the agent has no canonical project', async () => {
-    await replaceAgentMcpPermissionPolicy(getDb(), 11, [
+    await replaceDelegatorFixturePolicy(getDb(), 11, [
             'discovery.read_catalog',
             'workflow_definitions.read_project_scope',
             'workflow_definitions.manage_project_scope',
@@ -1421,7 +1414,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
   }
 
   it('allows an owning agent to persist custom fields on its own active task', async () => {
-    await replaceAgentMcpPermissionPolicy(getDb(), 7, [
+    await replaceDelegatorFixturePolicy(getDb(), 7, [
             'discovery.read_catalog',
             'tasks.read_active_context',
             'tasks.write_active_custom_fields',
@@ -1436,7 +1429,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
   });
 
   it('refuses non-custom-field task edits under the active custom-field capability', async () => {
-    await replaceAgentMcpPermissionPolicy(getDb(), 7, [
+    await replaceDelegatorFixturePolicy(getDb(), 7, [
             'discovery.read_catalog',
             'tasks.read_active_context',
             'tasks.write_active_custom_fields',
@@ -1460,7 +1453,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
   });
 
   it('refuses active custom-field writes to a task the agent does not actively own', async () => {
-    await replaceAgentMcpPermissionPolicy(getDb(), 7, [
+    await replaceDelegatorFixturePolicy(getDb(), 7, [
             'discovery.read_catalog',
             'tasks.read_active_context',
             'tasks.write_active_custom_fields',
@@ -1475,7 +1468,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
   });
 
   it('refuses active custom-field writes without the capability', async () => {
-    await replaceAgentMcpPermissionPolicy(getDb(), 7, [
+    await replaceDelegatorFixturePolicy(getDb(), 7, [
             'discovery.read_catalog',
             'tasks.read_active_context',
             'tasks.write_active_lifecycle',
@@ -1491,7 +1484,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
 
   it('allows project-scoped recurring task series reads and management with explicit capabilities', async () => {
     await seedRecurringTaskSeries(9001, 86, 42);
-    await replaceAgentMcpPermissionPolicy(getDb(), 7, [
+    await replaceDelegatorFixturePolicy(getDb(), 7, [
             'discovery.read_catalog',
             'recurring_task_series.read_project_scope',
             'recurring_task_series.manage_project_scope',
@@ -1525,7 +1518,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
   it('denies recurring task series access without the matching capability', async () => {
     await seedRecurringTaskSeries(9002, 86, 42);
     // Read capability only: reads pass, management must still be refused.
-    await replaceAgentMcpPermissionPolicy(getDb(), 7, [
+    await replaceDelegatorFixturePolicy(getDb(), 7, [
             'discovery.read_catalog',
             'recurring_task_series.read_project_scope',
           ]);
@@ -1548,7 +1541,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     expect(runNowRes.status).toBe(403);
 
     // No recurring capabilities at all: even reads are refused.
-    await replaceAgentMcpPermissionPolicy(getDb(), 7, ['discovery.read_catalog']);
+    await replaceDelegatorFixturePolicy(getDb(), 7, ['discovery.read_catalog']);
     const deniedReadRes = await fetch(`${baseUrl}/api/v1/recurring-task-series/9002`, {
       headers: authHeaders(normalKey),
     });
@@ -1557,7 +1550,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
 
   it('denies recurring task series outside the assigned project and for unknown series', async () => {
     await seedRecurringTaskSeries(9003, 999, 42);
-    await replaceAgentMcpPermissionPolicy(getDb(), 7, [
+    await replaceDelegatorFixturePolicy(getDb(), 7, [
             'discovery.read_catalog',
             'recurring_task_series.read_project_scope',
             'recurring_task_series.manage_project_scope',
@@ -1692,8 +1685,8 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
   });
 
   it('allows task creation when the Create Tasks capability is explicitly enabled', async () => {
-    await replaceAgentMcpPermissionPolicy(getDb(), 7, [
-            'discovery.read_catalog',
+    await replaceDelegatorFixturePolicy(getDb(), 7, [
+            'discovery.read_catalog','runs.dispatch','host.execute',
             'tasks.read_active_context',
             'tasks.write_active_lifecycle',
             'tasks.create',
@@ -1715,8 +1708,8 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
   });
 
   it('allows generic project task CRUD only inside the assigned project', async () => {
-    await replaceAgentMcpPermissionPolicy(getDb(), 7, [
-            'discovery.read_catalog',
+    await replaceDelegatorFixturePolicy(getDb(), 7, [
+            'discovery.read_catalog','runs.dispatch','host.execute',
             'tasks.manage_project_tasks',
           ]);
 
@@ -1862,7 +1855,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
   });
 
   it('keeps project task CRUD separate from active lifecycle routes', async () => {
-    await replaceAgentMcpPermissionPolicy(getDb(), 7, [
+    await replaceDelegatorFixturePolicy(getDb(), 7, [
             'discovery.read_catalog',
             'tasks.manage_project_tasks',
           ]);
@@ -1898,7 +1891,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       details: { required_capability: 'tasks.search_project_tasks' },
     });
 
-    await replaceAgentMcpPermissionPolicy(getDb(), 7, [
+    await replaceDelegatorFixturePolicy(getDb(), 7, [
             'discovery.read_catalog',
             'tasks.search_project_tasks',
           ]);
@@ -1914,7 +1907,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
   it('allows routing readers to inspect their project without a run, but never mutate or cross scope', async () => {
     await getDb().run(`UPDATE tasks SET active_instance_id = NULL WHERE id = 448`);
     await getDb().run(`UPDATE job_instances SET status = 'done' WHERE agent_id = 7`);
-    await replaceAgentMcpPermissionPolicy(getDb(), 7, ['routing_rules.read_project_scope']);
+    await replaceDelegatorFixturePolicy(getDb(), 7, ['routing_rules.read_project_scope']);
     for (const prefix of ['routing/rules', 'routing/assignment-rules', 'routing-rules', 'assignment-rules']) {
       for (const suffix of ['?project_id=86&workflow_type=dev', '?project_id=86&workflow_id=45', '/501', '/502']) {
         const response = await fetch(`${baseUrl}/api/v1/${prefix}${suffix}`, { headers: authHeaders(normalKey) });
@@ -1935,14 +1928,14 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     }
     const crossTenant = await fetch(`${baseUrl}/api/v1/routing/rules?tenant_id=2&project_id=99`, { headers: authHeaders(normalKey) });
     expect(crossTenant.status).toBe(403);
-    await replaceAgentMcpPermissionPolicy(getDb(), 11, ['routing_rules.read_project_scope']);
+    await replaceDelegatorFixturePolicy(getDb(), 11, ['routing_rules.read_project_scope']);
     const noProject = await fetch(`${baseUrl}/api/v1/routing/rules?project_id=86`, { headers: authHeaders(noProjectKey) });
     expect(noProject.status).toBe(403);
   });
 
   it('allows scoped routing rule read/create/update/delete when the assigned-project capability is enabled', async () => {
-    await replaceAgentMcpPermissionPolicy(getDb(), 7, [
-            'discovery.read_catalog',
+    await replaceDelegatorFixturePolicy(getDb(), 7, [
+            'discovery.read_catalog','runs.dispatch','host.execute',
             'routing_rules.manage_project_scope',
           ]);
 
@@ -2006,7 +1999,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       details: { required_capability: 'routing_rules.read_project_scope' },
     });
 
-    await replaceAgentMcpPermissionPolicy(getDb(), 7, [
+    await replaceDelegatorFixturePolicy(getDb(), 7, [
             'discovery.read_catalog',
             'routing_rules.manage_project_scope',
           ]);
@@ -2065,7 +2058,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
   });
 
   it('fails closed for routing rule management when the agent has no canonical project', async () => {
-    await replaceAgentMcpPermissionPolicy(getDb(), 11, [
+    await replaceDelegatorFixturePolicy(getDb(), 11, [
             'discovery.read_catalog',
             'routing_rules.manage_project_scope',
           ]);
@@ -2088,7 +2081,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     await getDb().run(`UPDATE tasks SET active_instance_id = NULL WHERE id = 448`);
     await getDb().run(`UPDATE job_instances SET status = 'done' WHERE agent_id = 7`);
 
-    await replaceAgentMcpPermissionPolicy(getDb(), 7, [
+    await replaceDelegatorFixturePolicy(getDb(), 7, [
       'workflow.analyze_routing_graph',
       'workflow.edit_routing_config',
     ]);
@@ -2115,7 +2108,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     await getDb().run(`UPDATE tasks SET active_instance_id = NULL WHERE id = 448`);
     await getDb().run(`UPDATE job_instances SET status = 'done' WHERE agent_id = 7`);
 
-    await replaceAgentMcpPermissionPolicy(getDb(), 7, [
+    await replaceDelegatorFixturePolicy(getDb(), 7, [
       'workflow.analyze_routing_graph',
       'workflow.edit_routing_config',
     ]);
@@ -2143,7 +2136,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
   });
 
   it('refuses graph analysis to a key with neither a dispatched run nor an assigned project', async () => {
-    await replaceAgentMcpPermissionPolicy(getDb(), 11, ['workflow.analyze_routing_graph']);
+    await replaceDelegatorFixturePolicy(getDb(), 11, ['workflow.analyze_routing_graph']);
 
     const res = await fetch(`${baseUrl}/api/v1/routing/graph?project_id=86`, { headers: authHeaders(noProjectKey) });
     expect(res.status).toBe(403);
@@ -2153,7 +2146,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     // Without the capability the write endpoints are still reachable, so an agent could change
     // shared routing config having never seen its blast radius. That is the half of the canvas
     // contract this capability exists to close.
-    await replaceAgentMcpPermissionPolicy(getDb(), 7, [
+    await replaceDelegatorFixturePolicy(getDb(), 7, [
       'discovery.read_catalog',
       'transition_requirements.manage_project_scope',
     ]);
@@ -2174,7 +2167,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     });
     expect(deniedAudit.status).toBe(403);
 
-    await replaceAgentMcpPermissionPolicy(getDb(), 7, [
+    await replaceDelegatorFixturePolicy(getDb(), 7, [
       'discovery.read_catalog',
       'transition_requirements.manage_project_scope',
       'workflow.edit_routing_config',
@@ -2189,7 +2182,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
   it('confines routing preview to the key\'s own project', async () => {
     // Preview runs the real mutation, so an unscoped one would let a key measure — and by
     // measuring, briefly apply — a change to a project it cannot otherwise touch.
-    await replaceAgentMcpPermissionPolicy(getDb(), 7, [
+    await replaceDelegatorFixturePolicy(getDb(), 7, [
       'discovery.read_catalog',
       'workflow.edit_routing_config',
     ]);
@@ -2210,7 +2203,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
   });
 
   it('allows scoped transition requirement CRUD for project defaults and workflow overrides', async () => {
-    await replaceAgentMcpPermissionPolicy(getDb(), 7, [
+    await replaceDelegatorFixturePolicy(getDb(), 7, [
             'discovery.read_catalog',
             'transition_requirements.manage_project_scope',
           ]);
@@ -2292,7 +2285,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       details: { required_capability: 'workflow.read_active_configuration' },
     });
 
-    await replaceAgentMcpPermissionPolicy(getDb(), 7, [
+    await replaceDelegatorFixturePolicy(getDb(), 7, [
             'discovery.read_catalog',
             'transition_requirements.manage_project_scope',
           ]);
@@ -2347,7 +2340,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
   });
 
   it('fails closed for transition requirement CRUD when the agent has no canonical project', async () => {
-    await replaceAgentMcpPermissionPolicy(getDb(), 11, [
+    await replaceDelegatorFixturePolicy(getDb(), 11, [
             'discovery.read_catalog',
             'transition_requirements.manage_project_scope',
           ]);
@@ -2363,8 +2356,8 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
   });
 
   it('allows read-only access to project task context when Read project task context is enabled', async () => {
-    await replaceAgentMcpPermissionPolicy(getDb(), 7, [
-            'discovery.read_catalog',
+    await replaceDelegatorFixturePolicy(getDb(), 7, [
+            'discovery.read_catalog','runs.dispatch','host.execute',
             'tasks.read_project_context',
             'tasks.create',
           ]);
@@ -2437,7 +2430,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
   });
 
   it('fails closed for project task context reads when the agent has no canonical project', async () => {
-    await replaceAgentMcpPermissionPolicy(getDb(), 11, [
+    await replaceDelegatorFixturePolicy(getDb(), 11, [
             'discovery.read_catalog',
             'tasks.read_project_context',
           ]);
@@ -2454,7 +2447,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
   });
 
   it('fails closed for project task search when the agent has no canonical project', async () => {
-    await replaceAgentMcpPermissionPolicy(getDb(), 11, [
+    await replaceDelegatorFixturePolicy(getDb(), 11, [
             'discovery.read_catalog',
             'tasks.search_project_tasks',
           ]);
@@ -2498,7 +2491,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
   });
 
   it('enforces explicit capability denies even for otherwise scoped routes', async () => {
-    await replaceAgentMcpPermissionPolicy(getDb(), 7, [
+    await replaceDelegatorFixturePolicy(getDb(), 7, [
             'discovery.read_catalog',
             'tasks.read_active_context',
             'tasks.write_active_lifecycle',
@@ -2530,7 +2523,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     const relationshipsRes = await fetch(`${baseUrl}/api/v1/tasks/448/relationships`, { headers: authHeaders(normalKey) });
     expect(relationshipsRes.status).toBe(200);
 
-    await replaceAgentMcpPermissionPolicy(getDb(), 7, [
+    await replaceDelegatorFixturePolicy(getDb(), 7, [
             'discovery.read_catalog',
             'tasks.write_active_lifecycle',
             'workflows.read_active_workflow',
@@ -2560,7 +2553,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
   });
 
   it('allows explicit full administrative MCP access for a non-admin agent when granted inside its own tenant', async () => {
-    await replaceAgentMcpPermissionPolicy(getDb(), 7, ['admin.full_access']);
+    await replaceDelegatorFixturePolicy(getDb(), 7, ['admin.full_access']);
 
     const createProjectRes = await fetch(`${baseUrl}/api/v1/projects`, {
       method: 'POST',
@@ -2683,7 +2676,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
   });
 
   it('allows explicit super-admin capability policy to operate across tenants', async () => {
-    await replaceAgentMcpPermissionPolicy(getDb(), 7, ['admin.full_access', 'admin.cross_tenant']);
+    await replaceDelegatorFixturePolicy(getDb(), 7, ['admin.full_access', 'admin.cross_tenant']);
 
     const allowed = await fetch(`${baseUrl}/api/v1/projects/99?tenant_id=2`, {
       method: 'DELETE',
@@ -2697,6 +2690,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
   });
 
   it('preserves admin capability for trusted Atlas-style MCP keys', async () => {
+    await replaceDelegatorFixturePolicy(getDb(),8,['admin.full_access','runs.dispatch','host.execute']);
     const createTaskRes = await fetch(`${baseUrl}/api/v1/tasks`, {
       method: 'POST',
       headers: authHeaders(adminKey),
@@ -2772,7 +2766,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     });
 
     it('allows board collections inside the assigned project once granted', async () => {
-      await replaceAgentMcpPermissionPolicy(getDb(), 7, ['projects.read_project_board']);
+      await replaceDelegatorFixturePolicy(getDb(), 7, ['projects.read_project_board']);
 
       const tasks = await fetch(`${baseUrl}/api/v1/tasks?project_id=86`, { headers: authHeaders(normalKey) });
       expect(tasks.status).toBe(200);
@@ -2785,7 +2779,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     });
 
     it('refuses a board collection that names another project', async () => {
-      await replaceAgentMcpPermissionPolicy(getDb(), 7, ['projects.read_project_board']);
+      await replaceDelegatorFixturePolicy(getDb(), 7, ['projects.read_project_board']);
 
       const tasks = await fetch(`${baseUrl}/api/v1/tasks?project_id=87`, { headers: authHeaders(normalKey) });
       expect(tasks.status).toBe(403);
@@ -2797,7 +2791,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
 
     it('refuses a board collection that names no project at all', async () => {
       // Without this the grant would be a tenant-wide task read, which is not what it says.
-      await replaceAgentMcpPermissionPolicy(getDb(), 7, ['projects.read_project_board']);
+      await replaceDelegatorFixturePolicy(getDb(), 7, ['projects.read_project_board']);
 
       const res = await fetch(`${baseUrl}/api/v1/tasks`, { headers: authHeaders(normalKey) });
       expect(res.status).toBe(403);
@@ -2805,7 +2799,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     });
 
     it('scopes workflow metadata by the workflow it names', async () => {
-      await replaceAgentMcpPermissionPolicy(getDb(), 7, ['projects.read_project_board']);
+      await replaceDelegatorFixturePolicy(getDb(), 7, ['projects.read_project_board']);
 
       const own = await fetch(`${baseUrl}/api/v1/workflows/workflow-metadata?workflow_id=42`, { headers: authHeaders(normalKey) });
       expect(own.status).toBe(200);
@@ -2825,7 +2819,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     });
 
     it('refuses board collections for an agent with no assigned project', async () => {
-      await replaceAgentMcpPermissionPolicy(getDb(), 11, ['projects.read_project_board']);
+      await replaceDelegatorFixturePolicy(getDb(), 11, ['projects.read_project_board']);
 
       const res = await fetch(`${baseUrl}/api/v1/tasks?project_id=86`, { headers: authHeaders(noProjectKey) });
       expect(res.status).toBe(403);
@@ -2835,7 +2829,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
   describe('tasks.write_project_notes', () => {
     it('notes any task in the assigned project without owning a run on it', async () => {
       // Task 451 is in project 86 but dispatched to nobody, so the active-task path cannot reach it.
-      await replaceAgentMcpPermissionPolicy(getDb(), 7, ['tasks.write_project_notes']);
+      await replaceDelegatorFixturePolicy(getDb(), 7, ['tasks.write_project_notes']);
 
       const res = await fetch(`${baseUrl}/api/v1/tasks/451/notes`, {
         method: 'POST',
@@ -2846,7 +2840,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     });
 
     it('still refuses a note on a task outside the assigned project', async () => {
-      await replaceAgentMcpPermissionPolicy(getDb(), 7, ['tasks.write_project_notes']);
+      await replaceDelegatorFixturePolicy(getDb(), 7, ['tasks.write_project_notes']);
 
       const res = await fetch(`${baseUrl}/api/v1/tasks/452/notes`, {
         method: 'POST',
@@ -2860,7 +2854,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       // The distinction this capability exists for: a note is additive and moves nothing, while an
       // outcome drives a workflow transition and belongs to the agent executing the run. Granting
       // both capabilities must not merge the two scopes.
-      await replaceAgentMcpPermissionPolicy(getDb(), 7, [
+      await replaceDelegatorFixturePolicy(getDb(), 7, [
         'tasks.write_project_notes',
         'tasks.write_active_lifecycle',
       ]);

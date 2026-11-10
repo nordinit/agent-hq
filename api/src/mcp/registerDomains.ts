@@ -1,3 +1,4 @@
+import {registerExecutionTools} from './domains/execution';
 import { McpDomainContext } from './registrar';
 import { registerAdvancedTools } from './domains/advanced';
 import { registerAgentsTools } from './domains/agents';
@@ -17,6 +18,7 @@ import { registerWorkflowsTools } from './domains/workflows';
 import { registerTelemetryTools } from './domains/telemetry';
 
 export function registerAgentHqMcpDomains(context: McpDomainContext) {
+  registerExecutionTools(context);
   registerProjectsTools(context);
   registerWorkflowsTools(context);
   registerTasksTools(context);

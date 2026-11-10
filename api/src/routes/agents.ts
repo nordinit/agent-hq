@@ -47,6 +47,7 @@ import { isValidTaskType } from '../lib/taskTypes';
 import { ensureOpenClawGatewayAvailable, requireOpenClawOutput, runOpenClawSync } from '../lib/openclawCli';
 import { syncAvailableOAuthProfilesToAuthFile } from '../lib/openclawOAuthProfiles';
 import {
+  agentMcpPolicyRevision,
   getAgentMcpPermissionPolicy,
   getAgentMcpServerToolAllowlists,
   replaceAgentMcpPermissionPolicy,
@@ -1089,15 +1090,9 @@ router.post('/provision-full', async (req: Request, res: Response) => {
           throw new Error((await skillResult).error ?? `${runtimeType} skill materialization failed`);
         }
 
-        const mcpResult = await syncAssignedMcpForAgent({
-                db,
-                agentId,
-                workingDirectory: workspacePath,
-                materializeOpenClawGlobalConfig: true,
-              });
-        if (!mcpResult.ok) {
-          throw new Error(mcpResult.error ?? `${runtimeType} MCP materialization failed`);
-        }
+        // Provisioning creates drafts/assignments. New identities receive no execution
+        // authority or automatic publication; activation follows explicit review.
+        const mcpResult = {count:0,path:null,warnings:['MCP activation is held for executable publication, binding and explicit execution grants.']};
 
         report.capabilities = {
           ok: true,
@@ -1107,6 +1102,7 @@ router.post('/provision-full', async (req: Request, res: Response) => {
             skill_materialization_count: (await skillResult).count,
             mcp_materialization_count: mcpResult.count,
             mcp_materialization_path: mcpResult.path ?? null,
+            execution_held_for_approval:true,
             tool_assignment_ids: createdToolAssignmentIds,
             mcp_assignment_ids: createdMcpAssignmentIds,
           },
@@ -1275,7 +1271,8 @@ router.get('/:id/mcp-permissions', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Invalid agent id' });
     }
     if (!await requireAgentVisibleForTenant(db, agentId, tenantId)) return res.status(404).json({ error: 'Agent not found' });
-    return res.json(await getAgentMcpPermissionPolicy(db, agentId));
+    const policy=await getAgentMcpPermissionPolicy(db,agentId);
+    return res.json({...policy,revision:agentMcpPolicyRevision(policy)});
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     if (message.includes('not found')) return res.status(404).json({ error: message });
@@ -1299,7 +1296,7 @@ async function replaceAgentMcpPermissionsHandler(req: Request, res: Response) {
     }
 
     if (body.expected_revision !== undefined && typeof body.expected_revision !== 'string') return res.status(400).json({ error: 'expected_revision must be a string' });
-    return res.json(await replaceAgentMcpPermissionPolicy(db, agentId, body.enabled_capabilities, body.expected_revision));
+    return res.json(await replaceAgentMcpPermissionPolicy(db, agentId, body.enabled_capabilities, body.expected_revision, req.mcpIdentity?.auditActor??'operator'));
   } catch (err) {
     if ((err as { status?: number }).status === 409) return res.status(409).json({ error: (err as Error).message });
     const message = err instanceof Error ? err.message : String(err);
@@ -1352,43 +1349,11 @@ async function replaceAgentMcpToolAllowlistHandler(req: Request, res: Response) 
 
     const servers = await replaceAgentMcpServerToolAllowlist(db, agentId, mcpServerId, body.tool_allowlist);
 
-    // The allowlist is baked into the agent's materialized MCP bundle, so a
-    // stored change does nothing until it is re-materialized. Dispatch only
-    // does that right before a run, which leaves fresh sessions started any
-    // other way on the old tool list. Publish now, and say so if it fails:
-    // the allowlist restricts what an agent may do, so a silent miss could
-    // leave an agent with tools it was just denied.
-    let failure: string | null = null;
-    let skipped: string | null = null;
-    try {
-      const syncResult = await syncAssignedMcpForAgent({
-        db,
-        agentId,
-        materializeOpenClawGlobalConfig: true,
-      });
-      // No workspace yet means there is no runtime to publish to; the next
-      // dispatch materializes the stored allowlist.
-      if (syncResult.ok || syncResult.skipped === 'missing_workspace') skipped = syncResult.skipped ?? null;
-      else failure = syncResult.error ?? 'Unknown MCP materialization error';
-    } catch (syncError) {
-      failure = syncError instanceof Error ? syncError.message : String(syncError);
-    }
+    // The gateway checks the persisted allowlist on every invocation. Refreshing
+    // discovery/processes is a separate, explicitly authorized host operation.
+    return res.json({agent_id:agentId,servers,allowlist_stored:true,enforced_on_next_call:true,
+      runtime_published:false,runtime_sync_skipped:'explicit_host_sync_required'});
 
-    if (failure !== null) {
-      return res.status(502).json({
-        error: `MCP allowlist was stored, but publishing it to the agent runtime failed: ${redactSensitiveRuntimeText(failure)}. Retry the allowlist update once the runtime error is resolved.`,
-        agent_id: agentId,
-        servers,
-        allowlist_stored: true,
-        runtime_published: false,
-      });
-    }
-    return res.json({
-      agent_id: agentId,
-      servers,
-      runtime_published: skipped === null,
-      runtime_sync_skipped: skipped,
-    });
   } catch (err) {
     const status = (err as Error & { status?: number }).status;
     const message = err instanceof Error ? err.message : String(err);
@@ -1409,7 +1374,7 @@ router.delete('/:id/mcp-permissions', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Invalid agent id' });
     }
     if (!await requireAgentVisibleForTenant(db, agentId, tenantId)) return res.status(404).json({ error: 'Agent not found' });
-    return res.json(await resetAgentMcpPermissionPolicy(db, agentId));
+    return res.json(await resetAgentMcpPermissionPolicy(db, agentId, req.mcpIdentity?.auditActor??'operator'));
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     if (message.includes('not found')) return res.status(404).json({ error: message });
@@ -1958,173 +1923,8 @@ router.put('/:id', async (req: Request, res: Response) => {
 
     const updated = await selectAgentWithProject(db, req.params.id, true) as Record<string, unknown>;
 
-    // Keep OpenClaw agent config in sync for provisioned openclaw-runtime agents.
-    // Without this, Agent HQ can update the DB model/provider while ~/.openclaw/openclaw.json
-    // still points at an older model, causing openclaw status and fresh defaulted sessions to drift.
-    if ((updated.runtime_type as string | null) === 'openclaw') {
-      try {
-        const slug = resolveSlug(updated);
-        const config = readOpenclawJson();
-        const agentsConfig = (config.agents as Record<string, unknown> | undefined) ?? {};
-        const list = (agentsConfig.list as Array<Record<string, unknown>> | undefined) ?? [];
-        const entry = list.find((a) => a.id === slug);
-        if (entry) {
-          entry.name = slug;
-          if (updated.workspace_path) entry.workspace = updated.workspace_path as string;
-          const homedir = os.homedir();
-          entry.agentDir = path.join(homedir, '.openclaw', 'agents', slug, 'agent');
-          const modelValue = (updated.model as string | null | undefined)?.trim();
-          if (modelValue) {
-            entry.model = { primary: modelValue };
-            ensureOpenClawCodexRuntime(entry, modelValue, updated.preferred_provider as string | null | undefined);
-          } else if (entry.model && typeof entry.model === 'object') {
-            delete (entry.model as Record<string, unknown>).primary;
-          }
-          agentsConfig.list = list;
-          config.agents = agentsConfig;
-          writeOpenclawJson(config);
-          setImmediate(() => {
-            try {
-              const gateway = ensureOpenClawGatewayAvailable();
-              if (!gateway.ok) {
-                throw new Error(gateway.message);
-              }
-            } catch (restartErr) {
-              console.warn(
-                `[agents.put] openclaw gateway restart failed after syncing agent #${req.params.id}:`,
-                restartErr instanceof Error ? restartErr.message : String(restartErr),
-              );
-            }
-          });
-        }
-      } catch (syncErr) {
-        console.warn(
-          `[agents.put] failed to sync openclaw.json for agent #${req.params.id}:`,
-          syncErr instanceof Error ? syncErr.message : String(syncErr),
-        );
-      }
-    }
-
-    // ── Task #644: propagate skill assignment changes to runtime artifacts ──
-    // When skill_names changes, re-materialize runtime artifacts in the background
-    // so the workspace reflects the updated assignment without requiring a full dispatch.
-    if (skill_names !== undefined && (updated.workspace_path as string | null)) {
-      const workingDirectory = updated.workspace_path as string;
-      const runtimeType = (updated.runtime_type as string | null) ?? 'openclaw';
-      let rematerializeRuntimeConfig: Record<string, unknown> | null = null;
-      try {
-        rematerializeRuntimeConfig = typeof updated.runtime_config === 'string'
-          ? JSON.parse(updated.runtime_config as string)
-          : (updated.runtime_config as Record<string, unknown> | null);
-      } catch {
-        rematerializeRuntimeConfig = null;
-      }
-      let syncSkillNames: string[] = [];
-      try {
-        const parsed = JSON.parse(resolvedSkillNames);
-        if (Array.isArray(parsed)) syncSkillNames = parsed.filter((s): s is string => typeof s === 'string');
-      } catch { /* ignore */ }
-
-      setImmediate(async () => {
-        try {
-          const adapter = getSkillMaterializationAdapter(runtimeType);
-          const result = adapter.materialize({
-            workingDirectory,
-            skillNames: syncSkillNames,
-            skillsBasePath: OPENCLAW_SKILLS_PATH,
-            hooksUrl: (updated.hooks_url as string | null) ?? null,
-            runtimeConfig: rematerializeRuntimeConfig,
-            db,
-            tenantId: Number(updated.tenant_id ?? 0) || null,
-          });
-          for (const warn of (await result).warnings) console.warn(`[agents.put] ${warn}`);
-          if ((await result).count > 0 || (await result).details.length > 0) {
-            console.log(
-              `[agents.put] skill re-materialization (${adapter.adapterName}) for agent #${req.params.id}: ${(await result).count} artifact(s) updated`,
-            );
-          }
-        } catch (matErr) {
-          console.warn(
-            `[agents.put] skill re-materialization failed for agent #${req.params.id}:`,
-            matErr instanceof Error ? matErr.message : String(matErr),
-          );
-        }
-      });
-    }
-
-    // Keep workspace/global MCP config in sync when OpenClaw routing identity
-    // changes so fresh sessions see assigned MCP servers without waiting for
-    // dispatcher materialization.
-    if (
-      ((agent.runtime_type as string | null) === 'openclaw' || (updated.runtime_type as string | null) === 'openclaw')
-      && (workspace_path !== undefined || session_key !== undefined || runtime_type !== undefined)
-    ) {
-      setImmediate(async () => {
-        try {
-          const result = await syncAssignedMcpForAgent({
-                      db,
-                      agentId: Number(req.params.id),
-                      workingDirectory: (updated.workspace_path as string | null) ?? null,
-                      materializeOpenClawGlobalConfig: true,
-                    });
-          for (const warn of result.warnings) console.warn(`[agents.put] ${warn}`);
-          if (result.skipped === 'missing_workspace') return;
-          if (!result.ok && result.error) {
-            console.warn(`[agents.put] MCP re-materialization failed for agent #${req.params.id}: ${result.error}`);
-            return;
-          }
-          console.log(
-            `[agents.put] MCP re-materialization for agent #${req.params.id}: ${result.count} server(s) updated`,
-          );
-        } catch (mcpErr) {
-          console.warn(
-            `[agents.put] MCP re-materialization failed for agent #${req.params.id}:`,
-            mcpErr instanceof Error ? mcpErr.message : String(mcpErr),
-          );
-        }
-      });
-    }
-
-    // ── Sync model to openclaw.json for openclaw-runtime agents ──
-    // When preferred_provider or model changes, update the agent's model.primary
-    // in the host openclaw.json so the gateway picks up the change on next session.
-    // Bug fix: use resolveSlug(updated) — the agents table has no 'slug' column;
-    // the correct slug is derived from openclaw_agent_id or session_key.
-    if (model !== undefined || preferred_provider !== undefined) {
-      const runtimeType = (updated.runtime_type as string | null) ?? 'openclaw';
-      const agentSlug = resolveSlug(updated);
-      const provider = (updated.preferred_provider as string | null) ?? resolveSchemaSafePreferredProvider(await getConnectedProviderSlugs(tenantId));
-      const newModel = (updated.model as string | null) ?? defaultAgentModelForProvider(provider);
-      if (runtimeType === 'openclaw' && agentSlug && newModel) {
-        try {
-          const raw = fs.readFileSync(OPENCLAW_CONFIG_PATH, 'utf-8');
-          const ocConfig = JSON.parse(raw);
-          // Resolve the OpenClaw provider prefix — check models.providers keys for a match
-          let ocProvider = provider;
-          if (!newModel.includes('/')) {
-            const providerKeys = Object.keys(ocConfig?.models?.providers ?? {});
-            // Prefer exact match, then prefix match (e.g. 'minimax' → 'minimax-portal')
-            const match = providerKeys.find(k => k === provider) ?? providerKeys.find(k => k.startsWith(provider));
-            if (match) ocProvider = match;
-          }
-          const qualifiedModel = newModel.includes('/') ? newModel : `${ocProvider}/${newModel}`;
-          const agentsList = ocConfig?.agents?.list as Array<Record<string, unknown>> | undefined;
-          if (agentsList) {
-            const ocAgent = agentsList.find((a: Record<string, unknown>) => a.id === agentSlug);
-            if (ocAgent) {
-              if (!ocAgent.model || typeof ocAgent.model !== 'object') ocAgent.model = {};
-              (ocAgent.model as Record<string, unknown>).primary = qualifiedModel;
-              ensureOpenClawCodexRuntime(ocAgent, qualifiedModel, provider);
-              fs.writeFileSync(OPENCLAW_CONFIG_PATH, JSON.stringify(ocConfig, null, 2));
-              console.log(`[agents.put] synced model "${qualifiedModel}" to openclaw.json for agent "${agentSlug}"`);
-            }
-          }
-        } catch (err) {
-          console.warn(`[agents.put] failed to sync model to openclaw.json:`, err instanceof Error ? err.message : String(err));
-        }
-      }
-    }
-
+    // Configuration edits remain drafts. Dispatch or an explicitly authorized sync
+    // materializes approved profiles; saving an agent never restarts a gateway.
     return res.json(parseAgentRuntimeConfig(updated));
   } catch (err) {
     return res.status(500).json({ error: String(err) });

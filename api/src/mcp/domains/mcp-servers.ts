@@ -43,7 +43,7 @@ export function registerMcpServersTools(ctx: McpDomainContext) {
     'Update an MCP server entry.',
     {
       mcp_server_id: z.number().int().positive().describe('MCP server ID'),
-      patch: z.record(z.string(), z.unknown()).describe('Partial update payload'),
+      patch: z.object({name:z.string().min(1).optional(),slug:z.string().min(1).optional(),description:z.string().optional(),transport:z.literal('stdio').optional(),command:z.string().min(1).optional(),args:z.array(z.string()).optional(),env:z.record(z.string(),z.string()).optional(),cwd:z.string().optional(),enabled:z.boolean().optional()}).strict().describe('Partial update payload'),
     },
     ({ mcp_server_id, patch }) => wrap(() => api.updateMcpServer(mcp_server_id, patch))(),
     { domain: 'mcp_servers', rest_paths: ['/api/v1/mcp-servers/:id'] },

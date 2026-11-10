@@ -61,90 +61,14 @@ describe('agent MCP tool allowlist routes', () => {
     await teardownTestDb();
   });
 
-  it('publishes the exact updated allowlist before reporting success', async () => {
-    let overridesObservedBySync: Record<string, unknown> | null = null;
-    mockSyncAssignedMcpForAgent.mockImplementation(async ({ db }: { db: ReturnType<typeof getDb> }) => {
-      const row = await db.get<{ overrides: string }>(`
-        SELECT overrides FROM agent_mcp_assignments WHERE agent_id = 7 AND mcp_server_id = 40
-      `);
-      overridesObservedBySync = JSON.parse(row!.overrides) as Record<string, unknown>;
-      return { ok: true, count: 2, warnings: [] };
-    });
-
-    const response = await request('/api/v1/agents/7/mcp-tool-allowlists/40', {
-      tool_allowlist: ['search_web', 'search_news', 'search_web'],
-    });
-
+  it('stores the exact allowlist for live enforcement without activating a host process',async()=>{
+    mockSyncAssignedMcpForAgent.mockRejectedValue(new Error('must not run'));
+    const response=await request('/api/v1/agents/7/mcp-tool-allowlists/40',{tool_allowlist:['search_web','search_news','search_web']});
     expect(response.status).toBe(200);
-    expect(response.body).toMatchObject({ runtime_published: true, runtime_sync_skipped: null });
-    expect(overridesObservedBySync).toEqual({ cwd: '/srv/search', tool_allowlist: ['search_web', 'search_news'] });
-    expect(mockSyncAssignedMcpForAgent).toHaveBeenCalledWith(expect.objectContaining({
-      agentId: 7,
-      materializeOpenClawGlobalConfig: true,
-    }));
-    expect(response.body.servers).toEqual(expect.arrayContaining([
-      expect.objectContaining({ mcp_server_id: 40, tool_allowlist: ['search_web', 'search_news'], unrestricted: false }),
-      expect.objectContaining({ mcp_server_id: 41, tool_allowlist: ['read_file'], unrestricted: false }),
-    ]));
-  });
-
-  it('surfaces runtime publication failure without claiming the stored update was published', async () => {
-    mockSyncAssignedMcpForAgent.mockResolvedValue({
-      ok: false,
-      count: 0,
-      warnings: [],
-      error: 'gateway reconciliation unavailable',
-    });
-
-    const response = await request('/api/v1/agents/7/mcp-tool-allowlists/40', {
-      tool_allowlist: ['search_web'],
-    });
-
-    expect(response.status).toBe(502);
-    expect(response.body).toMatchObject({
-      agent_id: 7,
-      allowlist_stored: true,
-      runtime_published: false,
-      error: expect.stringContaining('gateway reconciliation unavailable'),
-    });
-    const row = await getDb().get<{ overrides: string }>(`
-      SELECT overrides FROM agent_mcp_assignments WHERE agent_id = 7 AND mcp_server_id = 40
-    `);
-    expect(JSON.parse(row!.overrides)).toEqual({ cwd: '/srv/search', tool_allowlist: ['search_web'] });
-  });
-
-  it('reports a thrown publication error as unpublished and redacts it', async () => {
-    mockSyncAssignedMcpForAgent.mockRejectedValue(
-      new Error('gateway rejected Authorization: Bearer sk-ant-abcdefghijklmnopqrstuvwxyz0123456789'),
-    );
-
-    const response = await request('/api/v1/agents/7/mcp-tool-allowlists/40', {
-      tool_allowlist: ['search_web'],
-    });
-
-    expect(response.status).toBe(502);
-    expect(response.body).toMatchObject({ allowlist_stored: true, runtime_published: false });
-    expect(response.body.error).toContain('gateway rejected');
-    expect(response.body.error).not.toContain('sk-ant-abcdefghijklmnopqrstuvwxyz0123456789');
-  });
-
-  it('stores the allowlist without failing when the agent has no workspace to publish to', async () => {
-    mockSyncAssignedMcpForAgent.mockResolvedValue({
-      ok: false,
-      count: 0,
-      warnings: [],
-      skipped: 'missing_workspace',
-      error: 'Agent #7 has no workspace_path',
-    });
-
-    const response = await request('/api/v1/agents/7/mcp-tool-allowlists/40', {
-      tool_allowlist: ['search_web'],
-    });
-
-    expect(response.status).toBe(200);
-    expect(response.body).toMatchObject({ runtime_published: false, runtime_sync_skipped: 'missing_workspace' });
-    expect(response.body.servers).toEqual(expect.arrayContaining([
-      expect.objectContaining({ mcp_server_id: 40, tool_allowlist: ['search_web'] }),
-    ]));
+    expect(response.body).toMatchObject({allowlist_stored:true,enforced_on_next_call:true,runtime_published:false,runtime_sync_skipped:'explicit_host_sync_required'});
+    expect(mockSyncAssignedMcpForAgent).not.toHaveBeenCalled();
+    const row=await getDb().get<{overrides:string}>('SELECT overrides FROM agent_mcp_assignments WHERE agent_id=7 AND mcp_server_id=40');
+    expect(JSON.parse(row!.overrides)).toEqual({cwd:'/srv/search',tool_allowlist:['search_web','search_news']});
+    expect(response.body.servers).toEqual(expect.arrayContaining([expect.objectContaining({mcp_server_id:41,tool_allowlist:['read_file']})]));
   });
 });

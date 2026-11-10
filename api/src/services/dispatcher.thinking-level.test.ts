@@ -1,3 +1,5 @@
+// Routing fixtures mock the independent publication boundary; authority is tested in access/boundaries.test.ts.
+jest.mock('../domains/execution/authority', () => ({...jest.requireActual('../domains/execution/authority'),requirePublishedProfile:jest.fn(async()=>({}))}));
 import { setupTestDb, teardownTestDb } from '../db/testDb';
 import fs from 'fs';
 import os from 'os';

@@ -160,9 +160,8 @@ describe('agents Hermes runtime CRUD support', () => {
       }
       expect(fs.existsSync(path.join(workspacePath, 'memory'))).toBe(true);
 
-      const workspaceMcp = JSON.parse(fs.readFileSync(path.join(workspacePath, '.mcp.json'), 'utf8'));
-      expect(workspaceMcp.mcpServers['agent-hq__agent-1']).toMatchObject({ command: 'node', args: ['server.js'] });
-      expect(workspaceMcp.mcpServers['agent-hq__agent-1'].env.AGENT_HQ_MCP_API_KEY).toMatch(/^ahq_mcp_/);
+      expect(fs.existsSync(path.join(workspacePath,'.mcp.json'))).toBe(false);
+      expect(body.report.capabilities.details.execution_held_for_approval).toBe(true);
       expect(fs.existsSync(path.join(hermesHome, '.agent-hq', 'assigned-skills.json'))).toBe(true);
 
       const openClawConfig = fs.existsSync(process.env.OPENCLAW_CONFIG_PATH!)

@@ -13,6 +13,7 @@ export interface ResolutionEntry {
   effective: boolean;
   sources: Array<{ source_id: string; state: 'active' | 'overridden' | 'opted_out' | 'disabled'; explanation: string }>;
   description?: string;
+  execution_approval?: {state:'approval_present'|'held';revision_id:string|null;digest:string|null;reason:string};
 }
 export interface AgentResolution {
   agent: { id: number; name: string; enabled: boolean; runtime_type: string; model: string | null };

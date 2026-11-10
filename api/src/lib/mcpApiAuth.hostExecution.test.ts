@@ -1,3 +1,4 @@
+import {EXPLICIT_AUTHORITIES} from '../domains/access/capabilities';
 import express from 'express';
 import type { Server } from 'http';
 import { getDb } from '../db/client';
@@ -26,7 +27,7 @@ describe('scoped MCP keys and host execution', () => {
 
   const allScopedCapabilities = AGENT_MCP_CAPABILITY_CATALOG
     .map((capability) => capability.key)
-    .filter((key) => !key.startsWith('admin.'));
+    .filter((key) => !key.startsWith('admin.')&&!EXPLICIT_AUTHORITIES.has(key));
 
   beforeEach(async () => {
     const db = await setupTestDb();
@@ -95,7 +96,7 @@ describe('scoped MCP keys and host execution', () => {
     expect((await call('GET', '/api/v1/agents/9/resolution')).status).toBe(403);
   });
 
-  it('keeps host-executing administration routes behind admin.full_access', async () => {
+  it('requires explicit authorities even for admin keys', async () => {
     const routes: Array<[string, string, unknown?]> = [
       ['POST', '/api/v1/tools', { name: 'Shell', slug: 'shell', implementation_type: 'bash', implementation_body: 'id' }],
       ['PUT', '/api/v1/tools/1', { implementation_type: 'script', implementation_body: '{"command":"/bin/sh"}' }],
@@ -120,12 +121,12 @@ describe('scoped MCP keys and host execution', () => {
     ];
     for (const [method, route, body] of routes) {
       const res = await call(method, route, body);
-      expect({ method, route, status: res.status, required: res.body.details?.required_capability })
-        .toEqual({ method, route, status: 403, required: 'admin.full_access' });
+      expect({method,route,status:res.status}).toEqual({method,route,status:403});
     }
 
-    // The same requests with an administrative key reach the handler, so the refusals above
-    // are the policy and not a missing route.
+    // Business admin alone is insufficient; explicit operator-reviewed grants reach handlers.
+    for(const [method,route,body] of routes) expect((await call(method,route,body,adminKey)).status).toBe(403);
+    await replaceAgentMcpPermissionPolicy(getDb(),8,AGENT_MCP_CAPABILITY_CATALOG.map(c=>c.key));
     for (const [method, route, body] of routes) {
       const res = await call(method, route, body, adminKey);
       expect({ method, route, status: res.status }).toEqual({ method, route, status: 200 });
@@ -152,8 +153,7 @@ describe('scoped MCP keys and host execution', () => {
     ];
     for (const body of edits) {
       const res = await call('PUT', '/api/v1/agents/9', body);
-      expect({ body, status: res.status, required: res.body.details?.required_capability })
-        .toEqual({ body, status: 403, required: 'admin.full_access' });
+      expect({body,status:res.status}).toEqual({body,status:403});
     }
 
     const creates: Array<Record<string, unknown>> = [
@@ -170,7 +170,7 @@ describe('scoped MCP keys and host execution', () => {
     }
   });
 
-  it('still lets project agent management edit instructions and model selection', async () => {
+  it('holds protected instruction and runtime edits for host configuration approval', async () => {
     // Host fields sent back exactly as stored are not changes.
     const roundTrip = await call('PUT', '/api/v1/agents/9', {
       job_instructions: 'Review every backend change.',
@@ -185,9 +185,9 @@ describe('scoped MCP keys and host execution', () => {
         workingDirectory: '/srv/workspaces/builder',
       },
     });
-    expect(roundTrip.status).toBe(200);
+    expect(roundTrip.status).toBe(403);
 
-    await expect(call('PUT', '/api/v1/agents/9', { model: 'claude-opus', skill_names: ['create-task'] }).then((r) => r.status)).resolves.toBe(200);
+    await expect(call('PUT', '/api/v1/agents/9', { model: 'claude-opus', skill_names: ['create-task'] }).then((r) => r.status)).resolves.toBe(403);
 
     const created = await call('POST', '/api/v1/agents', {
       name: 'Reviewer',
@@ -195,6 +195,6 @@ describe('scoped MCP keys and host execution', () => {
       runtime_type: 'claude-code',
       runtime_config: { model: 'claude-sonnet', effort: 'medium' },
     });
-    expect(created.status).toBe(200);
+    expect(created.status).toBe(403);
   });
 });

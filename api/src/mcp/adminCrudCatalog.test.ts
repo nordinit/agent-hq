@@ -136,8 +136,8 @@ describe('Agent HQ MCP admin-page catalog coverage', () => {
       'workflow_id',
     ]);
     expect(byName.get('agent_hq_run_recurring_task_series_now')?.rest_paths).toEqual(['/api/v1/recurring-task-series/:id/run-now']);
-    expect(byName.get('agent_hq_create_agent_mcp_capability_policy')?.description).toContain('safe non-admin capability keys');
-    expect(byName.get('agent_hq_update_agent_mcp_capability_policy')?.args.map(arg => arg.name).sort()).toEqual(['agent_id', 'enabled_capabilities']);
+    expect(byName.get('agent_hq_create_agent_mcp_capability_policy')?.description).toContain('permissions.manage');
+    expect(byName.get('agent_hq_update_agent_mcp_capability_policy')?.args.map(arg => arg.name).sort()).toEqual(['agent_id', 'enabled_capabilities','expected_revision']);
     expect(byName.get('agent_hq_delete_agent_mcp_capability_policy')?.rest_paths).toEqual(['/api/v1/agents/:id/mcp-permissions']);
     expect(byName.get('agent_hq_list_transition_requirements')?.description).toContain('transition_requirements.manage_project_scope');
     expect(byName.get('agent_hq_create_transition_requirement')?.description).toContain('assigned project');

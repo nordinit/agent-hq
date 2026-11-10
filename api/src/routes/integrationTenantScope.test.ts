@@ -41,8 +41,8 @@ async function resetDb(): Promise<void> {
 
   tenantOneAdminKey = (await issueMcpApiKeyForAgent(db, 101)).apiKey;
   tenantTwoAdminKey = (await issueMcpApiKeyForAgent(db, 202)).apiKey;
-  await replaceAgentMcpPermissionPolicy(db, 101, ['admin.full_access']);
-  await replaceAgentMcpPermissionPolicy(db, 202, ['admin.full_access']);
+  await replaceAgentMcpPermissionPolicy(db, 101, ['admin.full_access','host.configure']);
+  await replaceAgentMcpPermissionPolicy(db, 202, ['admin.full_access','host.configure']);
 }
 
 async function startTestServer(): Promise<void> {

@@ -1,11 +1,11 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { AgentHqApiClient, AgentHqApiError } from './apiClient';
-import { registerCatalogTool } from './catalog';
+import { registerCatalogTool, toolOperationMetadata } from './catalog';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import { getToolPermissionRequirement } from './toolPermissions';
 
-export type McpToolResult = { content: Array<{ type: 'text'; text: string }> };
+export type McpToolResult = { isError?:boolean; content: Array<{ type: 'text'; text: string }> };
 export type McpToolHandler = (args: any) => Promise<McpToolResult>;
 export type McpResourceRef = { id: string; uri: string };
 
@@ -71,6 +71,7 @@ export function createMcpRegistrar(server: McpServer, options: McpRegistrarOptio
         .map((definition) => definition.listing ??= {
           name: definition.name,
           description: definition.description,
+          annotations: toolOperationMetadata(definition.name).annotations,
           inputSchema: z.toJSONSchema(z.object(definition.schema), { io: 'input' }) as Tool['inputSchema'],
         });
     },

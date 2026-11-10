@@ -11,6 +11,7 @@ import {
 test('normalizes API materialized tools and filters unsupported execution types', () => {
   const tools = normalizeMaterializedTools({
     tools: [
+      { slug: 'approved', execution_type: 'broker' },
       { slug: 'run_shell', execution_type: 'shell' },
       { slug: 'remote', execution_type: 'http' },
       { slug: 'legacy_mcp', execution_type: 'mcp' },
@@ -18,7 +19,7 @@ test('normalizes API materialized tools and filters unsupported execution types'
     ],
   });
 
-  assert.deepEqual(tools.map((tool) => tool.slug), ['run_shell', 'remote']);
+  assert.deepEqual(tools.map((tool) => tool.slug), ['approved']);
 });
 
 test('transforms API response rows into OpenClaw native tool definitions', () => {

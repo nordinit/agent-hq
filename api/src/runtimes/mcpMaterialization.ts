@@ -1,3 +1,4 @@
+import {resolvePublishedRows} from '../domains/execution/authority';
 import { stableJson } from './openclaw/stableJson';
 import {
   pinMcpRunIdentity, pinMcpRunIdentityFile, runIdentityFromEnv, writeRunIdentityFile, type AgentRunIdentity,
@@ -234,13 +235,6 @@ function applyAssignmentToolAllowlist(
   const allowedTools = allowlist.configured && !allowlist.malformed ? Array.from(new Set(allowlist.tools)).sort() : [];
   const include = allowedTools.length > 0 ? allowedTools : [FAIL_CLOSED_MCP_TOOL_INCLUDE];
   const launch = { ...merged };
-  if (launch.enforce_tool_allowlist === true) {
-    if (typeof launch.command !== 'string') throw new Error('MCP tool gateway requires a stdio command');
-    const upstream = { command: launch.command, args: launch.args ?? [], cwd: launch.cwd, allowedTools };
-    launch.command = process.execPath;
-    launch.args = [path.resolve(__dirname, '../bin/mcp-tool-gateway.js')];
-    launch.env = { ...(isRecord(launch.env) ? launch.env : {}), AGENT_HQ_MCP_UPSTREAM: JSON.stringify(upstream) };
-  }
   delete launch.enforce_tool_allowlist;
   return {
     ...launch,
@@ -678,7 +672,8 @@ async function buildDesiredServerConfig(
   }
 
   if (AGENT_HQ_API_KEY_SERVER_SLUGS.has(row.slug)) {
-    const existingEnv = isRecord(params.existingServer?.env) ? params.existingServer?.env : {};
+    let existingEnv = isRecord(params.existingServer?.env) ? params.existingServer?.env : {};
+    if(typeof existingEnv.AGENT_HQ_MCP_UPSTREAM==='string'){try{const upstream=JSON.parse(existingEnv.AGENT_HQ_MCP_UPSTREAM);if(isRecord(upstream.env))existingEnv=upstream.env;}catch{/* invalid reusable config is ignored */}}
     const existingApiKey = readStringEnvValue(existingEnv, 'AGENT_HQ_MCP_API_KEY');
     const apiKey = params.resolveAgentApiKey
       ? await params.resolveAgentApiKey(existingApiKey, 'Agent HQ MCP materialized key')
@@ -712,7 +707,7 @@ export async function fetchAssignedMcpServers(
   // Union of the agent's own assignments and its teams'; see
   // domains/teams/effectiveCapabilities.ts. Tenant scoping is unconditional there rather than
   // probed per call: the migration gate guarantees both tenant_id columns exist.
-  const rows = await fetchEffectiveAgentMcpRows(db, agentId) as unknown as AgentMcpRow[];
+  const rows = await resolvePublishedRows(db,agentId,'mcp_server',await fetchEffectiveAgentMcpRows(db, agentId)) as unknown as AgentMcpRow[];
 
   let sharedAgentApiKey: string | null = null;
   const resolveAgentApiKey = async (existingApiKey: string | null, name: string): Promise<string> => {
@@ -742,7 +737,17 @@ export async function fetchAssignedMcpServers(
       existingServer: existingServers[scopedName] ?? existingServers[row.slug],
       resolveAgentApiKey,
     });
-    if (config !== null) entries.push([scopedName, config]);
+    if (config !== null) {
+      if(typeof config.command!=='string')throw new Error('Only approved stdio MCP launches are supported.');
+      const filter=isRecord(config.toolFilter)&&Array.isArray(config.toolFilter.include)?config.toolFilter.include:null;
+      const upstream={command:config.command,args:config.args??[],cwd:config.cwd,env:config.env??{},allowedTools:filter};
+      entries.push([scopedName,{
+        command:process.execPath,args:[path.resolve(__dirname,'../bin/mcp-tool-gateway.js')],
+        toolFilter:config.toolFilter,
+        agentHqAssignment:config.agentHqAssignment,
+        env:{AGENT_HQ_MCP_UPSTREAM:JSON.stringify(upstream),AGENT_HQ_EXECUTION_API_KEY:await resolveAgentApiKey(null,'MCP execution broker'),AGENT_HQ_EXECUTION_SERVER_ID:String((row as any).mcp_server_id),AGENT_HQ_EXECUTION_REVISION_ID:String((row as any).execution_revision_id),AGENT_HQ_INTERNAL_BASE_URL:process.env.AGENT_HQ_INTERNAL_BASE_URL??'http://127.0.0.1:3501'},
+      }]);
+    }
   }
   return Object.fromEntries(entries);
 }
@@ -1095,8 +1100,7 @@ function resolveHermesServerPaths(
 ): Record<string, Record<string, unknown>> {
   return Object.fromEntries(
     Object.entries(servers).map(([name, server]) => {
-      const resolvedCommand = resolveHermesServerCommand(server);
-      return [name, resolveHermesServerArgs(resolvedCommand)];
+      return [name, mapGatewayUpstream(server,upstream=>resolveHermesServerArgs(resolveHermesServerCommand(upstream)))];
     }),
   );
 }
@@ -1140,8 +1144,16 @@ function resolveAgentHqServerPaths(
   servers: Record<string, Record<string, unknown>>,
 ): Record<string, Record<string, unknown>> {
   return Object.fromEntries(
-    Object.entries(servers).map(([name, server]) => [name, resolveAgentHqServerRuntimePaths(server)]),
+    Object.entries(servers).map(([name, server]) => [name, mapGatewayUpstream(server,resolveAgentHqServerRuntimePaths)]),
   );
+}
+
+function mapGatewayUpstream(server:Record<string,unknown>,resolve:(server:Record<string,unknown>)=>Record<string,unknown>):Record<string,unknown> {
+  if(isRecord(server.env)&&typeof server.env.AGENT_HQ_MCP_UPSTREAM==='string') {
+    const upstream=JSON.parse(server.env.AGENT_HQ_MCP_UPSTREAM);
+    return {...server,env:{...server.env,AGENT_HQ_MCP_UPSTREAM:JSON.stringify(resolve(upstream))}};
+  }
+  return resolve(server);
 }
 
 /**

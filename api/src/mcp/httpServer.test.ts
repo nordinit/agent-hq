@@ -8,7 +8,7 @@ import { buildEffectiveAccess } from './accessView';
 import { describeToolAccess } from './accessView';
 
 const VALID_KEY = 'ahq_mcp_valid_test_key';
-const DEFAULT_GRANTS = ['tasks.read_project_context', 'workflow_definitions.read_project_scope', 'workflow_definitions.manage_project_scope'];
+const DEFAULT_GRANTS = ['tasks.read_project_context', 'workflow_definitions.read_project_scope', 'workflow_definitions.manage_project_scope','runs.dispatch','host.execute'];
 
 function identityFor(agentSlug: string): McpApiIdentity {
   return {
@@ -168,14 +168,14 @@ describe('MCP Streamable HTTP transport', () => {
     }
   });
 
-  it('serves the full surface only with admin.full_access', async () => {
+  it('keeps execution tools hidden from ordinary business admins', async () => {
     harness = await startHarness({ capabilities: ['admin.full_access'] });
     const client = await connectClient(harness.baseUrl, VALID_KEY);
 
     try {
       const listed = await client.listTools();
-      expect(listed.tools).toHaveLength(describeToolAccess(['admin.full_access']).length);
-      expect(listed.tools.map(tool => tool.name)).toContain('agent_hq_provision_full_agent');
+      expect(listed.tools).toHaveLength(describeToolAccess(['admin.full_access']).filter(t=>t.available).length);
+      expect(listed.tools.map(tool => tool.name)).not.toContain('agent_hq_provision_full_agent');
     } finally {
       await client.close();
     }

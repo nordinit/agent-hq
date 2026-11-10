@@ -1,4 +1,4 @@
-const SUPPORTED_EXECUTION_TYPES = new Set(['shell', 'script', 'http']);
+const SUPPORTED_EXECUTION_TYPES = new Set(['broker']);
 const OPENCLAW_AGENT_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
 const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 export const DEFAULT_TOOL_TIMEOUT_MS = 180_000;

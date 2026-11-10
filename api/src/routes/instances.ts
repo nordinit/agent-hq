@@ -259,7 +259,9 @@ router.get('/:id/session-key', async (req: Request, res: Response) => {
 // while a run is live, and it reads one indexed row per source table.
 router.get('/:id/activity', async (req: Request, res: Response) => {
   try {
-    const activity = await getInstanceActivity(getDb(), Number(req.params.id));
+    const db=getDb(),tenant=await resolveTenantIdFromRequest(db,req);
+    if(!await db.get('SELECT id FROM job_instances WHERE id=? AND tenant_id=?',req.params.id,tenant))return res.status(404).json({error:'Instance not found'});
+    const activity = await getInstanceActivity(db, Number(req.params.id));
     if (!activity) return res.status(404).json({ error: 'Instance not found' });
     return res.json(activity);
   } catch (err) {

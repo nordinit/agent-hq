@@ -2,7 +2,7 @@
   "name": "agent-hq-api",
   "version": "1.0.0",
   "license": "MIT",
-  "description": "Agent HQ API — agent management backend",
+  "description": "Agent HQ API \u2014 agent management backend",
   "main": "dist/index.js",
   "bin": {
     "agent-hq-mcp": "dist/mcp/server.js",
@@ -20,10 +20,12 @@
     "db:provision-defaults": "npx tsx src/db/provision-defaults.ts",
     "start": "node dist/index.js",
     "start:dev": "PORT=3511 node dist/index.js",
-    "lint": "tsc --noEmit && npm run lint:sql",
+    "lint": "tsc --noEmit && npm run lint:sql && npm run catalog:check",
     "lint:sql": "node --import tsx src/tooling/sqlPortabilityLint.ts",
     "test": "jest",
-    "seed:dev": "npx tsx src/db/seed-dev.ts"
+    "seed:dev": "npx tsx src/db/seed-dev.ts",
+    "catalog:generate": "node --require tsx/cjs scripts/generate-operation-inventory.cjs",
+    "catalog:check": "node --require tsx/cjs scripts/generate-operation-inventory.cjs --check"
   },
   "jest": {
     "preset": "ts-jest",

@@ -1,3 +1,4 @@
+import {requirePublishedProfile} from '../domains/execution/authority';
 import fs from 'fs';
 import path from 'path';
 import { notifyTaskStatusChange } from '../lib/taskNotifications';
@@ -1775,6 +1776,9 @@ export async function dispatchTaskToJob(
   candidateCount: number,
   ruleLabel?: string,
 ): Promise<boolean> {
+  // Check before workspace preparation, git commands, setup or runtime launch.
+  await requirePublishedProfile(db,job.agent_id,'agent_runtime',job.agent_id);
+  if(task.workflow_id!=null)await requirePublishedProfile(db,job.agent_id,'workflow_setup',task.workflow_id);
   const routingReason = [
     `Priority: ${task.priority}`,
     task.blocking_count > 0 ? `Blocking ${task.blocking_count} task(s)` : null,
@@ -2344,6 +2348,7 @@ export interface DispatchInstanceParams {
  */
 export async function dispatchInstance(params: DispatchInstanceParams): Promise<void> {
   const db = getDb();
+  await requirePublishedProfile(db,params.agentId,'agent_runtime',params.agentId);
   if ((params.runtimeType ?? 'openclaw') === 'openclaw') {
     const recovery = await getAgentMcpRecovery(db, params.agentId);
     if (recovery) {

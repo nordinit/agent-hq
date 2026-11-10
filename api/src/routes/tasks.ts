@@ -1,3 +1,4 @@
+import {summaryTaskResponse} from '../domains/access/projectContext';
 import { Router, Request, Response } from 'express';
 import { getDb } from '../db/client';
 import multer from 'multer';
@@ -106,6 +107,7 @@ const upload = multer({ storage, limits: { fileSize: 50 * 1024 * 1024 } }); // 5
 import { requireNumericId } from '../lib/routeParams';
 
 const router = Router();
+router.use((req,res,next)=>{if(req.method==='GET'&&req.path==='/'&&req.query.view==='summary'){const json=res.json.bind(res);res.json=((v:unknown)=>json(summaryTaskResponse(v))) as typeof res.json;}next();});
 // Rejects a non-numeric :id with a 404 before it reaches the database. Must be per-router:
 // app.param() does not fire for a param declared on a mounted sub-router.
 router.param('id', requireNumericId);
@@ -154,7 +156,7 @@ router.get('/', async (req: Request, res: Response) => {
   try {
     const db = getDb();
     const tenantId = await resolveTenantIdFromRequest(db, req);
-    res.json(await listTasks(db, { ...req.query, tenant_id: tenantId }));
+    res.json(await listTasks(db, { ...req.query, ...(req.query.view==='summary'?{limit:req.query.limit??50}:{}), tenant_id: tenantId }));
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }

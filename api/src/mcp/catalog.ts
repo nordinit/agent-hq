@@ -5,6 +5,19 @@ import {
 } from './apiClient';
 import { toJSONSchema, type ZodTypeAny, z } from 'zod';
 import { getToolPermissionRequirement, type ToolPermissionRequirement } from './toolPermissions';
+import manifest from '../domains/access/operations.generated.json';
+import {operationId,sensitiveOperation,delegatedExecution,policyExamplePath,navigationGroup} from '../domains/access/operations';
+
+export function toolOperationMetadata(name:string) {
+  const source=(manifest as any).mcp_operations?.[name] as {operations:Array<{method:string;path:string}>;mapping:string}|undefined;
+  const operations=(source?.operations??[]).map(o=>{
+    const p=policyExamplePath(o.path.replace(/^\/api\/v1/,''));
+    const policy=sensitiveOperation(o.method,p);
+    return {...o,operation_id:operationId(o.method,o.path),effect:policy?.effect??(o.method==='GET'?'data_read':'data_write'),requirements:policy?.requirements??[],delegation_requirements:delegatedExecution(o.method,p,{})?['runs.dispatch','host.execute']:[]};
+  });
+  const readOnly=operations.length>0&&operations.every(o=>o.effect==='data_read'&&o.method==='GET');
+  return {operations,operation_mapping:source?.mapping??'dynamic_or_transport',annotations:{readOnlyHint:readOnly,destructiveHint:!readOnly,idempotentHint:readOnly},retry_policy:readOnly?'safe_read':'do_not_retry_automatically'};
+}
 
 export interface McpCatalogArg {
   name: string;
@@ -14,6 +27,7 @@ export interface McpCatalogArg {
 }
 
 export interface McpCatalogTool {
+  navigation_group?: string;
   canonical_name: string;
   aliases: string[];
   description: string;
@@ -145,6 +159,8 @@ export function getMcpCatalog() {
       'tools',
       'mcp_servers',
       'advanced',
+      'telemetry',
+      'execution',
     ],
     enums: {
       default_task_statuses: VALID_TASK_STATUSES,
@@ -160,6 +176,7 @@ export function getMcpCatalog() {
       workflow_lifecycle_statuses_source: 'global_system_enum',
     },
     resources,
-    tools: [...tools.values()].sort((a, b) => a.canonical_name.localeCompare(b.canonical_name)),
+    navigation_groups:['Projects / Work','Runs / Lifecycle','Automation','Workflow Policy / Routing','Agents / Teams','Capability Registry','Observability','Host / Providers','Identity / Access'],
+    tools: [...tools.values()].sort((a, b) => a.canonical_name.localeCompare(b.canonical_name)).map(tool=>({...tool,...toolOperationMetadata(tool.canonical_name),navigation_group:navigationGroup(tool.domain)})),
   };
 }

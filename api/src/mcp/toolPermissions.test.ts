@@ -1,3 +1,4 @@
+import {EXPLICIT_AUTHORITIES} from '../domains/access/capabilities';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { AGENT_MCP_CAPABILITY_CATALOG } from '../lib/mcpApiAuth';
 import { getMcpCatalog } from './catalog';
@@ -19,7 +20,8 @@ test('every product tool has explicit metadata and every declared capability exi
       for (const key of clause) expect(known.has(key)).toBe(true);
     }
     expect(canDiscoverTool(name, new Set())).toBe(false);
-    expect(canDiscoverTool(name, new Set(['admin.full_access']))).toBe(true);
+    if(requirement.every(clause=>clause.some(key=>EXPLICIT_AUTHORITIES.has(key)))) expect(canDiscoverTool(name,new Set(['admin.full_access']))).toBe(false);
+    expect(canDiscoverTool(name,new Set(known))).toBe(true);
   }
 });
 
@@ -36,7 +38,8 @@ test.each([
   ['get_task', ['tasks.manage_project_tasks'], true],
   ['get_task_active_owner', ['tasks.manage_project_tasks'], false],
   ['create_task', ['tasks.read_project_context'], false],
-  ['create_task', ['tasks.create'], true],
+  ['create_task', ['tasks.create'], false],
+  ['create_task', ['tasks.create','runs.dispatch','host.execute'], true],
   ['update_task', ['tasks.write_active_custom_fields'], true],
   ['delete_task', ['tasks.write_active_custom_fields'], false],
   ['move_task', ['tasks.write_project_lifecycle'], true],
@@ -44,7 +47,8 @@ test.each([
   ['start_task_run', ['tasks.write_project_lifecycle'], false],
   ['get_workflow_type', ['workflow_definitions.read_project_scope'], true],
   ['create_workflow_type_field_schema', ['workflow_definitions.read_project_scope'], false],
-  ['create_workflow_type_field_schema', ['workflow_definitions.manage_project_scope'], true],
+  ['create_workflow_type_field_schema', ['workflow_definitions.manage_project_scope'], false],
+  ['create_workflow_type_field_schema', ['workflow_definitions.manage_project_scope','runs.dispatch','host.execute'], true],
   ['get_workflow_type', ['workflow_definitions.manage_project_scope'], false],
   ['import_telemetry_definitions', ['telemetry.manage_metrics'], false],
   ['import_telemetry_definitions', ['telemetry.manage_reports'], false],

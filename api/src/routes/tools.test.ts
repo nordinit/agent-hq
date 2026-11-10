@@ -1,3 +1,4 @@
+import {approveExecutableFixture} from '../test-support/executionFixtures';
 import express from 'express';
 import type { Server } from 'http';
 import toolsRouter from './tools';
@@ -50,6 +51,7 @@ describe('OpenClaw materialized tools route', () => {
     `, JSON.stringify({ command: 'echo "$repo_path"', timeoutMs: 1000 }), JSON.stringify({ type: 'object', properties: { repo_path: { type: 'string' } }, required: ['repo_path'] }), JSON.stringify(['deployment']));
     await db.run(`INSERT INTO agent_tool_assignments (id, agent_id, tool_id, enabled) VALUES (20, 1, 10, 1)`);
 
+    const approved=await approveExecutableFixture(db,1,1,'tool',10);
     const { server, baseUrl } = await startTestServer();
     try {
       const response = await fetch(`${baseUrl}/api/v1/tools/materialized/agents/atlas`);
@@ -67,12 +69,8 @@ describe('OpenClaw materialized tools route', () => {
           permissions: 'exec',
           enabled: true,
           assignment_enabled: true,
-          execution_type: 'shell',
-          execution_payload: {
-            type: 'shell',
-            command: 'echo "$repo_path"',
-            timeoutMs: 1000,
-          },
+          execution_type: 'broker',
+          execution_payload: {agent_id:1,tool_id:10,revision_id:approved.id},
         }),
       ]);
     } finally {

@@ -18,7 +18,6 @@ import { renderTeamContextForAgent, resolveDispatchTeamId } from '../domains/tea
 import { fetchEffectiveAgentMcpRows, fetchEffectiveAgentToolRows, resolveEffectiveSkillNames } from '../domains/teams/effectiveCapabilities';
 import { applyTeamRouting, planTeamRoutingApplication } from '../domains/teams/routingTemplates';
 import { requestAuditActor } from '../domains/routing/audit';
-import { syncAssignedMcpForAgent } from '../runtimes/mcpMaterialization';
 import { redactMcpServerRow } from '../lib/secretMasking';
 
 const router = Router();
@@ -360,32 +359,6 @@ router.delete('/:id/members/:agentId', async (req: Request, res: Response) => {
   }
 });
 
-// ── Capability defaults ──────────────────────────────────────────────────────
-
-/**
- * A team capability change reaches every member's materialized runtime config, so the affected
- * agents are resynced in the background rather than waiting for each one's next dispatch.
- */
-function scheduleTeamMcpSync(teamId: number): void {
-  setImmediate(async () => {
-    try {
-      const db = getDb();
-      const members = await db.all(
-        `SELECT agent_id FROM team_members WHERE team_id = ? AND enabled = 1 ORDER BY agent_id ASC`,
-        teamId,
-      ) as Array<{ agent_id: number }>;
-      for (const { agent_id } of members) {
-        const result = await syncAssignedMcpForAgent({ db, agentId: agent_id, materializeOpenClawGlobalConfig: true });
-        if (!result.ok && result.error) {
-          console.warn(`[teams] MCP sync failed for agent #${agent_id}: ${result.error}`);
-        }
-      }
-    } catch (err) {
-      console.warn(`[teams] MCP sync failed for team #${teamId}:`, err instanceof Error ? err.message : String(err));
-    }
-  });
-}
-
 router.get('/:id/tools', async (req: Request, res: Response) => {
   try {
     const db = getDb();
@@ -479,7 +452,6 @@ router.post('/:id/mcp-servers', async (req: Request, res: Response) => {
       INSERT INTO team_mcp_assignments (team_id, mcp_server_id, overrides, enabled)
       VALUES (?, ?, ?, ?)
     `, req.params.id, mcp_server_id, normalizeJsonObject(overrides, '{}'), enabled === undefined ? 1 : (enabled ? 1 : 0));
-    scheduleTeamMcpSync(Number(req.params.id));
 
     return res.status(201).json(await db.get('SELECT * FROM team_mcp_assignments WHERE id = ?', result.lastInsertId));
   } catch (err) {
@@ -500,7 +472,6 @@ router.delete('/:id/mcp-servers/:serverId', async (req: Request, res: Response) 
       req.params.id, req.params.serverId,
     );
     if (!result.changes) return res.status(404).json({ error: 'Team MCP assignment not found' });
-    scheduleTeamMcpSync(Number(req.params.id));
     return res.json({ ok: true });
   } catch (err) {
     return fail(res, err);

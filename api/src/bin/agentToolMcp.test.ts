@@ -3,18 +3,13 @@ import os from 'os';
 import path from 'path';
 import {
   buildToolDefinitions,
-  executeAgentTool,
   jsonSchemaFromInputSchema,
   mcpToolNameFromSlug,
-  registerAgentTools,
   resolveAgentId,
   resolveHardcodedToolSlugs,
   resolveWorkingDirectory,
   zodInputSchema,
-  type AgentToolDefinition,
   type AgentToolRecord,
-  type McpTextResult,
-  type ToolRegistrarLike,
 } from './agent-tool-mcp';
 
 function makeTool(overrides: Partial<AgentToolRecord> = {}): AgentToolRecord {
@@ -197,146 +192,6 @@ describe('buildToolDefinitions', () => {
 
     expect(definition.name).toBe('example_tool');
     expect(definition.inputSchema.parse({ anything: 1 })).toEqual({ anything: 1 });
-  });
-});
-
-describe('executeAgentTool', () => {
-  let workdir: string;
-
-  beforeEach(() => {
-    workdir = mkdtempSync(path.join(os.tmpdir(), 'agent-tool-mcp-test-'));
-  });
-
-  afterEach(() => {
-    rmSync(workdir, { recursive: true, force: true });
-  });
-
-  it('runs bash tools in the supplied working directory', () => {
-    writeFileSync(path.join(workdir, 'marker.txt'), 'inside-the-run-cwd', 'utf8');
-
-    const result = executeAgentTool(makeTool({ implementation_body: 'cat marker.txt' }), {}, workdir);
-
-    expect(result.isError).toBeUndefined();
-    expect(result.content).toEqual([{ type: 'text', text: 'inside-the-run-cwd' }]);
-  });
-
-  it('exposes the tool input as TOOL_INPUT and per-key TOOL_* variables', () => {
-    const result = executeAgentTool(
-      makeTool({ implementation_body: 'printf "%s|%s|%s" "$TOOL_INPUT" "$TOOL_FOCUS" "$TOOL_DEPTH"' }),
-      { focus: 'routing', depth: 3 },
-      workdir,
-    );
-
-    expect(result.content[0].text).toBe(`${JSON.stringify({ focus: 'routing', depth: 3 })}|routing|3`);
-  });
-
-  it('does not pass API-process secrets into registry tool commands', () => {
-    const previousDatabaseUrl = process.env.DATABASE_URL;
-    process.env.DATABASE_URL = 'postgres://agent:database-secret@db/agent_hq';
-    try {
-      const result = executeAgentTool(
-        makeTool({ implementation_body: 'printf "%s" "${DATABASE_URL-unset}"' }),
-        {},
-        workdir,
-      );
-      expect(result.content[0].text).toBe('unset');
-    } finally {
-      if (previousDatabaseUrl === undefined) delete process.env.DATABASE_URL;
-      else process.env.DATABASE_URL = previousDatabaseUrl;
-    }
-  });
-
-  it('runs shell tools, including the capability payload body form', () => {
-    const raw = executeAgentTool(
-      makeTool({ implementation_type: 'shell', implementation_body: 'printf raw-body' }),
-      {},
-      workdir,
-    );
-    expect(raw).toEqual({ content: [{ type: 'text', text: 'raw-body' }] });
-
-    const payload = executeAgentTool(
-      makeTool({
-        implementation_type: 'shell',
-        implementation_body: JSON.stringify({ command: 'printf payload-body', timeoutMs: 5_000 }),
-      }),
-      {},
-      workdir,
-    );
-    expect(payload).toEqual({ content: [{ type: 'text', text: 'payload-body' }] });
-  });
-
-  it('reports a failing command as an error result with stderr, without throwing', () => {
-    const result = executeAgentTool(
-      makeTool({ slug: 'failing_tool', implementation_body: 'echo boom >&2; exit 3' }),
-      {},
-      workdir,
-    );
-
-    expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain('Error executing tool "failing_tool"');
-    expect(result.content[0].text).toContain('boom');
-  });
-
-  it('rejects an empty implementation body', () => {
-    const result = executeAgentTool(makeTool({ implementation_body: '' }), {}, workdir);
-
-    expect(result.isError).toBe(true);
-    expect(result.content[0].text).toBe('Error: tool has no implementation body');
-  });
-
-  it('runs inline script tools', () => {
-    const result = executeAgentTool(
-      makeTool({
-        implementation_type: 'script',
-        implementation_body: JSON.stringify({
-          command: process.execPath,
-          inline: 'process.stdout.write(process.env.TOOL_INPUT || "");',
-        }),
-      }),
-      { focus: 'routing' },
-      workdir,
-    );
-
-    expect(result).toEqual({ content: [{ type: 'text', text: JSON.stringify({ focus: 'routing' }) }] });
-  });
-
-  it('reports unsupported implementation types instead of executing them', () => {
-    expect(executeAgentTool(makeTool({ implementation_type: 'function' }), {}, workdir)).toEqual({
-      content: [{ type: 'text', text: 'Error: function tools are not yet supported at runtime' }],
-      isError: true,
-    });
-
-    expect(executeAgentTool(makeTool({ implementation_type: 'http' }), {}, workdir)).toEqual({
-      content: [{ type: 'text', text: 'Error: unsupported implementation type "http"' }],
-      isError: true,
-    });
-  });
-});
-
-describe('registerAgentTools', () => {
-  it('registers each definition and executes the matching tool on call', async () => {
-    const registered: { name: string; config: { description?: string; inputSchema?: unknown } }[] = [];
-    const handlers = new Map<string, (args: Record<string, unknown>) => Promise<McpTextResult> | McpTextResult>();
-    const server: ToolRegistrarLike = {
-      registerTool(name, config, cb) {
-        registered.push({ name, config });
-        handlers.set(name, cb);
-        return undefined;
-      },
-    };
-
-    const definitions: AgentToolDefinition[] = buildToolDefinitions([
-      makeTool({ id: 1, slug: 'echo_input', description: 'Echo', implementation_body: 'printf "%s" "$TOOL_INPUT"' }),
-    ]);
-    registerAgentTools(server, definitions, os.tmpdir());
-
-    expect(registered).toHaveLength(1);
-    expect(registered[0].name).toBe('echo_input');
-    expect(registered[0].config.description).toBe('Echo');
-    expect(registered[0].config.inputSchema).toBe(definitions[0].inputSchema);
-
-    const result = await handlers.get('echo_input')!({ focus: 'routing' });
-    expect(result).toEqual({ content: [{ type: 'text', text: JSON.stringify({ focus: 'routing' }) }] });
   });
 });
 

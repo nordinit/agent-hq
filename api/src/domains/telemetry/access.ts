@@ -2,6 +2,7 @@ import type { Request } from 'express';
 import { z } from 'zod';
 import type { Db } from '../../db/adapter/types';
 import { resolveTenantIdFromRequest } from '../../lib/tenantContext';
+declare global { namespace Express { interface Request { projectObservationAll?: boolean } } }
 
 export class TelemetryError extends Error {
   constructor(public code: string, message: string, public status = 400, public details?: unknown) { super(message); }
@@ -17,6 +18,7 @@ export type TelemetryScope = z.infer<typeof scopeSchema>;
 export interface TelemetryAccess { tenantId: number; projectId: number | null; actor: string }
 export async function telemetryAccess(db: Db, req: Request): Promise<TelemetryAccess> {
   const tenantId = await resolveTenantIdFromRequest(db, req);
+  if(req.projectObservationAll && req.method==='GET') return {tenantId,projectId:null,actor:req.mcpIdentity!.auditActor};
   if (req.telemetryProjectId != null) return {tenantId,projectId:req.telemetryProjectId,actor:req.mcpIdentity?.auditActor??'local_operator'};
   if (!req.mcpIdentity) return { tenantId, projectId: null, actor: 'local_operator' };
   if (req.mcpIdentity.keyRole !== 'scoped') return { tenantId, projectId: null, actor: req.mcpIdentity.auditActor };

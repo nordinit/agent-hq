@@ -1,3 +1,5 @@
+// Session continuity is independent of publication; the real profile gate has integration tests.
+jest.mock('../domains/execution/authority',()=>({...(jest.requireActual('../domains/execution/authority') as object),requirePublishedProfile:jest.fn(async()=>({}))}));
 import { setupTestDb, teardownTestDb } from '../db/testDb';
 import express from 'express';
 import { AddressInfo } from 'net';
@@ -13,6 +15,11 @@ const dispatchInstance = jest.fn(async (_params: Record<string, unknown>) => und
 jest.mock('../services/dispatcher', () => ({
   dispatchInstance: (params: Record<string, unknown>) => dispatchInstance(params),
 }));
+
+const mockPatchSession=jest.fn(async(_params:Record<string,unknown>)=>({ok:true}));
+const mockSendTurn=jest.fn(async(_params:Record<string,unknown>)=>({ok:true}));
+jest.mock('../runtimes/openclaw/gatewayClient',()=>({...(jest.requireActual('../runtimes/openclaw/gatewayClient') as object),gatewayWsPatchSession:(params:Record<string,unknown>)=>mockPatchSession(params)}));
+jest.mock('../runtimes/openclaw/sendTurn',()=>({sendOpenClawTurn:(params:Record<string,unknown>)=>mockSendTurn(params)}));
 
 import chatRouter from './chat';
 import { type Db } from '../db/adapter/types';
@@ -62,7 +69,10 @@ describe('chat send — session continuity', () => {
   beforeEach(async () => {
     db = await setupTestDb();
     dispatchInstance.mockClear();
+    mockPatchSession.mockReset().mockResolvedValue({ok:true});
+    mockSendTurn.mockReset().mockResolvedValue({ok:true});
     await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Test', 'test', 1)`);
+    await db.run("INSERT INTO app_settings(key,value) VALUES('default_tenant_id','1'),('active_tenant_id','1')");
     await db.run(`
       INSERT INTO agents (id, tenant_id, name, session_key, runtime_type, enabled, timeout_seconds)
       VALUES (1, 1, 'Atlas', 'agent:atlas:main', 'claude-code', 1, 900)
@@ -135,4 +145,19 @@ describe('chat send — session continuity', () => {
     expect(await send(1, 'hello')).toBe(200);
     expect(lastResumeSessionId()).toBeNull();
   });
+  it('applies the approved OpenClaw model at the authorized turn, before sending',async()=>{
+    await db.run("UPDATE agents SET runtime_type='openclaw',model='provider/reviewed' WHERE id=1");
+    expect(await send(1,'hello')).toBe(200);
+    expect(mockPatchSession).toHaveBeenCalledWith(expect.objectContaining({model:'provider/reviewed'}));
+    expect(mockSendTurn).toHaveBeenCalledTimes(1);
+    expect(mockPatchSession.mock.invocationCallOrder[0]).toBeLessThan(mockSendTurn.mock.invocationCallOrder[0]);
+  });
+
+  it('holds the OpenClaw turn if the approved model cannot be applied',async()=>{
+    await db.run("UPDATE agents SET runtime_type='openclaw',model='provider/reviewed' WHERE id=1");
+    mockPatchSession.mockResolvedValue({ok:false});
+    expect(await send(1,'hello')).toBe(502);
+    expect(mockSendTurn).not.toHaveBeenCalled();
+  });
+
 });

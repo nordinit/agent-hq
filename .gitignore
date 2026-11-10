@@ -50,3 +50,6 @@ scripts/ops-local/
 
 # Generated at pack time by cli/scripts/sync-plugin.mjs
 cli/plugin/
+
+# Reproducible private inventory exports (manifest is tracked).
+api/operation-inventory/

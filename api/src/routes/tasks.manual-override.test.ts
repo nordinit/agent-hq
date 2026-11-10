@@ -2,7 +2,7 @@ import express from 'express';
 import type { Server } from 'http';
 import { getDb } from '../db/client';
 import { setupTestDb, teardownTestDb } from '../db/testDb';
-import { authorizeMcpApiRequestIfPresent, issueMcpApiKeyForAgent } from '../lib/mcpApiAuth';
+import { authorizeMcpApiRequestIfPresent, issueMcpApiKeyForAgent,replaceAgentMcpPermissionPolicy } from '../lib/mcpApiAuth';
 // Requests authenticate as the operator unless they carry an MCP key of their own.
 import { authenticateTestApiRequest, operatorFetch as fetch } from '../lib/testApiAuth';
 import tasksRouter from './tasks';
@@ -81,6 +81,7 @@ describe('manual MCP/admin task moves', () => {
   it('allows manual MCP move from dev_deploy_queued to ready', async () => {
     const db = getDb();
     const adminKey = (await issueMcpApiKeyForAgent(db, 8, 'Agent HQ MCP', 'admin')).apiKey;
+    await replaceAgentMcpPermissionPolicy(db,8,['admin.full_access','runs.dispatch','host.execute']);
 
     await withApp(async (baseUrl) => {
       const response = await fetch(`${baseUrl}/api/v1/tasks/455`, {
@@ -102,6 +103,7 @@ describe('manual MCP/admin task moves', () => {
   it('allows manual MCP move from another constrained status to a normally disallowed target', async () => {
     const db = getDb();
     const adminKey = (await issueMcpApiKeyForAgent(db, 8, 'Agent HQ MCP', 'admin')).apiKey;
+    await replaceAgentMcpPermissionPolicy(db,8,['admin.full_access','runs.dispatch','host.execute']);
 
     await withApp(async (baseUrl) => {
       const response = await fetch(`${baseUrl}/api/v1/tasks/456`, {

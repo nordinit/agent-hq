@@ -34,7 +34,7 @@ test('long-lived server refreshes before listing and calling; catalog stays call
     expect(api.getTask).toHaveBeenCalledTimes(1);
     expect((await client.listTools()).tools).toEqual([]);
     expect(notify).toHaveBeenCalled();
-    grants = ['workflow_definitions.manage_project_scope'];
+    grants = ['workflow_definitions.manage_project_scope','runs.dispatch','host.execute'];
     const changed = await client.listTools();
     expect(changed.tools.map(tool => tool.name)).toContain('agent_hq_create_workflow_type');
     const resource = await client.readResource({ uri: 'agent-hq://catalog' });

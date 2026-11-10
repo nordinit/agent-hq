@@ -1,7 +1,8 @@
+import { invokePublishedTool } from '../domains/execution/invoke';
 import { Router, Request, Response } from 'express';
 import { getDb } from '../db/client';
 import { materializeAssignedToolForOpenClaw } from '../capability-tools/materialize';
-import { executeToolImplementation, fetchAgentTools } from '../runtimes/toolInjection';
+import { fetchAgentTools } from '../runtimes/toolInjection';
 import { resolveTenantIdFromRequest } from '../lib/tenantContext';
 import { isPostgresUniqueViolation } from '../lib/postgresErrors';
 
@@ -64,11 +65,12 @@ router.get('/materialized/agents/:openclawAgentId', async (req: Request, res: Re
     const agent = await db.get(`SELECT id, openclaw_agent_id FROM agents WHERE openclaw_agent_id = ? AND tenant_id = ?`, openclawAgentId, tenantId) as { id: number; openclaw_agent_id: string | null } | undefined;
     if (!agent) return res.status(404).json({ error: 'Agent not found' });
 
+    if(req.mcpIdentity&&req.mcpIdentity.agentId!==Number(agent.id))return res.status(403).json({error:'Materialized tools are scoped to the executing agent.'});
     const tools = (await fetchAgentTools(db, agent.id))
       .flatMap((tool) => {
         if (!['bash', 'shell', 'script', 'http'].includes(tool.implementation_type)) return [];
         try {
-          return [materializeAssignedToolForOpenClaw(tool)];
+          return [{...materializeAssignedToolForOpenClaw(tool),execution_type:'broker',execution_payload:{agent_id:agent.id,tool_id:tool.id,revision_id:(tool as any).execution_revision_id}}];
         } catch (err) {
           console.warn(
             `[tools] skipped malformed assigned tool "${tool.slug}" for agent #${agent.id}:`,
@@ -233,38 +235,20 @@ router.post('/:id/test', async (req: Request, res: Response) => {
 
     const start = Date.now();
 
-    // Execute in /tmp (sandboxed — no access to agent workspaces)
-    const result = executeToolImplementation(
-      {
-        id: tool.id,
-        tenant_id: tool.tenant_id,
-        agent_tenant_id: tool.tenant_id,
-        assignment_id: 0,
-        name: tool.name,
-        slug: tool.slug,
-        description: tool.description ?? '',
-        implementation_type: tool.implementation_type,
-        implementation_body: tool.implementation_body ?? '',
-        input_schema: tool.input_schema ?? '{}',
-        permissions: tool.permissions ?? 'read_only',
-        tags: tool.tags ?? '[]',
-        enabled: tool.enabled ?? 1,
-        overrides: '{}',
-        assignment_enabled: 1,
-      },
-      typeof input === 'object' && input !== null ? input : {},
-      '/tmp',
-    );
+    // Execute only a published revision. /tmp is a cwd, not an OS sandbox.
+    const result = await invokePublishedTool(getDb(),tenantId,Number(tool.id),typeof input==='object'&&input!==null?input:{},req.mcpIdentity?.auditActor??'operator',req.mcpIdentity?.agentId,req.body.revision_id);
+
 
     const duration_ms = Date.now() - start;
 
     const output = result.content.map((c: any) => c.text).join('');
     if (result.isError) {
-      return res.json({ output: null, duration_ms, error: output });
+      return res.json({ output: null, duration_ms, error: output, isError:true });
     }
     return res.json({ output, duration_ms });
   } catch (err) {
-    return res.status(500).json({ error: String(err) });
+    const failure=err as {status?:number;code?:string;message?:string};
+    return res.status(failure.status??500).json({error:failure.status?failure.message:'Tool execution failed.',code:failure.code??'tool_execution_failed'});
   }
 });
 
@@ -298,11 +282,12 @@ agentToolsRouter.get('/materialized', async (req: Request, res: Response) => {
     const agent = await db.get(`SELECT id, openclaw_agent_id FROM agents WHERE id = ? AND tenant_id = ?`, agentId, tenantId) as { id: number; openclaw_agent_id: string | null } | undefined;
     if (!agent) return res.status(404).json({ error: 'Agent not found' });
 
+    if(req.mcpIdentity&&req.mcpIdentity.agentId!==Number(agent.id))return res.status(403).json({error:'Materialized tools are scoped to the executing agent.'});
     const tools = (await fetchAgentTools(db, agent.id))
       .flatMap((tool) => {
         if (!['bash', 'shell', 'script', 'http'].includes(tool.implementation_type)) return [];
         try {
-          return [materializeAssignedToolForOpenClaw(tool)];
+          return [{...materializeAssignedToolForOpenClaw(tool),execution_type:'broker',execution_payload:{agent_id:agent.id,tool_id:tool.id,revision_id:(tool as any).execution_revision_id}}];
         } catch (err) {
           console.warn(
             `[tools] skipped malformed assigned tool "${tool.slug}" for agent #${agent.id}:`,

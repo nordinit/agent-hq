@@ -1,3 +1,4 @@
+import {replaceDelegatorFixturePolicy} from '../test-support/executionFixtures';
 import { setupTestDb, teardownTestDb } from '../db/testDb';
 import express from 'express';
 import type { Server } from 'http';
@@ -7,7 +8,7 @@ import path from 'path';
 import { getDb } from '../db/client';
 import { resolveWorkflowEventMapping, type ExternalEventMapping } from '../domains/routing/externalEventMappings';
 import { listWorkflowTaskRoutingRules, loadWorkflowTaskTransitionRequirements, resolveWorkflowTaskRoutingAssignment, resolveWorkflowTaskTransition, seedWorkflowTaskPolicy, seedWorkflowTypeTaskStatuses } from '../domains/routing/policy';
-import { authorizeMcpApiRequestIfPresent, issueMcpApiKeyForAgent, replaceAgentMcpPermissionPolicy } from '../lib/mcpApiAuth';
+import { authorizeMcpApiRequestIfPresent, issueMcpApiKeyForAgent } from '../lib/mcpApiAuth';
 // Requests authenticate as the operator unless they carry an MCP key of their own.
 import { authenticateTestApiRequest, operatorFetch as fetch } from '../lib/testApiAuth';
 import routingRouter from './routing';
@@ -227,7 +228,7 @@ describe('routing rules API', () => {
     await db.run(`INSERT INTO agents (id, tenant_id, name, session_key, job_title, project_id, enabled) VALUES (9, ?, 'Super Admin', 'agent:super-admin:main', 'Backend Engineer', 1, 1)`, defaultTenantId);
     const regularKey = (await issueMcpApiKeyForAgent(db, 7, 'regular tenant key')).apiKey;
     const superAdminKey = (await issueMcpApiKeyForAgent(db, 9, 'super-admin tenant selector key')).apiKey;
-    await replaceAgentMcpPermissionPolicy(db, 9, ['admin.full_access', 'admin.cross_tenant']);
+    await replaceDelegatorFixturePolicy(db, 9, ['admin.full_access', 'admin.cross_tenant']);
     await db.run(`UPDATE app_settings SET value = ? WHERE key = 'active_tenant_id'`, String(defaultTenantId));
 
     const { server, baseUrl } = await startTestServer();
@@ -1516,7 +1517,7 @@ describe('routing rules API', () => {
     const db = getDb();
     await tenantContext.ensureTenantSchema(db);
     const apiKey = (await issueMcpApiKeyForAgent(db, 7, 'transition manager key')).apiKey;
-    await replaceAgentMcpPermissionPolicy(db, 7, ['discovery.read_catalog', 'routing_transitions.manage_project_scope']);
+    await replaceDelegatorFixturePolicy(db, 7, ['discovery.read_catalog', 'routing_transitions.manage_project_scope']);
     const authHeaders = {
       Authorization: `Bearer ${apiKey}`,
       'x-agent-hq-mcp-client': 'agent-hq-mcp',
@@ -1627,7 +1628,7 @@ describe('routing rules API', () => {
     const otherProjectTransitionId = Number((await db.get(`SELECT id FROM workflow_task_transitions WHERE project_id = 3`) as { id: number }).id);
 
     const apiKey = (await issueMcpApiKeyForAgent(db, 7, 'transition manager key')).apiKey;
-    await replaceAgentMcpPermissionPolicy(db, 7, ['routing_transitions.manage_project_scope']);
+    await replaceDelegatorFixturePolicy(db, 7, ['routing_transitions.manage_project_scope']);
     const authHeaders = {
       Authorization: `Bearer ${apiKey}`,
       'x-agent-hq-mcp-client': 'agent-hq-mcp',

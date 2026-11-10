@@ -14,6 +14,7 @@ import { getDb } from '../db/client';
 import { runDispatcher, DispatchResult } from '../services/dispatcher';
 import { notifyTelegram } from '../integrations/telegram';
 import { runReconcilerTick } from '../scheduler/reconciler';
+import {resolveTenantIdFromRequest} from '../lib/tenantContext';
 
 const router = Router();
 
@@ -30,6 +31,8 @@ router.post('/trigger', async (req: Request, res: Response) => {
     }
 
     const db = getDb();
+    const tenant=await resolveTenantIdFromRequest(db,req);
+    if(!await db.get('SELECT id FROM projects WHERE id=? AND tenant_id=?',project_id,tenant))return res.status(404).json({error:'Project not found'});
 
     const dispResult: DispatchResult = await runDispatcher(db, project_id);
 
@@ -49,8 +52,9 @@ router.post('/trigger', async (req: Request, res: Response) => {
 // Run full sweep across ALL active projects.
 // Response: { projects_checked, project_ids, reconcile_at, dispatched, skipped, errors }
 
-router.post('/reconcile', async (_req: Request, res: Response) => {
+router.post('/reconcile', async (req: Request, res: Response) => {
   try {
+    if(req.mcpIdentity)return res.status(403).json({error:'The global reconciler requires an operator credential. Use project dispatch for scoped delegation.'});
     const db = getDb();
     const reconcileAt = new Date().toISOString();
     const summary = await runReconcilerTick(undefined, db);

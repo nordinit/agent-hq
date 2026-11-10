@@ -1,6 +1,5 @@
 import { Router, Request, Response } from 'express';
 import { getDb } from '../db/client';
-import { syncAssignedMcpForAgent, syncAssignedMcpForServer } from '../runtimes/mcpMaterialization';
 import { resolveTenantIdFromRequest } from '../lib/tenantContext';
 import { isPostgresUniqueViolation } from '../lib/postgresErrors';
 import { redactMcpServerRow, restoreMaskedEnvValues } from '../lib/secretMasking';
@@ -22,71 +21,6 @@ function normalizeJsonText(value: unknown, fallback: string): string {
   }
   if (value == null) return fallback;
   return JSON.stringify(value);
-}
-
-function scheduleAgentMcpSync(agentId: number): void {
-  setImmediate(async () => {
-    try {
-      const result = await syncAssignedMcpForAgent({
-              db: getDb(),
-              agentId,
-              materializeOpenClawGlobalConfig: true,
-            });
-      for (const warn of result.warnings) {
-        console.warn(`[mcp-servers] ${warn}`);
-      }
-      if (result.skipped === 'unsupported_runtime') return;
-      if (result.skipped === 'missing_workspace') {
-        console.warn(`[mcp-servers] MCP sync skipped for agent #${agentId}: no workspace_path`);
-        return;
-      }
-      if (!result.ok && result.error) {
-        console.warn(`[mcp-servers] MCP sync failed for agent #${agentId}: ${result.error}`);
-        return;
-      }
-      console.log(
-        `[mcp-servers] MCP sync for agent #${agentId}: ${result.count} server(s) materialized in ${result.workingDirectory}`,
-      );
-    } catch (err) {
-      console.warn(
-        `[mcp-servers] MCP sync failed for agent #${agentId}:`,
-        err instanceof Error ? err.message : String(err),
-      );
-    }
-  });
-}
-
-function scheduleServerMcpSync(mcpServerId: number): void {
-  setImmediate(async () => {
-    try {
-      const results = await syncAssignedMcpForServer({
-              db: getDb(),
-              mcpServerId,
-              materializeOpenClawGlobalConfig: true,
-            });
-      for (const result of results) {
-        for (const warn of result.warnings) {
-          console.warn(`[mcp-servers] ${warn}`);
-        }
-        if (result.skipped === 'unsupported_runtime') continue;
-        if (result.skipped === 'missing_workspace') {
-          console.warn(`[mcp-servers] MCP sync skipped for agent #${result.agentId}: no workspace_path`);
-          continue;
-        }
-        if (!result.ok && result.error) {
-          console.warn(`[mcp-servers] MCP sync failed for agent #${result.agentId}: ${result.error}`);
-        }
-      }
-      if (results.length > 0) {
-        console.log(`[mcp-servers] MCP sync for server #${mcpServerId}: ${results.length} assigned agent(s) refreshed`);
-      }
-    } catch (err) {
-      console.warn(
-        `[mcp-servers] MCP sync failed for server #${mcpServerId}:`,
-        err instanceof Error ? err.message : String(err),
-      );
-    }
-  });
 }
 
 router.get('/', async (req: Request, res: Response) => {
@@ -190,7 +124,6 @@ router.put('/:id', async (req: Request, res: Response) => {
     `, typeof name === 'string' ? name.trim() : existing.name, typeof slug === 'string' ? slug.trim() : existing.slug, typeof description === 'string' ? description.trim() : existing.description, transport === 'stdio' ? 'stdio' : existing.transport, typeof command === 'string' ? command.trim() : existing.command, args !== undefined ? normalizeJsonText(args, '[]') : existing.args, nextEnv !== undefined ? normalizeJsonText(nextEnv, '{}') : existing.env, cwd !== undefined ? (typeof cwd === 'string' && cwd.trim() ? cwd.trim() : null) : existing.cwd, enabled !== undefined ? (enabled ? 1 : 0) : existing.enabled, req.params.id, tenantId);
 
     const updated = await db.get('SELECT * FROM mcp_servers WHERE id = ? AND tenant_id = ?', req.params.id, tenantId);
-    scheduleServerMcpSync(Number(req.params.id));
     return res.json(redactMcpServerRow(updated as Record<string, unknown>));
   } catch (err: any) {
     if (isPostgresUniqueViolation(err)) {
@@ -207,7 +140,6 @@ router.delete('/:id', async (req: Request, res: Response) => {
     const existing = await db.get('SELECT id FROM mcp_servers WHERE id = ? AND tenant_id = ?', req.params.id, tenantId);
     if (!existing) return res.status(404).json({ error: 'MCP server not found' });
     await db.run(`UPDATE mcp_servers SET enabled = 0, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS') WHERE id = ? AND tenant_id = ?`, req.params.id, tenantId);
-    scheduleServerMcpSync(Number(req.params.id));
     return res.json({ ok: true, id: Number(req.params.id) });
   } catch (err) {
     return res.status(500).json({ error: String(err) });
@@ -272,7 +204,6 @@ agentMcpServersRouter.post('/', async (req: Request, res: Response) => {
       JOIN mcp_servers s ON s.id = ama.mcp_server_id
       WHERE ama.id = ?
     `, result.lastInsertId);
-    scheduleAgentMcpSync(Number(agentId));
     return res.status(201).json(redactMcpServerRow(created as Record<string, unknown>));
   } catch (err: any) {
     if (isPostgresUniqueViolation(err)) {
@@ -295,7 +226,6 @@ agentMcpServersRouter.delete('/:mcpServerId', async (req: Request, res: Response
     `, agentId, mcpServerId, tenantId, tenantId);
     if (!existing) return res.status(404).json({ error: 'Assignment not found' });
     await db.run(`DELETE FROM agent_mcp_assignments WHERE agent_id = ? AND mcp_server_id = ?`, agentId, mcpServerId);
-    scheduleAgentMcpSync(Number(agentId));
     return res.json({ ok: true });
   } catch (err) {
     return res.status(500).json({ error: String(err) });

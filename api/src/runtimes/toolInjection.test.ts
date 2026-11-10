@@ -1,4 +1,5 @@
-import { executeToolImplementation, type AgentToolRecord } from './toolInjection';
+import type {AgentToolRecord} from './toolInjection';
+import {executeSnapshot} from '../domains/execution/execute';
 
 function makeTool(overrides: Partial<AgentToolRecord>): AgentToolRecord {
   return {
@@ -24,9 +25,9 @@ function makeTool(overrides: Partial<AgentToolRecord>): AgentToolRecord {
   };
 }
 
-describe('executeToolImplementation', () => {
-  it('executes inline script tools with structured input in the environment', () => {
-    const result = executeToolImplementation(makeTool({}), { focus: 'routing', depth: 3 });
+describe('approved snapshot execution', () => {
+  it('executes inline script tools with structured input in the environment', async () => {
+    const result = await executeSnapshot(makeTool({}), { focus: 'routing', depth: 3 });
 
     expect(result.isError).toBeUndefined();
     expect(result.content).toEqual([

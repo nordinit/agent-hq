@@ -1,3 +1,4 @@
+jest.mock('../../domains/execution/credentials',()=>({issueExecutionCredential:jest.fn(async()=> 'test-run-credential')}));
 /**
  * Tests for the run-scoped Claude Code MCP config materializer.
  *
@@ -608,7 +609,7 @@ describe('registry-tool boundary enforcement', () => {
       tenantId: TENANT_ID,
       agentId: AGENT_ID,
       instanceId: 7,
-      runKey: 'registry-bridge',
+      runKey: 'registry-bridge',runIdentity:{instanceId:7,durableRunId:'run-fixture'},
       protectedInstanceIds: new Set(),
       workingDirectory: '/tmp/agent-workspace',
     });
@@ -649,7 +650,7 @@ describe('registry-tool boundary enforcement', () => {
       tenantId: TENANT_ID,
       agentId: AGENT_ID,
       instanceId: 7,
-      runKey: 'registry-team-grant',
+      runKey: 'registry-team-grant',runIdentity:{instanceId:7,durableRunId:'run-fixture'},
       protectedInstanceIds: new Set(),
     });
 

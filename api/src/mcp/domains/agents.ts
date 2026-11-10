@@ -101,7 +101,7 @@ export function registerAgentsTools(ctx: McpDomainContext) {
     'Update an agent. Repository settings are workflow-owned, and repo_path/repo_url/repo_access_mode patches are rejected by the Agent HQ API.',
     {
       agent_id: z.number().int().positive().describe('Agent ID'),
-      patch: z.record(z.string(), z.unknown()).describe('Partial update payload'),
+      patch: z.object({name:z.string().min(1).optional(),role:z.string().optional(),model:z.string().nullable().optional(),project_id:z.number().int().positive().nullable().optional(),enabled:z.boolean().optional(),status:z.string().optional(),job_instructions:z.string().nullable().optional(),runtime_type:z.string().optional(),runtime_config:z.record(z.string(),z.unknown()).nullable().optional(),workspace_path:z.string().optional(),hooks_url:z.string().nullable().optional(),hooks_auth_header:z.string().nullable().optional(),os_user:z.string().nullable().optional(),github_identity_id:z.number().int().nullable().optional(),provider_connection_id:z.number().int().nullable().optional(),preferred_provider:z.string().nullable().optional(),timeout_seconds:z.number().int().positive().nullable().optional(),startup_grace_seconds:z.number().int().positive().nullable().optional(),heartbeat_stale_seconds:z.number().int().positive().nullable().optional(),skill_names:z.array(z.string()).optional()}).strict().describe('Partial update payload'),
     },
     ({ agent_id, patch }) => wrap(() => api.updateAgent(agent_id, patch))(),
     { domain: 'agents', rest_paths: ['/api/v1/agents/:id'] },
@@ -125,29 +125,31 @@ export function registerAgentsTools(ctx: McpDomainContext) {
 
   registerTool(
     ['agent_hq_create_agent_mcp_capability_policy'],
-    'Create an explicit MCP capability policy for another agent in the caller agent\'s assigned project. Scoped MCP keys can only set safe non-admin capability keys and cannot edit their own policy.',
+    'Create an explicit MCP capability policy for another agent in the caller agent\'s assigned project. Requires permissions.manage. The caller cannot edit itself, exceed its tenant/project delegation scope, or grant capabilities it does not hold.',
     {
       agent_id: z.number().int().positive().describe('Agent ID'),
       enabled_capabilities: z.array(z.string().min(1)).describe('Capability keys to enable in the explicit policy'),
+      expected_revision:z.string().regex(/^[a-f0-9]{64}$/).optional().describe('Revision returned by the policy read. Supply it to reject stale concurrent edits.'),
     },
-    ({ agent_id, enabled_capabilities }) => wrap(() => api.createAgentMcpCapabilityPolicy(agent_id, enabled_capabilities))(),
+    ({ agent_id, enabled_capabilities,expected_revision }) => wrap(() => api.createAgentMcpCapabilityPolicy(agent_id, enabled_capabilities,expected_revision))(),
     { domain: 'agents', rest_paths: ['/api/v1/agents/:id/mcp-permissions'] },
   );
 
   registerTool(
     ['agent_hq_update_agent_mcp_capability_policy'],
-    'Replace an explicit MCP capability policy for another agent in the caller agent\'s assigned project. Scoped MCP keys can only set safe non-admin capability keys and cannot edit their own policy.',
+    'Replace an explicit MCP capability policy for another agent in the caller agent\'s assigned project. Requires permissions.manage. The caller cannot edit itself, exceed its tenant/project delegation scope, or grant capabilities it does not hold.',
     {
       agent_id: z.number().int().positive().describe('Agent ID'),
       enabled_capabilities: z.array(z.string().min(1)).describe('Capability keys to enable in the explicit policy'),
+      expected_revision:z.string().regex(/^[a-f0-9]{64}$/).optional().describe('Revision returned by the policy read. Supply it to reject stale concurrent edits.'),
     },
-    ({ agent_id, enabled_capabilities }) => wrap(() => api.updateAgentMcpCapabilityPolicy(agent_id, enabled_capabilities))(),
+    ({ agent_id, enabled_capabilities,expected_revision }) => wrap(() => api.updateAgentMcpCapabilityPolicy(agent_id, enabled_capabilities,expected_revision))(),
     { domain: 'agents', rest_paths: ['/api/v1/agents/:id/mcp-permissions'] },
   );
 
   registerTool(
     ['agent_hq_delete_agent_mcp_capability_policy'],
-    'Delete an explicit MCP capability policy and return the target agent to defaults. Scoped MCP keys require MCP capability policy write access, can only reset other agents in their assigned project, and cannot edit their own policy.',
+    'Compatibility operation: restoring implicit defaults requires an operator credential. MCP identities must replace an explicit policy instead; they cannot reset policies to role defaults.',
     { agent_id: z.number().int().positive().describe('Agent ID') },
     ({ agent_id }) => wrap(() => api.deleteAgentMcpCapabilityPolicy(agent_id))(),
     { domain: 'agents', rest_paths: ['/api/v1/agents/:id/mcp-permissions'] },
@@ -169,6 +171,6 @@ export function registerAgentsTools(ctx: McpDomainContext) {
       working_directory: z.string().optional().describe('Fallback workspace directory when the agent has no workspace_path'),
     },
     ({ agent_id, working_directory }) => wrap(() => api.syncAgentMcp(agent_id, working_directory))(),
-    { domain: 'agents', rest_paths: ['/api/v1/agents/:id/sync-mcp'] },
+    { domain: 'agents', rest_paths: ['/api/v1/agents/:id/mcp/sync'] },
   );
 }

@@ -1,3 +1,4 @@
+import {EXPLICIT_AUTHORITIES} from '../domains/access/capabilities';
 import { createHash } from 'crypto';
 import { canDiscoverTool, declaredToolNames, getToolPermissionRequirement, type ToolPermissionRequirement } from './toolPermissions';
 
@@ -17,8 +18,8 @@ export function describeToolAccess(enabledCapabilities: readonly string[]): McpT
     return {
       name, available, requires_any: requirement,
       reason: available
-        ? `Allowed by ${enabled.has('admin.full_access') ? 'admin.full_access' : matches.map(clause => clause.join(' + ')).join(' or ')}. Resource scope and arguments are checked on each call.`
-        : `Requires ${requirement.map(clause => clause.join(' + ')).join(' or ')} (or admin.full_access).`,
+        ? `Allowed by ${matches.length?matches.map(clause=>clause.join(' + ')).join(' or '):'tenant business administration'}. Resource, field, publication and execution scope are checked on each call.`
+        : `Requires ${requirement.map(clause => clause.join(' + ')).join(' or ')}${requirement.some(c=>c.some(k=>EXPLICIT_AUTHORITIES.has(k)))?' explicitly; admin is not an override':'.'}`,
     };
   });
 }

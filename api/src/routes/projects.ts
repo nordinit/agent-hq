@@ -1,3 +1,4 @@
+import {projectContext} from '../domains/access/projectContext';
 import { Router, Request, Response } from 'express';
 import { getDb } from '../db/client';
 import { writeProjectAudit, diffFields, extractActor } from '../lib/projectAudit';
@@ -262,6 +263,8 @@ router.post('/import', async (req: Request, res: Response) => {
     });
   }
 });
+
+router.get('/:id/context',async(req,res)=>{try{res.json(await projectContext(getDb(),await resolveTenantIdFromRequest(getDb(),req),Number(req.params.id),Number(req.query.limit??20)));}catch(e){sendRouteError(res,e);}});
 
 // GET /api/v1/projects/:id
 router.get('/:id', async (req: Request, res: Response) => {

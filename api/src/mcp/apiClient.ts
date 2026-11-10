@@ -816,6 +816,7 @@ export class AgentHqApiClient {
     if (params.workflow_id !== undefined) qs.set('workflow_id', String(params.workflow_id));
     if (params.status) qs.set('status', params.status);
     qs.set('limit', String(Math.min(params.limit ?? 50, 100)));
+    qs.set('view','summary');
     qs.set('offset', String(params.offset ?? 0));
     return this.request<unknown>('GET', `/api/v1/tasks?${qs.toString()}`).then((payload) => {
       const body = asRecord(payload);
@@ -1554,15 +1555,15 @@ export class AgentHqApiClient {
     return this.request<unknown>('GET', `/api/v1/agents/${agentId}/mcp-permissions`);
   }
 
-  createAgentMcpCapabilityPolicy(agentId: number, enabledCapabilities: string[]) {
+  createAgentMcpCapabilityPolicy(agentId: number, enabledCapabilities: string[],expectedRevision?:string) {
     return this.request<unknown>('POST', `/api/v1/agents/${agentId}/mcp-permissions`, {
-      enabled_capabilities: enabledCapabilities,
+      enabled_capabilities: enabledCapabilities,...(expectedRevision?{expected_revision:expectedRevision}:{}),
     });
   }
 
-  updateAgentMcpCapabilityPolicy(agentId: number, enabledCapabilities: string[]) {
+  updateAgentMcpCapabilityPolicy(agentId: number, enabledCapabilities: string[],expectedRevision?:string) {
     return this.request<unknown>('PUT', `/api/v1/agents/${agentId}/mcp-permissions`, {
-      enabled_capabilities: enabledCapabilities,
+      enabled_capabilities: enabledCapabilities,...(expectedRevision?{expected_revision:expectedRevision}:{}),
     });
   }
 

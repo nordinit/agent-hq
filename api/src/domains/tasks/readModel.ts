@@ -740,7 +740,7 @@ export async function listTasks(
     sql += ` WHERE ${conditions.join(' AND ')}`;
   }
 
-  sql += ' ORDER BY t.created_at DESC';
+  sql += ' ORDER BY t.created_at DESC, t.id DESC';
 
   if (limit !== undefined) {
     const lim = Math.min(Math.max(1, Number(limit) || 50), 500);

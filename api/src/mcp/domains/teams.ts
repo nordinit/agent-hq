@@ -52,7 +52,7 @@ export function registerTeamsTools(ctx: McpDomainContext) {
     'Update a team. Any change to goal, charter or membership bumps its context version.',
     {
       team_id: z.number().int().positive().describe('Team ID'),
-      patch: z.record(z.string(), z.unknown()).describe('Partial update payload'),
+      patch: z.object({name:z.string().min(1).optional(),slug:z.string().optional(),description:z.string().optional(),goal:z.string().optional(),charter:z.string().optional(),project_id:z.number().int().positive().nullable().optional(),skill_names:z.array(z.string()).optional(),enabled:z.boolean().optional()}).strict().describe('Partial update payload'),
     },
     ({ team_id, patch }) => wrap(() => api.updateTeam(team_id, patch))(),
     { domain: 'teams', rest_paths: ['/api/v1/teams/:id'] },
@@ -97,7 +97,7 @@ export function registerTeamsTools(ctx: McpDomainContext) {
     {
       team_id: z.number().int().positive().describe('Team ID'),
       agent_id: z.number().int().positive().describe('Agent ID'),
-      patch: z.record(z.string(), z.unknown()).describe('Partial update payload'),
+      patch: z.object({member_role:z.string().optional(),responsibilities:z.string().optional(),is_lead:z.boolean().optional(),is_primary:z.boolean().optional(),sort_order:z.number().int().optional(),enabled:z.boolean().optional()}).strict().describe('Partial update payload'),
     },
     ({ team_id, agent_id, patch }) => wrap(() => api.updateTeamMember(team_id, agent_id, patch))(),
     { domain: 'teams', rest_paths: ['/api/v1/teams/:id/members/:agentId'] },

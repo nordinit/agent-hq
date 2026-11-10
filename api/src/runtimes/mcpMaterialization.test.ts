@@ -1,3 +1,5 @@
+// Synthetic paths in this suite are intentionally not installed executables.
+jest.mock('../domains/execution/dependencies',()=>({dependencyPins:()=>[],checkDependencyPins:()=>{}}));
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -9,13 +11,49 @@ import {
   openClawMcpServerName,
   openClawRunIdentityPath,
   openClawMcpServerPrefix,
-  materializeAgentMcpConfig,
-  materializeHermesMcpConfig,
+  materializeAgentMcpConfig as actualMaterializeAgentMcpConfig,
+  materializeHermesMcpConfig as actualMaterializeHermesMcpConfig,
   materializeOpenClawGlobalMcpConfig,
-  syncAssignedMcpForAgent,
-  syncAssignedMcpForServer,
+  syncAssignedMcpForAgent as actualSyncAssignedMcpForAgent,
+  syncAssignedMcpForServer as actualSyncAssignedMcpForServer,
 } from './mcpMaterialization';
 import { readRunIdentityFile } from '../lib/agentRunIdentity';
+
+
+// These materialization fixtures explicitly approve their source definitions. Denial,
+// revocation and immutable-source behavior are exercised against the real broker separately.
+import {createExecutableDraft,publishExecutable,bindExecutable} from '../domains/execution/authority';
+async function approveMcpFixtureDefinitions() {
+  if(!registryFixtureReady)return;
+  const db=getDb();
+  const rows=await db.all<{agent_id:number;mcp_server_id:number;tenant_id:number}>(`SELECT a.agent_id,a.mcp_server_id,x.tenant_id FROM agent_mcp_assignments a JOIN agents x ON x.id=a.agent_id JOIN mcp_servers s ON s.id=a.mcp_server_id WHERE a.enabled=1 AND s.enabled=1 AND s.tenant_id=x.tenant_id`);
+  for(const row of rows) {
+    for(const capability of ['host.execute','tools.execute'])await db.run('INSERT INTO agent_mcp_capability_policies(agent_id,capability_key,enabled) VALUES(?,?,1) ON CONFLICT(agent_id,capability_key) DO UPDATE SET enabled=1',row.agent_id,capability);
+    const revision=await createExecutableDraft(db,row.tenant_id,'mcp_server',row.mcp_server_id,'test-fixture');
+    await publishExecutable(db,row.tenant_id,String(revision!.id),String(revision!.digest),'test-fixture');
+    await bindExecutable(db,row.tenant_id,'agent',row.agent_id,String(revision!.id),'test-fixture');
+  }
+}
+async function materializeAgentMcpConfig(params:Parameters<typeof actualMaterializeAgentMcpConfig>[0]){await approveMcpFixtureDefinitions();return actualMaterializeAgentMcpConfig(params);}
+async function materializeHermesMcpConfig(params:Parameters<typeof actualMaterializeHermesMcpConfig>[0]){await approveMcpFixtureDefinitions();return actualMaterializeHermesMcpConfig(params);}
+async function syncAssignedMcpForAgent(params:Parameters<typeof actualSyncAssignedMcpForAgent>[0]){await approveMcpFixtureDefinitions();return actualSyncAssignedMcpForAgent(params);}
+async function syncAssignedMcpForServer(params:Parameters<typeof actualSyncAssignedMcpForServer>[0]){await approveMcpFixtureDefinitions();return actualSyncAssignedMcpForServer(params);}
+
+// Existing path/credential assertions inspect the approved upstream. The dedicated gateway
+// test below inspects the actual wrapper and checks that secrets are absent from argv.
+function readConfigForAssertions(file:string):any {
+  const visit=(value:any):any=>{
+    if(Array.isArray(value))return value.map(visit);
+    if(!value||typeof value!=='object')return value;
+    if(value.env?.AGENT_HQ_MCP_UPSTREAM) {
+      const upstream=JSON.parse(value.env.AGENT_HQ_MCP_UPSTREAM);
+      const runEnv=Object.fromEntries(Object.entries(value.env).filter(([k])=>['AGENT_HQ_INSTANCE_ID','AGENT_HQ_DURABLE_RUN_ID','AGENT_HQ_RUN_IDENTITY_FILE'].includes(k)));
+      return {...value,...upstream,env:{...upstream.env,...runEnv}};
+    }
+    return Object.fromEntries(Object.entries(value).map(([k,v])=>[k,visit(v)]));
+  };
+  return visit(JSON.parse(fs.readFileSync(file,'utf8')));
+}
 
 const ORIGINAL_OPENCLAW_CONFIG_PATH = process.env.OPENCLAW_CONFIG_PATH;
 const ORIGINAL_DISABLE_OPENCLAW_PLUGIN_REGISTRY_REFRESH = process.env.AGENT_HQ_DISABLE_OPENCLAW_PLUGIN_REGISTRY_REFRESH;
@@ -25,11 +63,14 @@ function makeTempDir(prefix: string): string {
 }
 
 function readBundleConfig(workspace: string): any {
-  const raw = JSON.parse(fs.readFileSync(path.join(workspace, '.openclaw', 'extensions', 'agent-hq-mcp', '.mcp.json'), 'utf8'));
+  const raw = readConfigForAssertions(path.join(workspace, '.openclaw', 'extensions', 'agent-hq-mcp', '.mcp.json'));
   if (!raw.agentHqServerNames) return raw;
   return { ...raw, mcpServers: Object.fromEntries(Object.entries(raw.agentHqServerNames).map(([name, alias]) => [name, raw.mcpServers[String(alias)]])) };
 }
 
+function hermesUpstreams(yaml:string):any[] {
+  return [...yaml.matchAll(/"AGENT_HQ_MCP_UPSTREAM": (".*")/g)].map(match=>JSON.parse(JSON.parse(match[1])));
+}
 let registryFixtureReady = false;
 
 async function createRegistryTables(): Promise<void> {
@@ -90,7 +131,7 @@ describe('materializeAgentMcpConfig', () => {
     await getDb().run(`INSERT INTO agent_mcp_assignments (agent_id,mcp_server_id) VALUES (1,40)`);
     const workspace = makeTempDir('ahq-run-identity-legacy-');
     const first = await materializeAgentMcpConfig({ db: getDb(), agentId: 1, workingDirectory: workspace });
-    const legacy = JSON.parse(fs.readFileSync(first.path, 'utf8'));
+    const legacy = readConfigForAssertions(first.path);
     const server = legacy.mcpServers['agent-hq__agent-1'];
     delete server.env.AGENT_HQ_RUN_IDENTITY_FILE;
     server.env = { ...server.env, AGENT_HQ_INSTANCE_ID: '41', AGENT_HQ_DURABLE_RUN_ID: 'run-41' };
@@ -144,7 +185,7 @@ describe('materializeAgentMcpConfig', () => {
       env: { AGENT_HQ_RUN_IDENTITY_FILE: openClawRunIdentityPath(workspace) },
     });
     expect(JSON.stringify(published)).not.toContain('/old/');
-    expect(JSON.parse(fs.readFileSync(result.path, 'utf8')).mcpServers['agent-hq__agent-1']).toEqual(published);
+    expect(readConfigForAssertions(result.path).mcpServers['agent-hq__agent-1']).toEqual(published);
   });
 
   it.each(['list', 'entries'])('denies foreign namespaces and preserves manual policies with agents.%s', shape => {
@@ -153,7 +194,7 @@ describe('materializeAgentMcpConfig', () => {
     const list = [{ id: 'a', workspace: first, tools: { deny: ['exec'] } }, { id: 'b', workspace: second }];
     fs.writeFileSync(configPath, JSON.stringify({ agents: shape === 'list' ? { list } : { entries: Object.fromEntries(list.map(({ id, ...entry }) => [id, entry])) } }));
     expect(ensureOpenClawMcpWorkspaceBundleEnabled(configPath, openClawMcpBundleId(first)).ok).toBe(true);
-    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    const config = readConfigForAssertions(configPath);
     const entries = shape === 'list' ? config.agents.list : Object.values(config.agents.entries) as any[];
     expect(entries[0].tools.deny).toEqual(['exec', `${openClawMcpServerPrefix(second)}*`]);
     expect(entries[1].tools.deny).toEqual([`${openClawMcpServerPrefix(first)}*`]);
@@ -168,8 +209,9 @@ describe('materializeAgentMcpConfig', () => {
     await getDb().run(`INSERT INTO agents (id, tenant_id, name, session_key) VALUES (1, 1, 'Agent', 'agent:test-1:main')`);
     await getDb().run(`INSERT INTO mcp_servers (id, tenant_id, name, slug, command, args) VALUES (40, 1, 'CRM', 'crm', '/bin/bash', '["/crm/run-mcp.sh"]')`);
     await getDb().run(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id, overrides) VALUES (1,40,?)`, JSON.stringify({
-      enforce_tool_allowlist: true, tool_allowlist: ['correction'], env: { CRM_AGENT_KEY_FILE: '/private/keys/sales-agent.env' },
+      enforce_tool_allowlist: true, tool_allowlist: ['correction'],
     }));
+    await getDb().run('UPDATE mcp_servers SET env=? WHERE id=40',JSON.stringify({CRM_AGENT_KEY_FILE:'/private/keys/sales-agent.env'}));
     const workingDirectory = makeTempDir('agent-hq-gateway-');
     const result = await materializeAgentMcpConfig({ db: getDb(), agentId: 1, workingDirectory });
     expect(result.ok).toBe(true);
@@ -178,7 +220,8 @@ describe('materializeAgentMcpConfig', () => {
     expect(server.args[0]).toMatch(/mcp-tool-gateway\.js$/);
     expect(server.args.join(' ')).not.toContain('/private/keys');
     expect(JSON.parse(server.env.AGENT_HQ_MCP_UPSTREAM)).toMatchObject({ command: '/bin/bash', args: ['/crm/run-mcp.sh'], allowedTools: ['correction'] });
-    expect(server.env.CRM_AGENT_KEY_FILE).toBe('/private/keys/sales-agent.env');
+    expect(server.env.CRM_AGENT_KEY_FILE).toBeUndefined();
+    expect(JSON.parse(server.env.AGENT_HQ_MCP_UPSTREAM).env.CRM_AGENT_KEY_FILE).toBe('/private/keys/sales-agent.env');
     expect(server.toolFilter.include).toEqual(['correction']);
     expect(server.enforce_tool_allowlist).toBeUndefined();
   });
@@ -202,7 +245,7 @@ describe('materializeAgentMcpConfig', () => {
     expect(fs.existsSync(path.join(workingDirectory, '.mcp.json'))).toBe(false);
     expect(fs.existsSync(path.join(workingDirectory, '.openclaw', 'extensions', 'agent-hq-mcp', '.mcp.json'))).toBe(false);
     if (fs.existsSync(process.env.OPENCLAW_CONFIG_PATH!)) {
-      const openClawConfig = JSON.parse(fs.readFileSync(process.env.OPENCLAW_CONFIG_PATH!, 'utf8'));
+      const openClawConfig = readConfigForAssertions(process.env.OPENCLAW_CONFIG_PATH!);
       expect(openClawConfig.mcp?.servers).toBeUndefined();
     }
   });
@@ -232,11 +275,11 @@ describe('materializeAgentMcpConfig', () => {
           workingDirectory,
           materializeOpenClawGlobalConfig: true,
         });
-    const config = JSON.parse(fs.readFileSync(path.join(workingDirectory, '.mcp.json'), 'utf8'));
+    const config = readConfigForAssertions(path.join(workingDirectory, '.mcp.json'));
     const bundleConfig = readBundleConfig(workingDirectory);
-    const bundleManifest = JSON.parse(fs.readFileSync(path.join(workingDirectory, '.openclaw', 'extensions', 'agent-hq-mcp', '.claude-plugin', 'plugin.json'), 'utf8'));
+    const bundleManifest = readConfigForAssertions(path.join(workingDirectory, '.openclaw', 'extensions', 'agent-hq-mcp', '.claude-plugin', 'plugin.json'));
     const openClawConfig = fs.existsSync(process.env.OPENCLAW_CONFIG_PATH!)
-      ? JSON.parse(fs.readFileSync(process.env.OPENCLAW_CONFIG_PATH!, 'utf8'))
+      ? readConfigForAssertions(process.env.OPENCLAW_CONFIG_PATH!)
       : {};
 
     expect(result.ok).toBe(true);
@@ -333,7 +376,7 @@ describe('materializeAgentMcpConfig', () => {
               agentId: agent.id,
               workingDirectory,
             });
-      const config = JSON.parse(fs.readFileSync(path.join(workingDirectory, '.mcp.json'), 'utf8'));
+      const config = readConfigForAssertions(path.join(workingDirectory, '.mcp.json'));
       const server = config.mcpServers[`example-crm__agent-${agent.id}`];
       effectiveToolsByRole.set(agent.name, server.toolFilter.include);
 
@@ -385,7 +428,7 @@ describe('materializeAgentMcpConfig', () => {
               agentId,
               workingDirectory,
             });
-      const config = JSON.parse(fs.readFileSync(path.join(workingDirectory, '.mcp.json'), 'utf8'));
+      const config = readConfigForAssertions(path.join(workingDirectory, '.mcp.json'));
       const server = config.mcpServers[`example-crm__agent-${agentId}`];
 
       expect(result.ok).toBe(true);
@@ -437,7 +480,7 @@ describe('materializeAgentMcpConfig', () => {
           workingDirectory,
           materializeOpenClawGlobalConfig: true,
         });
-    const firstConfig = JSON.parse(fs.readFileSync(path.join(workingDirectory, '.mcp.json'), 'utf8'));
+    const firstConfig = readConfigForAssertions(path.join(workingDirectory, '.mcp.json'));
     const firstKey = firstConfig.mcpServers['agent-hq__agent-1'].env.AGENT_HQ_MCP_API_KEY;
     const second = await materializeAgentMcpConfig({
           db: getDb(),
@@ -445,13 +488,13 @@ describe('materializeAgentMcpConfig', () => {
           workingDirectory,
           materializeOpenClawGlobalConfig: true,
         });
-    const secondConfig = JSON.parse(fs.readFileSync(path.join(workingDirectory, '.mcp.json'), 'utf8'));
+    const secondConfig = readConfigForAssertions(path.join(workingDirectory, '.mcp.json'));
 
     expect(first.ok).toBe(true);
     expect(second.ok).toBe(true);
     expect(secondConfig.mcpServers['agent-hq__agent-1'].env.AGENT_HQ_MCP_API_KEY).toBe(firstKey);
     const openClawConfig = fs.existsSync(process.env.OPENCLAW_CONFIG_PATH!)
-      ? JSON.parse(fs.readFileSync(process.env.OPENCLAW_CONFIG_PATH!, 'utf8'))
+      ? readConfigForAssertions(process.env.OPENCLAW_CONFIG_PATH!)
       : {};
     expect(openClawConfig.mcp?.servers['agent-hq__agent-1']).toBeUndefined();
     const keyCount = await getDb().get(`SELECT COUNT(*) as count FROM mcp_api_keys WHERE agent_id = 1`) as { count: number };
@@ -478,12 +521,12 @@ describe('materializeAgentMcpConfig', () => {
     expect(fs.existsSync(path.join(workspaceDirectory, '.mcp.json'))).toBe(true);
     expect(fs.existsSync(path.join(workspaceDirectory, '.openclaw', 'extensions', 'agent-hq-mcp', '.mcp.json'))).toBe(true);
     expect(fs.existsSync(path.join(workspaceDirectory, '.openclaw', 'extensions', 'agent-hq-mcp', '.claude-plugin', 'plugin.json'))).toBe(true);
-    const config = JSON.parse(fs.readFileSync(path.join(workspaceDirectory, '.mcp.json'), 'utf8'));
+    const config = readConfigForAssertions(path.join(workspaceDirectory, '.mcp.json'));
     expect(config.mcpServers['dev-environment-lease-manager__agent-1'].env.AGENT_HQ_MCP_API_KEY).toMatch(/^ahq_mcp_/);
     expect(fs.existsSync(path.join(taskWorktreeDirectory, '.mcp.json'))).toBe(false);
     expect(fs.existsSync(path.join(taskWorktreeDirectory, '.openclaw', 'extensions', 'agent-hq-mcp', '.mcp.json'))).toBe(false);
     const openClawConfig = fs.existsSync(process.env.OPENCLAW_CONFIG_PATH!)
-      ? JSON.parse(fs.readFileSync(process.env.OPENCLAW_CONFIG_PATH!, 'utf8'))
+      ? readConfigForAssertions(process.env.OPENCLAW_CONFIG_PATH!)
       : {};
     expect(openClawConfig.mcp?.servers).toBeUndefined();
   });
@@ -578,7 +621,7 @@ describe('materializeAgentMcpConfig', () => {
           materializeOpenClawGlobalConfig: true,
           refreshOpenClawPluginRegistry,
         });
-    const openClawConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    const openClawConfig = readConfigForAssertions(configPath);
 
     expect(result.ok).toBe(true);
     expect(result.count).toBe(0);
@@ -668,7 +711,7 @@ describe('materializeAgentMcpConfig', () => {
           materializeOpenClawGlobalConfig: true,
         });
     const openClawConfig = fs.existsSync(process.env.OPENCLAW_CONFIG_PATH!)
-      ? JSON.parse(fs.readFileSync(process.env.OPENCLAW_CONFIG_PATH!, 'utf8'))
+      ? readConfigForAssertions(process.env.OPENCLAW_CONFIG_PATH!)
       : {};
     const firstConfig = readBundleConfig(firstWorkspace);
     const secondConfig = readBundleConfig(secondWorkspace);
@@ -735,7 +778,7 @@ describe('materializeAgentMcpConfig', () => {
     }
 
     const openClawConfig = fs.existsSync(process.env.OPENCLAW_CONFIG_PATH!)
-      ? JSON.parse(fs.readFileSync(process.env.OPENCLAW_CONFIG_PATH!, 'utf8'))
+      ? readConfigForAssertions(process.env.OPENCLAW_CONFIG_PATH!)
       : {};
     const globalServerNames = Object.keys(openClawConfig.mcp?.servers ?? {}).sort();
     expect(globalServerNames).toEqual([]);
@@ -760,7 +803,7 @@ describe('materializeAgentMcpConfig', () => {
       desiredServers: {},
       configPath,
     });
-    const openClawConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    const openClawConfig = readConfigForAssertions(configPath);
 
     expect(result.ok).toBe(true);
     expect(openClawConfig.mcp.servers['agent-hq__agent-1']).toBeUndefined();
@@ -786,12 +829,12 @@ describe('materializeAgentMcpConfig', () => {
     expect(result.ok).toBe(true);
     expect(result.runtimeType).toBe('hermes');
     expect(result.workingDirectory).toBe(hermesProfileDirectory);
-    const config = JSON.parse(fs.readFileSync(path.join(hermesProfileDirectory, '.mcp.json'), 'utf8'));
+    const config = readConfigForAssertions(path.join(hermesProfileDirectory, '.mcp.json'));
     expect(config.mcpServers['agent-hq__agent-1']).toMatchObject({ command: 'node', args: ['server.js'] });
     expect(config.mcpServers['agent-hq__agent-1'].env.AGENT_HQ_MCP_API_KEY).toMatch(/^ahq_mcp_/);
     expect(fs.existsSync(path.join(hermesProfileDirectory, '.openclaw', 'extensions', 'agent-hq-mcp', '.mcp.json'))).toBe(true);
     if (fs.existsSync(process.env.OPENCLAW_CONFIG_PATH!)) {
-      const openClawConfig = JSON.parse(fs.readFileSync(process.env.OPENCLAW_CONFIG_PATH!, 'utf8'));
+      const openClawConfig = readConfigForAssertions(process.env.OPENCLAW_CONFIG_PATH!);
       expect(openClawConfig.mcp?.servers).toBeUndefined();
     }
   });
@@ -819,7 +862,7 @@ describe('materializeAgentMcpConfig', () => {
           agentId: 1,
           materializeOpenClawGlobalConfig: true,
         });
-    const openClawConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    const openClawConfig = readConfigForAssertions(configPath);
 
     expect(result.ok).toBe(true);
     expect(result.runtimeType).toBe('hermes');
@@ -865,11 +908,11 @@ describe('materializeAgentMcpConfig', () => {
     expect(yaml).toContain('model:\n  default: gpt-5');
     expect(yaml).toContain('  operator:\n    command: operator-mcp');
     expect(yaml).toContain('  "agent-hq__agent-1":');
-    expect(yaml).toContain('    "command": "node"');
-    expect(yaml).toContain('    "args":\n      - "server.js"');
+    expect(hermesUpstreams(yaml).some(server=>server.command==='node')).toBe(true);
+    expect(hermesUpstreams(yaml).some(server=>server.args.includes('server.js'))).toBe(true);
     expect(yaml).toContain('  "dev-environment-lease-manager__agent-1":');
     expect(yaml).toContain('agent_hq_managed_mcp_servers:\n  - "agent-hq__agent-1"\n  - "dev-environment-lease-manager__agent-1"');
-    expect(yaml).toContain('"AGENT_HQ_MCP_API_KEY": "ahq_mcp_');
+    expect(hermesUpstreams(yaml).every(server=>server.env.AGENT_HQ_MCP_API_KEY.startsWith('ahq_mcp_'))).toBe(true);
     expect(yaml).not.toContain('stale-node');
   });
 
@@ -888,16 +931,16 @@ describe('materializeAgentMcpConfig', () => {
     await materializeHermesMcpConfig({ db: getDb(), agentId: 1, hermesHome });
     const yaml = fs.readFileSync(path.join(hermesHome, 'config.yaml'), 'utf8');
 
-    expect(yaml).toContain(`"command": ${JSON.stringify(path.join(leaseDir, '.venv/bin/dev-env-lease-mcp'))}`);
+    expect(hermesUpstreams(yaml).find(server=>server.cwd===leaseDir).command).toBe(path.join(leaseDir,'.venv/bin/dev-env-lease-mcp'));
     expect(yaml).not.toContain('".venv/bin/dev-env-lease-mcp"');
-    expect(yaml).toContain(`- ${JSON.stringify(path.join(leaseDir, 'config/environments.json'))}`);
+    expect(hermesUpstreams(yaml).find(server=>server.cwd===leaseDir).args).toContain(path.join(leaseDir,'config/environments.json'));
     expect(yaml).not.toContain('- "config/environments.json"');
-    expect(yaml).toContain('- "--config"');
-    expect(yaml).toContain('- "--stdio"');
-    expect(yaml).toContain('- "bare-value"');
-    expect(yaml).toContain(`- ${JSON.stringify(absoluteArg)}`);
+    expect(hermesUpstreams(yaml).find(server=>server.cwd===leaseDir).args).toContain('--config');
+    expect(hermesUpstreams(yaml).find(server=>server.cwd===leaseDir).args).toContain('--stdio');
+    expect(hermesUpstreams(yaml).find(server=>server.cwd===leaseDir).args).toContain('bare-value');
+    expect(hermesUpstreams(yaml).find(server=>server.cwd===leaseDir).args).toContain(absoluteArg);
     // Bare executable name stays as-is for PATH lookup.
-    expect(yaml).toContain('"command": "node"');
+    expect(hermesUpstreams(yaml).some(server=>server.command==='node')).toBe(true);
   });
 
   it('rewrites the Agent HQ MCP node binary, entrypoint, and cwd to the running process', async () => {
@@ -915,7 +958,7 @@ describe('materializeAgentMcpConfig', () => {
     expect(yaml).not.toContain('/fake/host/bin/node');
     // Host-specific server.js path -> resolved against this build's dist dir; absolute, ends in mcp/server.js.
     expect(yaml).not.toContain('/fake/host/agent-hq/api/dist/mcp/server.js');
-    expect(yaml).toMatch(/"args":\n {6}- "\/.*\/mcp\/server\.js"/);
+    expect(hermesUpstreams(yaml)[0].args[0]).toMatch(/\/mcp\/server\.js$/);
     // Host-specific cwd is rewritten away.
     expect(yaml).not.toContain('"cwd": "/fake/host/agent-hq/api"');
   });
@@ -933,7 +976,7 @@ describe('materializeAgentMcpConfig', () => {
 
     const first = ensureOpenClawMcpWorkspaceBundleEnabled(configPath);
     const second = ensureOpenClawMcpWorkspaceBundleEnabled(configPath);
-    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    const config = readConfigForAssertions(configPath);
 
     expect(first.ok).toBe(true);
     expect(first.changed).toBe(true);
@@ -955,7 +998,7 @@ describe('materializeAgentMcpConfig', () => {
     }), 'utf8');
 
     const result = ensureOpenClawMcpWorkspaceBundleEnabled(configPath);
-    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    const config = readConfigForAssertions(configPath);
 
     expect(result.ok).toBe(true);
     expect(result.changed).toBe(true);
@@ -1056,7 +1099,7 @@ describe('materializeAgentMcpConfig', () => {
           refreshOpenClawPluginRegistry,
         });
     const bundleConfig = readBundleConfig(openClawWorkspace);
-    const openClawConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    const openClawConfig = readConfigForAssertions(configPath);
 
     expect(result.ok).toBe(true);
     expect(result.workingDirectory).toBe(openClawWorkspace);
