@@ -64,6 +64,9 @@ module.exports = {
         // Required: every /api/v1 request authenticates. `report` only logs refusals.
         AGENT_HQ_OPERATOR_TOKEN: env.AGENT_HQ_OPERATOR_TOKEN,
         AGENT_HQ_AUTH_MODE: env.AGENT_HQ_AUTH_MODE,
+        AGENT_HQ_AUTOMATION_PROJECT_IDS: env.AGENT_HQ_AUTOMATION_PROJECT_IDS,
+        AGENT_HQ_DISABLE_AUTOMATION: env.AGENT_HQ_DISABLE_AUTOMATION,
+        AGENT_HQ_DISABLE_RECONCILER: env.AGENT_HQ_DISABLE_RECONCILER,
       },
       autorestart: true,
       // Database outages must not spin a new API process on every failed boot.

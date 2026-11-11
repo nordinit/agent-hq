@@ -1,3 +1,4 @@
+import { getReconcilerProjectIds } from './reconciler';
 import { reconcileOrphanInProgressTasks, startReconciler } from './reconciler';
 import { setupTestDb, teardownTestDb } from '../db/testDb';
 
@@ -15,6 +16,19 @@ describe('reconciler runtime integrity recovery', () => {
   }
 
   afterEach(async () => { await teardownTestDb(); });
+
+  it('limits background dispatch to the explicitly enabled projects', async () => {
+    const db = await createDb();
+    await db.run("INSERT INTO projects (id, tenant_id, name) VALUES (3, 1, 'PMT'), (99, 1, 'Agency')");
+    const previous = process.env.AGENT_HQ_AUTOMATION_PROJECT_IDS;
+    process.env.AGENT_HQ_AUTOMATION_PROJECT_IDS = '3,99';
+    try {
+      expect(await getReconcilerProjectIds(db)).toEqual([3, 99]);
+    } finally {
+      if (previous === undefined) delete process.env.AGENT_HQ_AUTOMATION_PROJECT_IDS;
+      else process.env.AGENT_HQ_AUTOMATION_PROJECT_IDS = previous;
+    }
+  });
 
   it('logs orphaned in_progress tasks after grace without changing visible status', async () => {
     const db = await createDb();

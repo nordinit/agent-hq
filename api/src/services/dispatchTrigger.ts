@@ -1,3 +1,4 @@
+import { automationProjectIds } from '../scheduler/automationScope';
 /**
  * dispatchTrigger.ts — Fire-and-forget dispatch trigger
  *
@@ -17,6 +18,13 @@ import { reconcileAssignedAgents } from '../scheduler/reconciler';
  */
 export function triggerDispatch(projectId: number | null | undefined): void {
   if (projectId == null) return;
+  try {
+    const projectIds = automationProjectIds();
+    if (projectIds && !projectIds.includes(projectId)) return;
+  } catch (error) {
+    console.error('[dispatchTrigger] Invalid automation project scope; dispatch held:', error);
+    return;
+  }
 
   // Defer to next tick so the calling request path completes first
   setImmediate(async () => {

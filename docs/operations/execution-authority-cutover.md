@@ -198,3 +198,12 @@ and verification, separately preview adding `projects.read_all` while preserving
 the existing Agency-only write grants. Keep registration, publication,
 assignment, invocation, host, delegation, permission-administration and
 cross-tenant grants off unless separately authorized.
+
+## Resuming selected projects
+
+Set `AGENT_HQ_AUTOMATION_PROJECT_IDS=3,99` to limit background recurring-task
+creation and dispatch to PMT and Agency. Unset means all projects; empty or
+malformed values fail closed at startup. The scope does not grant execution
+permissions, clear data blockers, or change trading controls. Resume the
+existing workers with `AGENT_HQ_DISABLE_AUTOMATION=0` and
+`AGENT_HQ_DISABLE_RECONCILER=0` only after reviewing the target agents.

@@ -67,6 +67,36 @@ describe('recurring task scheduler', () => {
     return await db.get(`SELECT * FROM recurring_task_series WHERE id = ?`, series.id) as typeof series;
   }
 
+  it('leaves due series outside the operator project scope untouched', async () => {
+    const series = await createDueSeries();
+    const previous = process.env.AGENT_HQ_AUTOMATION_PROJECT_IDS;
+    process.env.AGENT_HQ_AUTOMATION_PROJECT_IDS = '3,99';
+    try {
+      const summary = await runRecurringTaskSchedulerTick(getDb(), { now: new Date('2026-05-18T13:00:01.000Z') });
+      expect(summary.checked).toBe(0);
+      expect(await getDb().get('SELECT id FROM recurring_task_runs WHERE series_id = ?', series.id)).toBeUndefined();
+      const unchanged = await getDb().get<{ next_run_at: string }>('SELECT next_run_at FROM recurring_task_series WHERE id = ?', series.id);
+      expect(unchanged?.next_run_at).toBe(series.next_run_at);
+    } finally {
+      if (previous === undefined) delete process.env.AGENT_HQ_AUTOMATION_PROJECT_IDS;
+      else process.env.AGENT_HQ_AUTOMATION_PROJECT_IDS = previous;
+    }
+  });
+
+  it('runs due work for an explicitly included project', async () => {
+    const series = await createDueSeries();
+    const previous = process.env.AGENT_HQ_AUTOMATION_PROJECT_IDS;
+    process.env.AGENT_HQ_AUTOMATION_PROJECT_IDS = '613';
+    try {
+      const summary = await runRecurringTaskSchedulerTick(getDb(), { now: new Date('2026-05-18T13:00:01.000Z') });
+      expect(summary).toEqual(expect.objectContaining({ checked: 1, created: 1 }));
+      expect(await getDb().get('SELECT id FROM tasks WHERE recurring_series_id = ?', series.id)).toBeDefined();
+    } finally {
+      if (previous === undefined) delete process.env.AGENT_HQ_AUTOMATION_PROJECT_IDS;
+      else process.env.AGENT_HQ_AUTOMATION_PROJECT_IDS = previous;
+    }
+  });
+
   it('creates one normal task for a due enabled occurrence and advances next_run_at', async () => {
     const db = getDb();
     const series = await createDueSeries({ status_on_create: 'ready' });

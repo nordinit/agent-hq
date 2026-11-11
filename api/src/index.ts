@@ -1,3 +1,4 @@
+import { automationProjectIds } from './scheduler/automationScope';
 import executionRouter from './routes/execution';
 import './config/loadRootEnv';
 import { assertOpenClawMaintenanceOwner, startOpenClawMcpSyncWorker } from './services/openclawMcpSyncWorker';
@@ -586,6 +587,8 @@ async function startServer(): Promise<void> {
   startTelemetryCaptureWorker(getDb(), { onError: () => console.error('[telemetry] Observation projection failed; pending facts will retry.') });
   startTelemetryQueryWorker(getDb());
 
+  const projectScope = automationProjectIds();
+  console.log('[boot] Background automation project scope:', projectScope ?? 'all');
   const automationDisabled = process.env.AGENT_HQ_DISABLE_AUTOMATION === '1';
   if (automationDisabled) {
     console.warn('[boot] Background automation disabled by AGENT_HQ_DISABLE_AUTOMATION=1');

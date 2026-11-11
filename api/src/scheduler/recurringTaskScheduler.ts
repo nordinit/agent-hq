@@ -1,3 +1,4 @@
+import { automationProjectIds } from './automationScope';
 import { createTaskRecord } from '../domains/tasks/writeModel';
 import {
   finishRecurringTaskRun,
@@ -147,15 +148,18 @@ export function calculateNextRecurringRunAt(scheduleExpression: string, timezone
 }
 
 async function loadDueSeries(db: Db, nowIso: string, limit: number): Promise<DueSeriesRow[]> {
+  const projectIds = automationProjectIds();
+  const scope = projectIds ? `AND project_id IN (${projectIds.map(() => '?').join(',')})` : '';
   return await db.all(`
     SELECT *
     FROM recurring_task_series
     WHERE enabled = 1
       AND next_run_at IS NOT NULL
       AND next_run_at <= ?
+      ${scope}
     ORDER BY next_run_at ASC, id ASC
     LIMIT ?
-  `, nowIso, limit) as DueSeriesRow[];
+  `, nowIso, ...(projectIds ?? []), limit) as DueSeriesRow[];
 }
 
 async function loadWorkflow(db: Db, workflowId: number): Promise<WorkflowRow | null> {

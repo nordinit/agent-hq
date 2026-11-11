@@ -1,3 +1,4 @@
+import { automationProjectIds } from './automationScope';
 import { getDb } from '../db/client';
 import { runDispatcher, type DispatchResult, getNonDispatchableTaskStatusPredicate } from '../services/dispatcher';
 import { cleanupImpossibleTaskLifecycleStates } from '../lib/taskLifecycle';
@@ -234,7 +235,9 @@ async function reassignTaskIfNeeded(db: Db, task: TaskRow, nextAgentId: number):
   );
 }
 
-async function getReconcilerProjectIds(db: Db): Promise<number[]> {
+export async function getReconcilerProjectIds(db: Db): Promise<number[]> {
+  const projectIds = automationProjectIds();
+  const scope = projectIds ? `AND project_id IN (${projectIds.map(() => '?').join(',')})` : '';
   const rows = await db.all(`
     SELECT DISTINCT project_id
     FROM (
@@ -247,8 +250,9 @@ async function getReconcilerProjectIds(db: Db): Promise<number[]> {
       SELECT project_id FROM routing_config WHERE project_id IS NOT NULL
     ) project_ids
     WHERE project_id IS NOT NULL
+      ${scope}
     ORDER BY project_id ASC
-  `) as Array<{ project_id: number }>;
+  `, ...(projectIds ?? [])) as Array<{ project_id: number }>;
 
   return rows.map(row => row.project_id);
 }
