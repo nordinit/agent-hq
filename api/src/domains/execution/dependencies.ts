@@ -23,7 +23,12 @@ export function dependencyPins(snapshot: Record<string, any>): DependencyPin[] {
             definition = {};
         }
     }
-    const cwd = definition.cwd || snapshot.workspace_path || process.cwd();
+    // Lockfiles are pinned only from the executable's own directory. A definition without one
+    // (a workflow setup profile) must not pin the API's working directory: that is the current
+    // release, whose path changes on every deploy, so the pin would invalidate every approved
+    // profile and hold all automation after each release.
+    const ownCwd = definition.cwd || snapshot.workspace_path || null;
+    const cwd = ownCwd || process.cwd();
     const candidates: string[] = [];
     if (typeof definition.command === 'string') {
         const command = definition.command;
@@ -37,8 +42,8 @@ export function dependencyPins(snapshot: Record<string, any>): DependencyPin[] {
         if (typeof arg === 'string' && !arg.startsWith('-') && fs.existsSync(path.resolve(cwd, arg)))
             candidates.push(path.resolve(cwd, arg));
     }
-    for (const name of ['package-lock.json', 'pnpm-lock.yaml', 'yarn.lock', 'requirements.txt', 'uv.lock']) {
-        const file = path.join(cwd, name);
+    for (const name of ownCwd ? ['package-lock.json', 'pnpm-lock.yaml', 'yarn.lock', 'requirements.txt', 'uv.lock'] : []) {
+        const file = path.join(ownCwd, name);
         if (fs.existsSync(file))
             candidates.push(file);
     }
