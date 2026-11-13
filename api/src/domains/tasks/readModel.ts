@@ -785,32 +785,165 @@ export async function getTaskById(db: ReturnType<typeof getDb>, taskId: number):
   return { ...await enrichTask(task), status_owners: await listTaskStatusOwners(db, taskId) };
 }
 
-export async function listTaskHistory(db: ReturnType<typeof getDb>, taskId: number) {
-  const task = await db.get('SELECT id FROM tasks WHERE id = ?', taskId);
-  if (!task) {
-    const error = new Error('Task not found') as Error & { status?: number };
-    error.status = 404;
-    throw error;
-  }
-  const rows = await db.all(`
-    SELECT * FROM task_history WHERE task_id = ? ORDER BY created_at DESC
-  `, taskId);
-  const displayName = await taskActorDisplayNames(db, taskId);
-  return rows.map(row => ({ ...row, changed_by_display_name: displayName(row.changed_by) }));
+/**
+ * Paging for a task's notes, history and runs. A request without `limit` keeps the original
+ * response, the full list as an array, for existing callers such as the MCP tools. With `limit`,
+ * the newest `limit` rows before `before_id` come back as a page, so a task with a thousand rows
+ * costs the same to open as one with ten.
+ */
+export interface TaskLogPageQuery {
+  limit?: unknown;
+  before_id?: unknown;
 }
 
-export async function listTaskNotes(db: ReturnType<typeof getDb>, taskId: number) {
-  const task = await db.get('SELECT id FROM tasks WHERE id = ?', taskId);
-  if (!task) {
-    const error = new Error('Task not found') as Error & { status?: number };
-    error.status = 404;
-    throw error;
-  }
+export interface TaskLogPage<T> {
+  items: T[];
+  total: number;
+  has_more: boolean;
+  /** Pass as before_id to fetch the next older page; null when there is none. */
+  next_before_id: number | null;
+}
+
+export const TASK_LOG_PAGE_MAX_LIMIT = 200;
+
+/**
+ * History rows Agent HQ writes as run bookkeeping rather than as a change anyone made. A task that
+ * has been dispatched many times has hundreds of them; exclude_internal hides them.
+ */
+export const INTERNAL_TASK_HISTORY_FIELDS = [
+  'active_instance_id',
+  'runtime_failed_instance_id',
+  'runtime_failed_end_source',
+  'runtime_failed_retry_backoff_seconds',
+  'lifecycle_outcome_posted_at',
+  'runtime_lifecycle_handoff',
+];
+export const INTERNAL_TASK_HISTORY_FIELD_PREFIXES = ['workflow_event_'];
+
+function pageLimit(value: unknown): number | null {
+  if (value === undefined || value === null || value === '') return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return null;
+  return Math.min(Math.max(1, Math.trunc(parsed)), TASK_LOG_PAGE_MAX_LIMIT);
+}
+
+function pageCursor(value: unknown): number | null {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function notFoundTask(): Error & { status?: number } {
+  const error = new Error('Task not found') as Error & { status?: number };
+  error.status = 404;
+  return error;
+}
+
+/**
+ * The newest `limit` rows of one task's log table before the cursor, newest first. Rows are paged
+ * by id, which only grows, so a page boundary never skips or repeats a row.
+ */
+async function pageTaskLog(
+  db: ReturnType<typeof getDb>,
+  table: 'task_history' | 'task_notes',
+  taskId: number,
+  limit: number,
+  beforeId: number | null,
+  extraSql = '',
+  extraParams: unknown[] = [],
+): Promise<{ rows: Record<string, unknown>[]; total: number; hasMore: boolean }> {
+  const total = Number(await db.value(
+    `SELECT COUNT(*)::int FROM ${table} WHERE task_id = ?${extraSql}`, taskId, ...extraParams,
+  ) ?? 0);
   const rows = await db.all(`
-    SELECT * FROM task_notes WHERE task_id = ? ORDER BY created_at ASC
-  `, taskId);
+    SELECT * FROM ${table}
+    WHERE task_id = ?${extraSql}${beforeId === null ? '' : ' AND id < ?'}
+    ORDER BY id DESC
+    LIMIT ?
+  `, taskId, ...extraParams, ...(beforeId === null ? [] : [beforeId]), limit + 1);
+  const hasMore = rows.length > limit;
+  return { rows: hasMore ? rows.slice(0, limit) : rows, total, hasMore };
+}
+
+function nextCursor(rows: Record<string, unknown>[], hasMore: boolean): number | null {
+  return hasMore && rows.length > 0 ? Number(rows[rows.length - 1].id) : null;
+}
+
+export async function listTaskHistory(db: ReturnType<typeof getDb>, taskId: number): Promise<Record<string, unknown>[]>;
+export async function listTaskHistory(
+  db: ReturnType<typeof getDb>,
+  taskId: number,
+  query: TaskLogPageQuery & { exclude_internal?: unknown; field?: unknown },
+): Promise<Record<string, unknown>[] | TaskLogPage<Record<string, unknown>>>;
+export async function listTaskHistory(
+  db: ReturnType<typeof getDb>,
+  taskId: number,
+  query: TaskLogPageQuery & { exclude_internal?: unknown; field?: unknown } = {},
+): Promise<Record<string, unknown>[] | TaskLogPage<Record<string, unknown>>> {
+  const task = await db.get('SELECT id FROM tasks WHERE id = ?', taskId);
+  if (!task) throw notFoundTask();
   const displayName = await taskActorDisplayNames(db, taskId);
-  return rows.map(row => ({ ...row, author_display_name: displayName(row.author) }));
+  const shape = (row: Record<string, unknown>) => ({ ...row, changed_by_display_name: displayName(row.changed_by as string) });
+
+  const limit = pageLimit(query.limit);
+  if (limit === null) {
+    const rows = await db.all(`
+      SELECT * FROM task_history WHERE task_id = ? ORDER BY created_at DESC
+    `, taskId);
+    return rows.map(shape);
+  }
+
+  const filters: string[] = [];
+  const params: unknown[] = [];
+  const fields = String(query.field ?? '').split(',').map(field => field.trim()).filter(Boolean);
+  if (fields.length > 0) {
+    filters.push('field = ANY(?::text[])');
+    params.push(fields);
+  }
+  if (query.exclude_internal === '1' || query.exclude_internal === 'true' || query.exclude_internal === true) {
+    filters.push('NOT (field = ANY(?::text[]))');
+    params.push(INTERNAL_TASK_HISTORY_FIELDS);
+    for (const prefix of INTERNAL_TASK_HISTORY_FIELD_PREFIXES) {
+      filters.push(`field NOT LIKE ?`);
+      params.push(`${prefix.replace(/[\\%_]/g, char => `\\${char}`)}%`);
+    }
+  }
+  const extraSql = filters.map(filter => ` AND ${filter}`).join('');
+  const page = await pageTaskLog(db, 'task_history', taskId, limit, pageCursor(query.before_id), extraSql, params);
+  return { items: page.rows.map(shape), total: page.total, has_more: page.hasMore, next_before_id: nextCursor(page.rows, page.hasMore) };
+}
+
+export async function listTaskNotes(db: ReturnType<typeof getDb>, taskId: number): Promise<Record<string, unknown>[]>;
+export async function listTaskNotes(
+  db: ReturnType<typeof getDb>,
+  taskId: number,
+  query: TaskLogPageQuery,
+): Promise<Record<string, unknown>[] | TaskLogPage<Record<string, unknown>>>;
+export async function listTaskNotes(
+  db: ReturnType<typeof getDb>,
+  taskId: number,
+  query: TaskLogPageQuery = {},
+): Promise<Record<string, unknown>[] | TaskLogPage<Record<string, unknown>>> {
+  const task = await db.get('SELECT id FROM tasks WHERE id = ?', taskId);
+  if (!task) throw notFoundTask();
+  const displayName = await taskActorDisplayNames(db, taskId);
+  const shape = (row: Record<string, unknown>) => ({ ...row, author_display_name: displayName(row.author as string) });
+
+  const limit = pageLimit(query.limit);
+  if (limit === null) {
+    const rows = await db.all(`
+      SELECT * FROM task_notes WHERE task_id = ? ORDER BY created_at ASC
+    `, taskId);
+    return rows.map(shape);
+  }
+  // A page is fetched newest first but returned oldest first, the order notes are read in, so
+  // an older page goes in front of the one already shown.
+  const page = await pageTaskLog(db, 'task_notes', taskId, limit, pageCursor(query.before_id));
+  return {
+    items: page.rows.map(shape).reverse(),
+    total: page.total,
+    has_more: page.hasMore,
+    next_before_id: nextCursor(page.rows, page.hasMore),
+  };
 }
 
 export async function listTaskAttachments(db: ReturnType<typeof getDb>, taskId: number) {
@@ -819,11 +952,64 @@ export async function listTaskAttachments(db: ReturnType<typeof getDb>, taskId: 
   return rows.map(row => ({ ...row, uploaded_by_display_name: displayName(row.uploaded_by) }));
 }
 
-export async function listTaskInstances(db: ReturnType<typeof getDb>, taskId: number) {
+/**
+ * Run columns a task page shows. The lean listing leaves out the large per-run blobs (the
+ * payload sent, the runtime response, the abort target and the changed-file list), which are
+ * most of a run row's size and are read from the run itself, not from the task's run list.
+ */
+const LEAN_TASK_INSTANCE_COLUMNS = `
+  ji.id, ji.agent_id, ji.task_id, ji.status, ji.session_key, ji.created_at, ji.dispatched_at,
+  ji.started_at, ji.completed_at, ji.error, ji.run_stage, ji.last_heartbeat_at, ji.task_outcome,
+  ji.token_input, ji.token_output, ji.token_total, ji.effective_model, ji.effective_thinking_level,
+  ji.effective_fast_mode, ji.run_id, ji.durable_run_id, ji.failure_stage, ji.worktree_path,
+  ji.runtime_ended_at, ji.runtime_completed_at, ji.runtime_end_success, ji.runtime_end_error,
+  ji.runtime_end_source, ji.lifecycle_handoff_status, ji.semantic_outcome_missing,
+  ji.lifecycle_outcome_posted_at, ji.stop_requested_at, ji.abort_status,
+  a.job_title as job_title, a.name as agent_name,
+  ia.current_stage, ia.last_agent_heartbeat_at, ia.last_meaningful_output_at,
+  ia.latest_commit_hash, ia.branch_name, ia.changed_files_count,
+  ia.summary as artifact_summary, ia.blocker_reason, ia.outcome as artifact_outcome,
+  ia.stale as run_is_stale, ia.stale_at
+`;
+
+export async function listTaskInstances(db: ReturnType<typeof getDb>, taskId: number): Promise<Record<string, unknown>[]>;
+export async function listTaskInstances(
+  db: ReturnType<typeof getDb>,
+  taskId: number,
+  query: TaskLogPageQuery & { lean?: unknown },
+): Promise<Record<string, unknown>[] | TaskLogPage<Record<string, unknown>>>;
+export async function listTaskInstances(
+  db: ReturnType<typeof getDb>,
+  taskId: number,
+  query: TaskLogPageQuery & { lean?: unknown } = {},
+): Promise<Record<string, unknown>[] | TaskLogPage<Record<string, unknown>>> {
   if (!Number.isFinite(taskId)) {
     const error = new Error('Invalid task id') as Error & { status?: number };
     error.status = 400;
     throw error;
+  }
+
+  const limit = pageLimit(query.limit);
+  if (limit !== null) {
+    const beforeId = pageCursor(query.before_id);
+    const lean = query.lean === '1' || query.lean === 'true' || query.lean === true;
+    const total = Number(await db.value('SELECT COUNT(*)::int FROM job_instances WHERE task_id = ?', taskId) ?? 0);
+    const rows = await db.all(`
+      SELECT ${lean ? LEAN_TASK_INSTANCE_COLUMNS : `ji.*, a.job_title as job_title, a.name as agent_name,
+             ia.current_stage, ia.last_agent_heartbeat_at, ia.last_meaningful_output_at,
+             ia.latest_commit_hash, ia.branch_name, ia.changed_files_json, ia.changed_files_count,
+             ia.summary as artifact_summary, ia.blocker_reason, ia.outcome as artifact_outcome,
+             ia.stale as run_is_stale, ia.stale_at`}
+      FROM job_instances ji
+      LEFT JOIN agents a ON a.id = ji.agent_id
+      LEFT JOIN instance_artifacts ia ON ia.instance_id = ji.id
+      WHERE ji.task_id = ?${beforeId === null ? '' : ' AND ji.id < ?'}
+      ORDER BY ji.id DESC
+      LIMIT ?
+    `, taskId, ...(beforeId === null ? [] : [beforeId]), limit + 1);
+    const hasMore = rows.length > limit;
+    const items = hasMore ? rows.slice(0, limit) : rows;
+    return { items, total, has_more: hasMore, next_before_id: nextCursor(items, hasMore) };
   }
 
   return await db.all(`

@@ -2,14 +2,23 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { getApiBase, api, type Task as ApiTask } from '@/lib/api';
+import { getApiBase, api, type Task as ApiTask, type TaskBoardBucket } from '@/lib/api';
 import type { BoardTask } from '@/features/tasks/TaskBoardComponents';
 import { useLiveRefresh } from '@/lib/useLiveRefresh';
 import { useTaskStatuses } from '@/lib/useTaskStatuses';
 import { useTaskTypes } from '@/lib/taskTypes';
 import { hasLiveTaskInstance } from '@/lib/liveTaskInstances';
 import { useProjectFilterPreference } from '@/lib/projectFilterPreference';
-import { fetchTaskPages, type TaskPage } from '@/lib/taskPages';
+import {
+  BOARD_PER_STATUS_LIMIT,
+  expandBoardColumn,
+  reuseUnchangedTasks,
+} from '@/lib/boardTasks';
+
+/** Board refresh cadence. Each refresh is one bounded request, so this is cheap. */
+const BOARD_REFRESH_MS = 30_000;
+const BOARD_HIDDEN_REFRESH_MS = 300_000;
+const BOARD_SEARCH_DEBOUNCE_MS = 300;
 
 export interface Project {
   id: number;
@@ -64,16 +73,19 @@ export function useTasksPageState() {
   });
   const [loading, setLoading] = useState(true);
   const [isBackgroundLoading, setIsBackgroundLoading] = useState(false);
-  const [hasMore, setHasMore] = useState(false);
   const [totalTasks, setTotalTasks] = useState(0);
+  // Every (workflow, status) column's total and how many of its tasks are loaded.
+  const [buckets, setBuckets] = useState<TaskBoardBucket[]>([]);
+  // Columns the operator expanded with "Show more": column key → rows to load.
+  const [expandedBuckets, setExpandedBuckets] = useState<Record<string, number>>({});
   const [modal, setModal] = useState<TasksPageModalState | null>(null);
   const [viewTask, setViewTask] = useState<Task | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [activeInstanceOnly, setActiveInstanceOnly] = useState(false);
   const [selectedTaskType, setSelectedTaskType] = useState('');
   const [selectedWorkflowIds, setSelectedWorkflowIds] = useState<number[]>([]);
-  const loadedWorkflowIds = useRef<Set<number>>(new Set());
-  const [loadingWorkflowIds, setLoadingWorkflowIds] = useState<Set<number>>(new Set());
+  // Search runs on the server across every task, not only the loaded columns, once typing pauses.
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const selectedSingleWorkflowId = selectedWorkflowIds.length === 1 ? selectedWorkflowIds[0] : null;
   const loadRunIdRef = useRef(0);
   const loadControllerRef = useRef<AbortController | null>(null);
@@ -143,6 +155,19 @@ export function useTasksPageState() {
       .catch(console.error);
   }, [base]);
 
+  useEffect(() => {
+    const handle = window.setTimeout(() => setDebouncedSearch(searchQuery.trim()), BOARD_SEARCH_DEBOUNCE_MS);
+    return () => window.clearTimeout(handle);
+  }, [searchQuery]);
+
+  const tasksRef = useRef<Task[]>([]);
+  tasksRef.current = tasks;
+
+  /**
+   * One bounded request: the newest tasks of every (workflow, status) column, each column's total,
+   * and the columns the operator expanded. Search, task type and live-run filters apply on the
+   * server so they reach every task, not only the loaded ones.
+   */
   const loadTasks = useCallback(async (opts: { silent?: boolean } = {}) => {
     const { silent = false } = opts;
     const runId = ++loadRunIdRef.current;
@@ -151,10 +176,7 @@ export function useTasksPageState() {
     loadControllerRef.current = controller;
     const isCurrent = () => loadRunIdRef.current === runId && !controller.signal.aborted;
 
-    if (!silent) {
-      setLoading(true);
-      setIsBackgroundLoading(false);
-    }
+    if (!silent) setLoading(true);
 
     const workflowsFetch: Promise<Workflow[] | null> = selectedProject
       ? fetch(`${base}/api/v1/workflows?project_id=${selectedProject}`, { signal: controller.signal })
@@ -163,40 +185,20 @@ export function useTasksPageState() {
       : Promise.resolve([]);
 
     try {
-      let firstPage = true;
-      const snapshot = await fetchTaskPages<Task>(async (offset, limit) => {
-        const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
-        if (selectedProject) params.set('project_id', String(selectedProject));
-        const response = await fetch(`${base}/api/v1/tasks?${params}`, { signal: controller.signal });
-        if (!response.ok) throw new Error(`Task refresh failed (${response.status})`);
-        return response.json() as Promise<TaskPage<Task>>;
-      }, silent ? undefined : async page => {
-        const workflowData = await workflowsFetch;
-        if (!isCurrent()) return;
-        if (firstPage) {
-          setTasks(page.tasks);
-          if (workflowData) setWorkflows(workflowData.filter(s => s.status === 'active' || s.status === 'planning'));
-          firstPage = false;
-        } else {
-          // Preserve tasks already fetched by a visible workflow section during initial loading.
-          setTasks(prev => [...new Map([...prev, ...page.tasks].map(task => [task.id, task])).values()]);
-        }
-        setTotalTasks(page.total);
-        setHasMore(page.hasMore);
-        setIsBackgroundLoading(page.hasMore);
-        setLoading(false);
-      });
+      const board = await api.getTaskBoard({
+        projectId: selectedProject,
+        q: debouncedSearch,
+        taskType: selectedTaskType || undefined,
+        liveInstancesOnly: activeInstanceOnly,
+        perStatusLimit: BOARD_PER_STATUS_LIMIT,
+        expanded: expandedBuckets,
+      }, { signal: controller.signal });
       const workflowData = await workflowsFetch;
       if (!isCurrent()) return;
-      // A refresh publishes only a complete snapshot, never a temporary first page.
-      setTasks(snapshot.tasks);
-      setTotalTasks(snapshot.total);
-      setHasMore(false);
-      setLoadingWorkflowIds(new Set());
-      if (workflowData) {
-        setWorkflows(workflowData.filter(s => s.status === 'active' || s.status === 'planning'));
-        loadedWorkflowIds.current = new Set(workflowData.map(workflow => workflow.id));
-      }
+      setTasks(reuseUnchangedTasks(tasksRef.current, board.tasks as Task[]));
+      setBuckets(board.buckets);
+      setTotalTasks(board.total);
+      if (workflowData) setWorkflows(workflowData.filter(s => s.status === 'active' || s.status === 'planning'));
     } catch (error) {
       if (isCurrent()) console.error(error);
     } finally {
@@ -205,59 +207,45 @@ export function useTasksPageState() {
         setIsBackgroundLoading(false);
       }
     }
-  }, [base, selectedProject]);
+  }, [activeInstanceOnly, base, debouncedSearch, expandedBuckets, selectedProject, selectedTaskType]);
 
-  const handleSectionVisible = useCallback((sectionKey: string) => {
-    if (!sectionKey.startsWith('workflow-')) return;
-    const workflowId = Number(sectionKey.replace('workflow-', ''));
-    if (!workflowId || loadedWorkflowIds.current.has(workflowId)) return;
-    loadedWorkflowIds.current.add(workflowId);
-    const runId = loadRunIdRef.current;
-
-    setLoadingWorkflowIds(prev => new Set([...prev, workflowId]));
-
-    const params = new URLSearchParams({ limit: '200', offset: '0', workflow_id: String(workflowId) });
-    if (selectedProject) params.set('project_id', String(selectedProject));
-
-    fetch(`${getApiBase()}/api/v1/tasks?${params.toString()}`)
-      .then(r => r.json())
-      .then((data: { tasks: Task[] }) => {
-        if (loadRunIdRef.current !== runId) return;
-        if (data.tasks?.length) {
-          setTasks(prev => {
-            const existingIds = new Set(prev.map(t => t.id));
-            const newTasks = data.tasks.filter(t => !existingIds.has(t.id));
-            return newTasks.length > 0 ? [...prev, ...newTasks] : prev;
-          });
-        }
-      })
-      .catch(console.error)
-      .finally(() => {
-        if (loadRunIdRef.current !== runId) return;
-        setLoadingWorkflowIds(prev => {
-          const next = new Set(prev);
-          next.delete(workflowId);
-          return next;
-        });
-      });
-  }, [selectedProject]);
-
+  // A project switch starts over: a fresh board, no expanded columns, no workflow filter.
   useEffect(() => {
-    loadedWorkflowIds.current = new Set();
-    setLoadingWorkflowIds(new Set());
+    // Keep the same object when nothing was expanded, so the switch does not reload twice.
+    setExpandedBuckets(current => (Object.keys(current).length > 0 ? {} : current));
     setSelectedWorkflowIds([]);
-
     if (selectedProject === null) {
       setWorkflows([]);
     }
-    loadTasks();
-  }, [selectedProject, loadTasks]);
+  }, [selectedProject]);
+
+  // Initial load, and a reload whenever a server-side filter or an expanded column changes.
+  const firstLoadForProject = useRef<number | null | undefined>(undefined);
+  useEffect(() => {
+    const projectChanged = firstLoadForProject.current !== selectedProject;
+    firstLoadForProject.current = selectedProject;
+    if (!projectChanged) setIsBackgroundLoading(true);
+    void loadTasks({ silent: !projectChanged });
+  }, [loadTasks, selectedProject]);
 
   useLiveRefresh(() => loadTasks({ silent: true }), {
-    enabled: !loading && !isBackgroundLoading,
-    intervalMs: 10000,
-    hiddenIntervalMs: 30000,
+    enabled: !loading,
+    intervalMs: BOARD_REFRESH_MS,
+    hiddenIntervalMs: BOARD_HIDDEN_REFRESH_MS,
   });
+
+  /** "Show more" on a status column: load one more page of it for the given workflows. */
+  const loadMoreInColumn = useCallback((status: string, workflowIds: Array<number | null> | null) => {
+    setExpandedBuckets(current => expandBoardColumn(current, buckets, status, workflowIds));
+  }, [buckets]);
+
+  /** Opens the slide-over at once with the card, then swaps in the full task the card lacks. */
+  const openTask = useCallback((task: BoardTask) => {
+    setViewTask(task as Task);
+    api.getTask(task.id)
+      .then(full => setViewTask(current => (current?.id === full.id ? full as Task : current)))
+      .catch(err => console.warn('[tasks] Task fetch failed:', err));
+  }, []);
 
   const openNew = useCallback((status: Status) => {
     setModal({ task: { status, priority: 'medium', project_id: selectedProject } });
@@ -303,6 +291,7 @@ export function useTasksPageState() {
       }
       const updated = await res.json() as Task;
       upsertTask(updated);
+      void loadTasks({ silent: true });
     } else {
       const res = await fetch(`${base}/api/v1/tasks`, {
         method: 'POST',
@@ -315,9 +304,10 @@ export function useTasksPageState() {
       }
       const created = await res.json() as Task;
       upsertTask(created);
+      void loadTasks({ silent: true });
     }
     setModal(null);
-  }, [base, upsertTask]);
+  }, [base, loadTasks, upsertTask]);
 
   const handleDelete = useCallback(async (id: number) => {
     const res = await fetch(`${base}/api/v1/tasks/${id}?deleted_by=User`, { method: 'DELETE' });
@@ -327,7 +317,8 @@ export function useTasksPageState() {
     }
     removeTaskFromBoard(id);
     setModal(null);
-  }, [base, removeTaskFromBoard]);
+    void loadTasks({ silent: true });
+  }, [base, loadTasks, removeTaskFromBoard]);
 
   const handlePanelSave = useCallback(async (data: Partial<Task> & { recurring: number }) => {
     if (!viewTask) return;
@@ -403,7 +394,9 @@ export function useTasksPageState() {
     const updated = await res.json() as Task;
     upsertTask(updated);
     setViewTask(prev => (prev?.id === updated.id ? updated : prev));
-  }, [base, upsertTask]);
+    // The task moved columns, so column totals changed.
+    void loadTasks({ silent: true });
+  }, [base, loadTasks, upsertTask]);
 
   const filteredTasks = useMemo(() => {
     const q = searchQuery.trim();
@@ -440,8 +433,10 @@ export function useTasksPageState() {
     setSelectedProject,
     loading,
     isBackgroundLoading,
-    hasMore,
     totalTasks,
+    buckets,
+    loadMoreInColumn,
+    openTask,
     modal,
     setModal,
     viewTask,
@@ -454,14 +449,12 @@ export function useTasksPageState() {
     setSelectedTaskType,
     selectedWorkflowIds,
     setSelectedWorkflowIds,
-    loadingWorkflowIds,
     selectedSingleWorkflowId,
     taskStatusCatalog,
     taskTypeOptions,
     statusOptions,
     defaultNewTaskStatus,
     openNew,
-    handleSectionVisible,
     handleSave,
     handleDelete,
     handlePanelSave,
@@ -475,7 +468,6 @@ export function useTasksPageState() {
     filteredTasks,
     visibleTaskCount,
     isFiltered,
-    loadedWorkflowIds,
     loadTasks,
   };
 }

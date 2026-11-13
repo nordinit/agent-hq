@@ -137,14 +137,18 @@ function RelatedTasksSection({
     }
   }, [relationshipTypes, selectedTypeKey]);
 
-  const loadRelationships = useCallback(async () => {
+  // On open only the relationships load: the task itself is already fresh from whoever opened the
+  // panel. After a change here the task is re-read too, since its blocked state may have moved.
+  const loadRelationships = useCallback(async (refreshTask = false) => {
     setLoading(true);
     setError(null);
     try {
       const response = await api.getTaskRelationships(task.id);
       setRelationships(response.relationships);
-      const refreshedTask = await api.getTask(task.id);
-      onTaskUpdate(refreshedTask);
+      if (refreshTask) {
+        const refreshedTask = await api.getTask(task.id);
+        onTaskUpdate(refreshedTask);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load related tasks');
       setRelationships(task.relationships ?? []);
@@ -417,6 +421,8 @@ export function TaskDetailPanel({ task, statuses, onClose, onSave, onDelete, onC
   const [mode, setMode] = useState<'view' | 'edit'>('view');
   // Newest run with a stored context bundle, or null when this task has none captured yet.
   const [latestContextInstanceId, setLatestContextInstanceId] = useState<number | null>(null);
+  // Runs with a stored context bundle, from the same single read; the runs list shows Context on them.
+  const [capturedRunIds, setCapturedRunIds] = useState<Set<number> | null>(null);
   const [contextInstanceId, setContextInstanceId] = useState<number | null>(null);
   const [projects, setProjects] = useState<ProjOpt[]>([]);
   const [workflows, setWorkflows] = useState<WorkflowOpt[]>([]);
@@ -462,8 +468,16 @@ export function TaskDetailPanel({ task, statuses, onClose, onSave, onDelete, onC
   useEffect(() => {
     let cancelled = false;
     api.getTaskDispatchContext(task.id)
-      .then(index => { if (!cancelled) setLatestContextInstanceId(index.latestInstanceId); })
-      .catch(() => { if (!cancelled) setLatestContextInstanceId(null); });
+      .then(index => {
+        if (cancelled) return;
+        setLatestContextInstanceId(index.latestInstanceId);
+        setCapturedRunIds(new Set(index.runs.map(run => run.instanceId)));
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setLatestContextInstanceId(null);
+        setCapturedRunIds(new Set());
+      });
     return () => { cancelled = true; };
   }, [task.id]);
 
@@ -513,9 +527,12 @@ export function TaskDetailPanel({ task, statuses, onClose, onSave, onDelete, onC
 
   const isBlocked = isTaskBlocked(localTask);
 
+  // The failure panel needs only who made the latest status change, not the whole history.
   useEffect(() => {
-    api.getTaskHistory(localTask.id).then(setHistoryEntries).catch(() => {});
-  }, [localTask.id]);
+    api.getTaskHistoryPage(localTask.id, { limit: 1, fields: ['status'] })
+      .then(page => setHistoryEntries(page.items))
+      .catch(() => {});
+  }, [localTask.id, localTask.status]);
 
   useEffect(() => {
     let cancelled = false;
@@ -958,11 +975,14 @@ export function TaskDetailPanel({ task, statuses, onClose, onSave, onDelete, onC
         </a>
       </>}
     >
-      <RelatedRunsSection taskId={localTask.id} outcomeMap={outcomeMap} nonFailureOutcomes={nonFailureOutcomes} />
+      <RelatedRunsSection taskId={localTask.id} outcomeMap={outcomeMap} nonFailureOutcomes={nonFailureOutcomes} capturedRunIds={capturedRunIds} />
     </CollapsibleSection>
   );
 
-  const descriptionBlock = localTask.description ? (
+  // A slide-over opened from a board card shows the card at once; the description follows with the full task.
+  const descriptionBlock = localTask.description === undefined ? (
+    <p className="text-sm text-slate-500 italic animate-pulse">Loading…</p>
+  ) : localTask.description ? (
     <CollapsibleSection sectionKey="description" title="Description">
       <p className="text-sm text-slate-300 whitespace-pre-wrap bg-slate-800 border border-slate-700 rounded-lg p-3 leading-relaxed">
         {localTask.description}

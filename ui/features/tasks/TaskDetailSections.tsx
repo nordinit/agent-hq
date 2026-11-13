@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { memo, useCallback, useEffect, useState, type ReactNode } from 'react';
 import Link from 'next/link';
 import { ChevronDown, Cpu, Download, Layers, Paperclip, Upload } from 'lucide-react';
 import { api, Task, TaskAttachment, TaskHistory, TaskNote, JobInstance, CustomFieldDefinition } from '@/lib/api';
@@ -13,6 +13,24 @@ import { shortModelName } from './modelRouting';
 import { ContextViewer } from './ContextViewer';
 
 const { dots: FALLBACK_STATUS_DOT } = getTaskStatusMaps();
+
+/** Page sizes for a task's notes, history and runs: opening a task costs the same however long it has run. */
+const NOTES_PAGE_SIZE = 50;
+const HISTORY_PAGE_SIZE = 50;
+const RUNS_PAGE_SIZE = 20;
+
+function LoadOlderButton({ remaining, loading, onClick, noun }: { remaining: number; loading: boolean; onClick: () => void; noun: string }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={loading}
+      className="w-full rounded-lg border border-dashed border-slate-700 py-1.5 text-xs text-slate-400 hover:border-amber-400/40 hover:text-amber-300 transition-colors disabled:opacity-50"
+    >
+      {loading ? 'Loading…' : `Load older ${noun} (${remaining} more)`}
+    </button>
+  );
+}
 
 // ── Collapsible Section ───────────────────────────────────────────────────────
 
@@ -50,7 +68,9 @@ export function CollapsibleSection({
   className?: string;
   children: ReactNode;
 }) {
-  const [collapsed, setCollapsed] = useState(false);
+  // Read before the first render, so a section left collapsed never mounts its body and never
+  // fetches what that body would load. The panel only renders on the client.
+  const [collapsed, setCollapsed] = useState(() => typeof window !== 'undefined' && readCollapsedSections().includes(sectionKey));
 
   useEffect(() => {
     setCollapsed(readCollapsedSections().includes(sectionKey));
@@ -85,23 +105,40 @@ export function CollapsibleSection({
 
 // ── Notes Section ─────────────────────────────────────────────────────────────
 
-export function NotesSection({ taskId }: { taskId: number }) {
+export const NotesSection = memo(function NotesSection({ taskId }: { taskId: number }) {
   const [notes, setNotes] = useState<TaskNote[]>([]);
+  const [total, setTotal] = useState(0);
+  const [olderBeforeId, setOlderBeforeId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadingOlder, setLoadingOlder] = useState(false);
   const [content, setContent] = useState('');
   const [author, setAuthor] = useState('User');
   const [submitting, setSubmitting] = useState(false);
-  const [hovered, setHovered] = useState<number | null>(null);
 
+  // The newest page; older pages load on request and go in front, since notes read oldest first.
   const loadNotes = useCallback(async () => {
     try {
-      const data = await api.getTaskNotes(taskId);
-      setNotes(data);
+      const page = await api.getTaskNotesPage(taskId, { limit: NOTES_PAGE_SIZE });
+      setNotes(page.items);
+      setTotal(page.total);
+      setOlderBeforeId(page.next_before_id);
     } catch { /* ignore */ }
     setLoading(false);
   }, [taskId]);
 
   useEffect(() => { loadNotes(); }, [loadNotes]);
+
+  const loadOlder = async () => {
+    if (olderBeforeId === null) return;
+    setLoadingOlder(true);
+    try {
+      const page = await api.getTaskNotesPage(taskId, { limit: NOTES_PAGE_SIZE, beforeId: olderBeforeId });
+      setNotes(previous => [...page.items, ...previous]);
+      setTotal(page.total);
+      setOlderBeforeId(page.next_before_id);
+    } catch { /* ignore */ }
+    setLoadingOlder(false);
+  };
 
   const handleSubmit = async () => {
     if (!content.trim()) return;
@@ -122,7 +159,7 @@ export function NotesSection({ taskId }: { taskId: number }) {
   };
 
   return (
-    <CollapsibleSection sectionKey="notes" title={`Notes${notes.length > 0 ? ` (${notes.length})` : ''}`} className="mb-3">
+    <CollapsibleSection sectionKey="notes" title={`Notes${total > 0 ? ` (${total})` : ''}`} className="mb-3">
 
       {loading ? (
         <p className="text-xs text-slate-500 italic">Loading…</p>
@@ -130,26 +167,26 @@ export function NotesSection({ taskId }: { taskId: number }) {
         <p className="text-xs text-slate-600 italic mb-3">No notes yet.</p>
       ) : (
         <div className="space-y-3 mb-4">
+          {olderBeforeId !== null && (
+            <LoadOlderButton remaining={total - notes.length} loading={loadingOlder} onClick={() => void loadOlder()} noun="notes" />
+          )}
           {notes.map(note => (
             <div
               key={note.id}
               className="bg-slate-800 border border-slate-700 rounded-lg p-3 group relative"
-              onMouseEnter={() => setHovered(note.id)}
-              onMouseLeave={() => setHovered(null)}
             >
               <div className="flex items-center justify-between mb-1.5">
                 <span className="text-xs text-slate-400 font-medium">
                   {note.author_display_name || note.author} <span className="text-slate-600">·</span> <span className="text-slate-500">{timeAgo(note.created_at)}</span>
                 </span>
-                {hovered === note.id && (
-                  <button
-                    onClick={() => handleDelete(note.id)}
-                    className="text-slate-600 hover:text-red-400 transition-colors text-xs"
-                    title="Delete note"
-                  >
-                    ×
-                  </button>
-                )}
+                {/* Shown on hover by CSS, so hovering does not re-render the whole list. */}
+                <button
+                  onClick={() => handleDelete(note.id)}
+                  className="text-slate-600 hover:text-red-400 transition-colors text-xs opacity-0 group-hover:opacity-100 focus:opacity-100"
+                  title="Delete note"
+                >
+                  ×
+                </button>
               </div>
               <p className="text-sm text-slate-300 whitespace-pre-wrap leading-relaxed">{note.content}</p>
             </div>
@@ -188,7 +225,7 @@ export function NotesSection({ taskId }: { taskId: number }) {
       </div>
     </CollapsibleSection>
   );
-}
+});
 
 // ── Attachments Section ───────────────────────────────────────────────────────
 
@@ -301,22 +338,60 @@ export function AttachmentsSection({ taskId }: { taskId: number }) {
 
 // ── History Section ───────────────────────────────────────────────────────────
 
-export function HistorySection({ taskId }: { taskId: number }) {
+export const HistorySection = memo(function HistorySection({ taskId }: { taskId: number }) {
   const [history, setHistory] = useState<TaskHistory[]>([]);
+  const [total, setTotal] = useState(0);
+  const [olderBeforeId, setOlderBeforeId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  // Run bookkeeping (instance ids, event sources, failure markers) is most of a busy task's history.
+  const [showBookkeeping, setShowBookkeeping] = useState(false);
 
   useEffect(() => {
-    api.getTaskHistory(taskId)
-      .then(setHistory)
+    let cancelled = false;
+    setLoading(true);
+    api.getTaskHistoryPage(taskId, { limit: HISTORY_PAGE_SIZE, excludeInternal: !showBookkeeping })
+      .then(page => {
+        if (cancelled) return;
+        setHistory(page.items);
+        setTotal(page.total);
+        setOlderBeforeId(page.next_before_id);
+      })
       .catch(() => {})
-      .finally(() => setLoading(false));
-  }, [taskId]);
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [taskId, showBookkeeping]);
 
-  if (loading) return <p className="text-xs text-slate-500 italic">Loading…</p>;
-  if (history.length === 0) return <p className="text-xs text-slate-600 italic">No changes recorded yet.</p>;
+  const loadOlder = async () => {
+    if (olderBeforeId === null) return;
+    setLoadingOlder(true);
+    try {
+      const page = await api.getTaskHistoryPage(taskId, { limit: HISTORY_PAGE_SIZE, beforeId: olderBeforeId, excludeInternal: !showBookkeeping });
+      setHistory(previous => [...previous, ...page.items]);
+      setTotal(page.total);
+      setOlderBeforeId(page.next_before_id);
+    } catch { /* ignore */ }
+    setLoadingOlder(false);
+  };
+
+  const toggle = (
+    <label className="mb-2 flex w-fit cursor-pointer items-center gap-1.5 text-[11px] text-slate-500">
+      <input
+        type="checkbox"
+        checked={showBookkeeping}
+        onChange={event => setShowBookkeeping(event.target.checked)}
+        className="accent-amber-400"
+      />
+      Show run bookkeeping
+    </label>
+  );
+
+  if (loading) return <>{toggle}<p className="text-xs text-slate-500 italic">Loading…</p></>;
+  if (history.length === 0) return <>{toggle}<p className="text-xs text-slate-600 italic">No changes recorded yet.</p></>;
 
   return (
     <div className="space-y-2">
+      {toggle}
       {history.map(entry => {
         const isStatus = entry.field === 'status';
         const dotColor = isStatus && entry.new_value ? (FALLBACK_STATUS_DOT[entry.new_value] ?? 'bg-slate-400') : 'bg-slate-500';
@@ -337,9 +412,12 @@ export function HistorySection({ taskId }: { taskId: number }) {
           </div>
         );
       })}
+      {olderBeforeId !== null && (
+        <LoadOlderButton remaining={total - history.length} loading={loadingOlder} onClick={() => void loadOlder()} noun="changes" />
+      )}
     </div>
   );
-}
+});
 
 // ── Related Runs Section ──────────────────────────────────────────────────────
 
@@ -371,41 +449,76 @@ function getRuntimeHandoffSummary(instance: Pick<JobInstance, 'runtime_ended_at'
   return `Runtime ended${instance.runtime_end_source ? ` via ${formatRuntimeEndSource(instance.runtime_end_source)}` : ''} and posted a lifecycle outcome.`;
 }
 
-export function RelatedRunsSection({
+export const RelatedRunsSection = memo(function RelatedRunsSection({
   taskId,
   outcomeMap,
   nonFailureOutcomes,
+  capturedRunIds,
 }: {
   taskId: number;
   outcomeMap: TaskOutcomeMetaMap;
   nonFailureOutcomes: Set<string>;
+  /**
+   * Runs with a stored context bundle, when the parent already read the dispatch-context index
+   * (null while it loads). Omitted, the section reads the index itself.
+   */
+  capturedRunIds?: Set<number> | null;
 }) {
   const [instances, setInstances] = useState<JobInstance[]>([]);
+  const [total, setTotal] = useState(0);
+  const [olderBeforeId, setOlderBeforeId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadingOlder, setLoadingOlder] = useState(false);
   const [expanded, setExpanded] = useState<number | null>(null);
   // Which runs have a stored context bundle. Fetched up front so the Context action only appears
   // where it will actually resolve — a dead button here reads as a broken feature.
-  const [capturedRuns, setCapturedRuns] = useState<Set<number>>(new Set());
+  const [ownCapturedRuns, setOwnCapturedRuns] = useState<Set<number>>(new Set());
   const [contextInstanceId, setContextInstanceId] = useState<number | null>(null);
+  const readsOwnIndex = capturedRunIds === undefined;
+  const capturedRuns = capturedRunIds ?? ownCapturedRuns;
 
+  // The newest runs, without the large per-run payload fields; older runs load on request.
   useEffect(() => {
-    api.getTaskInstances(taskId)
-      .then(setInstances)
+    let cancelled = false;
+    api.getTaskInstancesPage(taskId, { limit: RUNS_PAGE_SIZE })
+      .then(page => {
+        if (cancelled) return;
+        setInstances(page.items);
+        setTotal(page.total);
+        setOlderBeforeId(page.next_before_id);
+      })
       .catch(() => {})
-      .finally(() => setLoading(false));
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
   }, [taskId]);
 
   useEffect(() => {
+    if (!readsOwnIndex) return;
     api.getTaskDispatchContext(taskId)
-      .then(index => setCapturedRuns(new Set(index.runs.map(run => run.instanceId))))
+      .then(index => setOwnCapturedRuns(new Set(index.runs.map(run => run.instanceId))))
       .catch(() => {});
-  }, [taskId]);
+  }, [taskId, readsOwnIndex]);
+
+  const loadOlder = async () => {
+    if (olderBeforeId === null) return;
+    setLoadingOlder(true);
+    try {
+      const page = await api.getTaskInstancesPage(taskId, { limit: RUNS_PAGE_SIZE, beforeId: olderBeforeId });
+      setInstances(previous => [...previous, ...page.items]);
+      setTotal(page.total);
+      setOlderBeforeId(page.next_before_id);
+    } catch { /* ignore */ }
+    setLoadingOlder(false);
+  };
 
   if (loading) return <p className="text-xs text-slate-500 italic">Loading…</p>;
   if (instances.length === 0) return <p className="text-xs text-slate-600 italic">No runs yet.</p>;
 
   return (
     <div className="space-y-2">
+      {total > instances.length && (
+        <p className="text-[11px] text-slate-500">Newest {instances.length} of {total} runs</p>
+      )}
       {contextInstanceId !== null && (
         <ContextViewer instanceId={contextInstanceId} onClose={() => setContextInstanceId(null)} />
       )}
@@ -520,9 +633,12 @@ export function RelatedRunsSection({
           </div>
         );
       })}
+      {olderBeforeId !== null && (
+        <LoadOlderButton remaining={total - instances.length} loading={loadingOlder} onClick={() => void loadOlder()} noun="runs" />
+      )}
     </div>
   );
-}
+});
 
 export function NeedsAttentionSection({ task }: { task: Task }) {
   const hasRuntimeEnd = Boolean(task.active_instance_runtime_ended_at);

@@ -27,7 +27,8 @@ import {
   ColumnDef,
   TaskCard,
 } from '@/features/tasks/TaskBoardComponents';
-import { api, type TaskRelationshipTypeConfig } from '@/lib/api';
+import { api, type TaskBoardBucket, type TaskRelationshipTypeConfig } from '@/lib/api';
+import { boardColumnTotal } from '@/lib/boardTasks';
 import { getDefaultVisibleTaskColumns, getTaskBoardColumns, unionBoardColumns } from '@/lib/taskStatuses';
 import { useTaskStatuses } from '@/lib/useTaskStatuses';
 import { useWorkflowMetadata } from '@/lib/useWorkflowMetadata';
@@ -36,6 +37,10 @@ export interface TaskBoardSection {
   key: string;
   title: string;
   tasks: BoardTask[];
+  /** The section's workflow (null for tasks with no workflow); scopes its column totals. */
+  workflowId?: number | null;
+  /** Every task in the section, loaded or not. Defaults to the loaded count. */
+  total?: number;
   workflowType?: string | null;
   tone?: 'default' | 'muted';
   statusLabel?: string;
@@ -66,6 +71,30 @@ interface TaskBoardProps {
    * Has no effect when false/undefined (all columns visible as normal).
    */
   isFiltered?: boolean;
+  /** Column totals from GET /tasks/board. Without them a column counts its loaded tasks. */
+  buckets?: TaskBoardBucket[];
+  /** Loads more of a status column for the given workflows (null = every workflow). */
+  onLoadMore?: (status: string, workflowIds: Array<number | null> | null) => void;
+  /** Workflows a flat (section-less) board is filtered to, for its column totals. */
+  workflowFilterIds?: number[];
+}
+
+const EMPTY_TASKS: BoardTask[] = [];
+
+/** Tasks grouped by status once per change, so each column gets a stable array instead of a fresh filter. */
+function groupTasksByStatus(tasks: BoardTask[]): Map<string, BoardTask[]> {
+  const byStatus = new Map<string, BoardTask[]>();
+  for (const task of tasks) {
+    const list = byStatus.get(task.status);
+    if (list) list.push(task);
+    else byStatus.set(task.status, [task]);
+  }
+  return byStatus;
+}
+
+function parseLoadMoreScope(scope: string): Array<number | null> | null {
+  if (scope === 'all') return null;
+  return scope.split(',').map(part => (part === 'none' ? null : Number(part)));
 }
 
 interface StoredColumnPreferences {
@@ -255,6 +284,9 @@ export function TaskBoard({
   columnsButtonAlign = 'right',
   onSectionVisible,
   isFiltered = false,
+  buckets,
+  onLoadMore,
+  workflowFilterIds,
 }: TaskBoardProps) {
   const workflowTypesKey = JSON.stringify(uniqueStrings(workflowTypes));
   const normalizedWorkflowTypes = useMemo(() => JSON.parse(workflowTypesKey) as string[], [workflowTypesKey]);
@@ -591,13 +623,27 @@ export function TaskBoard({
 
   // Counted straight off the tasks rather than off one scope's column list: a status defined by
   // only one workflow type still needs its chip badge on mobile.
+  // A flat board (no workflow sections) spans the board's workflow, or the workflows it is filtered to.
+  const flatScopeIds = useMemo<number[] | null>(
+    () => (workflowId ? [workflowId] : workflowFilterIds && workflowFilterIds.length > 0 ? workflowFilterIds : null),
+    [workflowFilterIds, workflowId],
+  );
+  const flatScope = flatScopeIds ? flatScopeIds.join(',') : 'all';
+
   const columnCounts = useMemo(() => {
     const counts: Record<string, number> = {};
     for (const task of effectiveTasks) {
       counts[task.status] = (counts[task.status] ?? 0) + 1;
     }
+    if (buckets) {
+      for (const status of new Set(buckets.map(bucket => bucket.status))) {
+        counts[status] = Math.max(counts[status] ?? 0, boardColumnTotal(buckets, status, flatScopeIds));
+      }
+    }
     return counts;
-  }, [effectiveTasks]);
+  }, [buckets, effectiveTasks, flatScopeIds]);
+
+  const tasksByStatus = useMemo(() => groupTasksByStatus(effectiveTasks), [effectiveTasks]);
 
   // Apply optimistic moves to section task lists.
   // Sections with zero loaded tasks are kept — they may have tasks outside the current page.
@@ -668,6 +714,20 @@ export function TaskBoard({
   }, [visibleMobileColumns, mobileCol]);
 
   const desktopSections = effectiveSections;
+  const sectionTasksByStatus = useMemo(
+    () => new Map((effectiveSections ?? []).map(section => [section.key, groupTasksByStatus(section.tasks)])),
+    [effectiveSections],
+  );
+
+  const handleLoadMore = useCallback((status: string, scope: string) => {
+    onLoadMore?.(status, parseLoadMoreScope(scope));
+  }, [onLoadMore]);
+
+  const columnTotalFor = useCallback((status: string, section?: TaskBoardSection) => {
+    if (!buckets) return undefined;
+    if (section) return boardColumnTotal(buckets, status, [section.workflowId ?? null]);
+    return boardColumnTotal(buckets, status, flatScopeIds);
+  }, [buckets, flatScopeIds]);
 
   const isDragging = !!activeTask;
 
@@ -680,7 +740,9 @@ export function TaskBoard({
     <BoardColumn
       col={col}
       tasks={colTasks}
-      allTasks={effectiveTasks}
+      totalCount={columnTotalFor(col.key, section)}
+      onLoadMore={onLoadMore ? handleLoadMore : undefined}
+      loadMoreScope={section ? String(section.workflowId ?? 'none') : flatScope}
       onClickTask={onTaskClick}
       relationshipTypes={relationshipTypesForSection(section)}
       onLinkTask={onLinkTask}
@@ -776,7 +838,7 @@ export function TaskBoard({
 
         {visibleMobileColumns.find(c => c.key === mobileCol) && renderColumn(
           visibleMobileColumns.find(c => c.key === mobileCol)!,
-          effectiveTasks.filter(t => t.status === mobileCol),
+          tasksByStatus.get(mobileCol) ?? EMPTY_TASKS,
           false,
         )}
       </div>
@@ -795,7 +857,7 @@ export function TaskBoard({
                   <h2 className={`text-base font-semibold ${section.tone === 'muted' ? 'text-slate-400' : 'text-white'}`}>
                     {section.title}
                   </h2>
-                  <span className="text-xs text-slate-500 bg-slate-800 rounded-full px-2 py-0.5">{section.tasks.length} tasks</span>
+                  <span className="text-xs text-slate-500 bg-slate-800 rounded-full px-2 py-0.5">{Math.max(section.total ?? 0, section.tasks.length)} tasks</span>
                   {section.statusLabel && (
                     <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${
                       section.statusLabel === 'active' ? 'bg-green-900/60 text-green-300' : 'bg-slate-700 text-slate-400'
@@ -819,7 +881,7 @@ export function TaskBoard({
                   <div className="flex gap-4 w-max min-w-full h-[600px]" style={{ scrollSnapType: 'x mandatory' }}>
                     {filterVisibleColumns(activeColumnsForSection(section), section).map(col => (
                       <div key={col.key} className="min-w-[280px] w-[280px] flex-shrink-0 h-full" style={{ scrollSnapAlign: 'start' }}>
-                        {renderColumn(col, section.tasks.filter(t => t.status === col.key), true, section)}
+                        {renderColumn(col, sectionTasksByStatus.get(section.key)?.get(col.key) ?? EMPTY_TASKS, true, section)}
                       </div>
                     ))}
                   </div>
@@ -832,7 +894,7 @@ export function TaskBoard({
         <div className="hidden md:flex gap-4 overflow-x-auto pb-4 h-[600px]" style={{ scrollSnapType: 'x mandatory' }}>
           {visibleColumns.map(col => (
             <div key={col.key} className="min-w-[280px] w-[280px] flex-shrink-0 flex flex-col h-full" style={{ scrollSnapAlign: 'start' }}>
-              {renderColumn(col, effectiveTasks.filter(t => t.status === col.key))}
+              {renderColumn(col, tasksByStatus.get(col.key) ?? EMPTY_TASKS)}
             </div>
           ))}
         </div>
@@ -856,7 +918,6 @@ export function TaskBoard({
           <div className="w-[280px] opacity-90 rotate-2 shadow-2xl">
             <TaskCard
               task={activeTask}
-              allTasks={tasks}
               onClick={() => {}}
               relationshipTypes={boardWorkflowMetadata.relationship_types}
               onLinkTask={async () => {}}

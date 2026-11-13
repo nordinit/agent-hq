@@ -963,6 +963,42 @@ export const openApiDocument: OpenApiDocument = {
         },
       },
     },
+    '/tasks/board': {
+      get: {
+        tags: ['Tasks'],
+        summary: 'List the task board: the newest tasks of each workflow and status column, with column totals.',
+        operationId: 'listTaskBoard',
+        parameters: [
+          intQuery('project_id', 'Project ID.'),
+          stringQuery('workflow_id', 'Workflow ID, or a comma-separated list.'),
+          stringQuery('q', 'Title substring or exact task id, searched across every task.'),
+          stringQuery('task_type', 'Task type.'),
+          boolQuery('live_instances_only', 'Only tasks with a live run.'),
+          intQuery('per_status_limit', 'Newest tasks per column (default 30, max 500).'),
+          stringQuery('expand', 'Larger limits for expanded columns: workflowId:status:limit, comma-separated; "none" for tasks with no workflow.'),
+        ],
+        responses: {
+          '200': response('Board columns.', {
+            type: 'object',
+            properties: {
+              tasks: arrayOf({ type: 'object', additionalProperties: true }),
+              buckets: arrayOf({
+                type: 'object',
+                properties: {
+                  workflow_id: { type: 'integer', nullable: true },
+                  status: { type: 'string' },
+                  total: { type: 'integer' },
+                  loaded: { type: 'integer' },
+                },
+              }),
+              total: { type: 'integer' },
+              per_status_limit: { type: 'integer' },
+            },
+          }),
+          default: errorResponseRef,
+        },
+      },
+    },
     '/tasks': {
       get: {
         tags: ['Tasks'],
@@ -1175,7 +1211,7 @@ export const openApiDocument: OpenApiDocument = {
         tags: ['Tasks'],
         summary: 'List task notes.',
         operationId: 'listTaskNotes',
-        parameters: [idParam('id', 'Task ID.')],
+        parameters: [idParam('id', 'Task ID.'), intQuery('limit', 'Page size; without it the full list is returned as an array.'), intQuery('before_id', 'Return rows older than this id.')],
         responses: {
           '200': response('Task notes.', arrayOf(ref('TaskNote'))),
           default: errorResponseRef,
@@ -1216,7 +1252,7 @@ export const openApiDocument: OpenApiDocument = {
         tags: ['Tasks'],
         summary: 'List task history.',
         operationId: 'listTaskHistory',
-        parameters: [idParam('id', 'Task ID.')],
+        parameters: [idParam('id', 'Task ID.'), intQuery('limit', 'Page size; without it the full list is returned as an array.'), intQuery('before_id', 'Return rows older than this id.'), boolQuery('exclude_internal', 'Hide run bookkeeping rows.'), stringQuery('field', 'Only these fields, comma-separated.')],
         responses: {
           '200': response('Task history entries.', arrayOf(ref('TaskHistoryEntry'))),
           default: errorResponseRef,

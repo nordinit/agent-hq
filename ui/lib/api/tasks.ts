@@ -1,5 +1,25 @@
 import { apiFetch, getApiBase } from './http';
-import type { CreateTaskPayload, HistoricalTrace, RecurringTaskRun, RecurringTaskRunNowResponse, RecurringTaskSeries, RecurringTaskSeriesDetail, RecurringTaskSeriesInput, RecurringTaskSeriesListResponse, ResolvedTaskFieldSchemaResponse, Task, TaskAttachment, TaskHistory, TaskNote, TaskRelationship } from './types';
+import type { TaskBoardQuery, TaskBoardResponse, TaskLogPage, CreateTaskPayload, HistoricalTrace, RecurringTaskRun, RecurringTaskRunNowResponse, RecurringTaskSeries, RecurringTaskSeriesDetail, RecurringTaskSeriesInput, RecurringTaskSeriesListResponse, ResolvedTaskFieldSchemaResponse, Task, TaskAttachment, TaskHistory, TaskNote, TaskRelationship } from './types';
+
+export function taskLogPageQuery(params: { limit: number; beforeId?: number | null }, extra: Record<string, string> = {}): string {
+  const query = new URLSearchParams({ limit: String(params.limit), ...extra });
+  if (params.beforeId != null) query.set('before_id', String(params.beforeId));
+  return query.toString();
+}
+
+export function taskBoardQuery(params: TaskBoardQuery): string {
+  const query = new URLSearchParams();
+  if (params.projectId != null) query.set('project_id', String(params.projectId));
+  if (params.workflowIds?.length) query.set('workflow_id', params.workflowIds.join(','));
+  if (params.q?.trim()) query.set('q', params.q.trim());
+  if (params.taskType) query.set('task_type', params.taskType);
+  if (params.liveInstancesOnly) query.set('live_instances_only', 'true');
+  if (params.perStatusLimit != null) query.set('per_status_limit', String(params.perStatusLimit));
+  if (params.includeClosed) query.set('include_closed', 'true');
+  const expanded = Object.entries(params.expanded ?? {}).filter(([, limit]) => limit > 0);
+  if (expanded.length > 0) query.set('expand', expanded.map(([bucket, limit]) => `${bucket}:${limit}`).join(','));
+  return query.toString();
+}
 
 export const tasksClient = {
 // Tasks
@@ -107,6 +127,9 @@ removeBlocker: (taskId: number, blockerId: number) =>
 // Task Notes
 getTaskNotes: (taskId: number) =>
   apiFetch<TaskNote[]>(`/api/v1/tasks/${taskId}/notes`),
+// One page of notes, newest page first, each page oldest first. before_id pages back.
+getTaskNotesPage: (taskId: number, params: { limit: number; beforeId?: number | null }) =>
+  apiFetch<TaskLogPage<TaskNote>>(`/api/v1/tasks/${taskId}/notes?${taskLogPageQuery(params)}`),
 createTaskNote: (taskId: number, data: { author: string; content: string }) =>
   apiFetch<TaskNote>(`/api/v1/tasks/${taskId}/notes`, {
     method: 'POST',
@@ -117,6 +140,15 @@ deleteTaskNote: (taskId: number, noteId: number) =>
 // Task History
 getTaskHistory: (taskId: number) =>
   apiFetch<TaskHistory[]>(`/api/v1/tasks/${taskId}/history`),
+// One page of history, newest first. excludeInternal hides run bookkeeping; fields keeps only those.
+getTaskHistoryPage: (taskId: number, params: { limit: number; beforeId?: number | null; excludeInternal?: boolean; fields?: string[] }) =>
+  apiFetch<TaskLogPage<TaskHistory>>(`/api/v1/tasks/${taskId}/history?${taskLogPageQuery(params, {
+    ...(params.excludeInternal ? { exclude_internal: '1' } : {}),
+    ...(params.fields?.length ? { field: params.fields.join(',') } : {}),
+  })}`),
+// The task board: the newest tasks of each workflow/status column plus each column's total.
+getTaskBoard: (params: TaskBoardQuery, init?: RequestInit) =>
+  apiFetch<TaskBoardResponse>(`/api/v1/tasks/board?${taskBoardQuery(params)}`, init),
 // Status history replayed against the routing graph, for the canvas overlay.
 getTaskTrace: (taskId: number) =>
   apiFetch<HistoricalTrace>(`/api/v1/tasks/${taskId}/trace`),

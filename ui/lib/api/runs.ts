@@ -1,10 +1,14 @@
 import { apiFetch } from './http';
 import { buildChatSessionsPath, buildInstancesPath } from '../apiQuery';
-import type { JobInstance, RunActivity } from './types';
+import type { JobInstance, RunActivity, TaskLogPage } from './types';
+import { taskLogPageQuery } from './tasks';
 
 export const runsClient = {
 // Task Instances
 getTaskInstances: (taskId: number) => apiFetch<JobInstance[]>(`/api/v1/tasks/${taskId}/instances`),
+// One page of a task's runs, newest first, without the large per-run payload fields.
+getTaskInstancesPage: (taskId: number, params: { limit: number; beforeId?: number | null }) =>
+  apiFetch<TaskLogPage<JobInstance>>(`/api/v1/tasks/${taskId}/instances?${taskLogPageQuery(params, { lean: '1' })}`),
 // Instances (Kanban)
 getInstances: (params?: { agentId?: number; projectId?: number | null; limit?: number; offset?: number }) =>
   apiFetch<JobInstance[]>(buildInstancesPath(params)),

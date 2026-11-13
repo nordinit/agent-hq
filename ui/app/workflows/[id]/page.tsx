@@ -108,10 +108,26 @@ function StatCard({ label, value, color }: { label: string; value: string; color
 // ── Tasks Tab (Kanban) ────────────────────────────────────────────────────────
 
 import { TaskBoard } from '@/features/tasks/TaskBoard';
+import type { BoardTask } from '@/features/tasks/TaskBoardComponents';
+import { BOARD_PER_STATUS_LIMIT, expandBoardColumn, reuseUnchangedTasks } from '@/lib/boardTasks';
+import type { TaskBoardBucket } from '@/lib/api';
 
-function TasksTab({ workflow, tasks, onRefresh }: { workflow: Workflow; tasks: Task[]; onRefresh: () => void }) {
+function TasksTab({ workflow, tasks, buckets, onLoadMore, onRefresh }: {
+  workflow: Workflow;
+  tasks: Task[];
+  buckets: TaskBoardBucket[];
+  onLoadMore: (status: string, workflowIds: Array<number | null> | null) => void;
+  onRefresh: () => void;
+}) {
   const base = getApiBase();
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
+  // Board rows are slim; open the slide-over with the card, then swap in the full task.
+  const openTask = useCallback((task: BoardTask) => {
+    setSelectedTask(task as Task);
+    api.getTask(task.id)
+      .then(full => setSelectedTask(current => (current?.id === full.id ? full : current)))
+      .catch(() => {});
+  }, []);
   const { statuses: taskStatusCatalog } = useTaskStatuses(workflow.id);
 
   const handleLinkTask = async (taskId: number, targetTaskId: number, relationshipTypeKey: string) => {
@@ -185,7 +201,9 @@ function TasksTab({ workflow, tasks, onRefresh }: { workflow: Workflow; tasks: T
         tasks={tasks}
         storageKey="workflow-tasks-visible-cols"
         workflowId={workflow.id}
-        onTaskClick={task => setSelectedTask(task as Task)}
+        onTaskClick={openTask}
+        buckets={buckets}
+        onLoadMore={onLoadMore}
         onLinkTask={handleLinkTask}
         onRemoveBlocker={handleRemoveBlocker}
         onPause={handleTaskPause}
@@ -397,6 +415,11 @@ export default function WorkflowDetailPage() {
   const [workflow, setWorkflow] = useState<Workflow | null>(null);
   const [metrics, setMetrics] = useState<WorkflowMetrics | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
+  // The newest tasks of each status column and every column's total (GET /tasks/board), not
+  // every task the workflow ever had.
+  const [buckets, setBuckets] = useState<TaskBoardBucket[]>([]);
+  const [taskTotal, setTaskTotal] = useState(0);
+  const [expandedBuckets, setExpandedBuckets] = useState<Record<string, number>>({});
   const [tab, setTab] = useState<Tab>('overview');
   const [editing, setEditing] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -409,27 +432,34 @@ export default function WorkflowDetailPage() {
     try {
       setError(null);
       const s = await api.getWorkflow(id);
-      const [m, t] = await Promise.all([
+      const [m, board] = await Promise.all([
         api.getWorkflowMetrics(id),
-        fetch(`${base}/api/v1/tasks?workflow_id=${id}`).then(r => r.json()),
+        api.getTaskBoard({ workflowIds: [id], perStatusLimit: BOARD_PER_STATUS_LIMIT, includeClosed: true, expanded: expandedBuckets }),
       ]);
       setWorkflow(s);
       setMetrics(m);
-      setTasks(t as Task[]);
+      setTasks(previous => reuseUnchangedTasks(previous, board.tasks));
+      setBuckets(board.buckets);
+      setTaskTotal(board.total);
     } catch (e) {
       setError(String(e));
     } finally {
       setLoading(false);
     }
-  }, [id, base]);
+  }, [id, expandedBuckets]);
 
   useEffect(() => { load(); }, [load]);
 
-  // Live polling - silently refresh workflow data every 10s so agent/system-driven changes appear automatically
+  const loadMoreInColumn = useCallback((status: string, workflowIds: Array<number | null> | null) => {
+    setExpandedBuckets(current => expandBoardColumn(current, buckets, status, workflowIds));
+  }, [buckets]);
+
+  // Live polling - silently refresh workflow data so agent/system-driven changes appear automatically.
+  // Each refresh is one bounded board read.
   useLiveRefresh(load, {
     enabled: Boolean(id),
-    intervalMs: 10000,
-    hiddenIntervalMs: 30000,
+    intervalMs: 30000,
+    hiddenIntervalMs: 300000,
   });
 
   const handleSave = async (data: Partial<Workflow>) => {
@@ -501,7 +531,7 @@ export default function WorkflowDetailPage() {
 
   const tabs: { key: Tab; label: string; icon: React.ReactNode }[] = [
     { key: 'overview', label: 'Overview', icon: <Activity className="w-4 h-4" /> },
-    { key: 'tasks', label: `Tasks (${tasks.length})`, icon: <ClipboardList className="w-4 h-4" /> },
+    { key: 'tasks', label: `Tasks (${taskTotal})`, icon: <ClipboardList className="w-4 h-4" /> },
     { key: 'files', label: 'Files', icon: <Files className="w-4 h-4" /> },
     { key: 'metrics', label: 'Metrics', icon: <BarChart3 className="w-4 h-4" /> },
   ];
@@ -650,7 +680,7 @@ export default function WorkflowDetailPage() {
       {/* Tab Content */}
       <div className={tab === 'tasks' ? 'md:flex-1 md:min-h-0 flex flex-col md:overflow-hidden' : ''}>
         {tab === 'overview' && <OverviewTab workflow={workflow} metrics={metrics} />}
-        {tab === 'tasks' && <TasksTab workflow={workflow} tasks={tasks} onRefresh={load} />}
+        {tab === 'tasks' && <TasksTab workflow={workflow} tasks={tasks} buckets={buckets} onLoadMore={loadMoreInColumn} onRefresh={load} />}
         {tab === 'files' && <ProjectFiles projectId={workflow.project_id} workflowId={workflow.id} scope="workflow" />}
         {tab === 'metrics' && <div className="space-y-5"><Card><TelemetryScopeSummary scope={{ project_id: workflow.project_id, workflow_id: workflow.id, workflow_type: workflow.workflow_type ?? undefined }} /></Card><details><summary className="cursor-pointer text-sm text-slate-500">Legacy workflow summary</summary><div className="mt-4"><MetricsTab metrics={metrics} /></div></details></div>}
       </div>

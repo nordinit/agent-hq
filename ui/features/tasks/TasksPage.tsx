@@ -2,6 +2,7 @@
 
 import { useMemo, Suspense } from 'react';
 import { formatWorkflowLabel } from '@/lib/workflowLabel';
+import { boardWorkflowTotal } from '@/lib/boardTasks';
 import { TaskDetailPanel } from '@/features/tasks/TaskDetailPanel';
 import { TaskBoard, TaskBoardSection } from '@/features/tasks/TaskBoard';
 import { TaskBoardErrorBoundary } from '@/features/tasks/TaskBoardErrorBoundary';
@@ -17,8 +18,10 @@ function TasksPageInner() {
     setSelectedProject,
     loading,
     isBackgroundLoading,
-    hasMore,
     totalTasks,
+    buckets,
+    loadMoreInColumn,
+    openTask,
     modal,
     setModal,
     viewTask,
@@ -31,13 +34,11 @@ function TasksPageInner() {
     setSelectedTaskType,
     selectedWorkflowIds,
     setSelectedWorkflowIds,
-    loadingWorkflowIds,
     selectedSingleWorkflowId,
     taskStatusCatalog,
     taskTypeOptions,
     defaultNewTaskStatus,
     openNew,
-    handleSectionVisible,
     handleSave,
     handleDelete,
     handlePanelSave,
@@ -51,7 +52,6 @@ function TasksPageInner() {
     filteredTasks,
     visibleTaskCount,
     isFiltered,
-    loadedWorkflowIds,
   } = useTasksPageState();
 
   const visibleWorkflowTypes = useMemo(() => {
@@ -76,30 +76,19 @@ function TasksPageInner() {
       ? workflows.filter(s => selectedWorkflowIds.includes(s.id))
       : workflows;
 
-    // Always render a section for every visible workflow — even if its tasks
-    // are not yet loaded. Visibility triggers lazy fetch via onSectionVisible/IntersectionObserver.
-    // Exception: when a search/filter is active, hide workflow sections with zero matching tasks
-    // so the user only sees signal.
+    // A section for every visible workflow. The board read returns the newest tasks of every
+    // workflow's columns at once, with each column's total, so nothing loads lazily per section.
+    // When a search/filter is active, workflow sections with no matching tasks are hidden.
     const workflowSections: TaskBoardSection[] = visibleWorkflows
-      .map(workflow => {
-        const workflowTasks = filteredTasks.filter(t => t.workflow_id === workflow.id);
-        const isLoading = loadingWorkflowIds.has(workflow.id);
-        // hasUnloadedTasks: workflow is active, has no loaded tasks, and hasn't finished lazy loading
-        const hasUnloadedTasks = workflowTasks.length === 0 && !isLoading && !loadedWorkflowIds.current.has(workflow.id);
-        return {
-          key: `workflow-${workflow.id}`,
-          title: `🏃 ${formatWorkflowLabel(workflow)}`,
-          tasks: workflowTasks,
-          workflowType: workflow.workflow_type,
-          statusLabel: workflow.status,
-          // When search is active and no tasks match, don't claim unloaded tasks exist either —
-          // the visible set has already been filtered, so we suppress the section entirely below.
-          hasUnloadedTasks: isFiltered ? false : hasUnloadedTasks,
-          isLoading: isFiltered ? false : isLoading,
-        };
-      })
-      // When a filter is active, suppress workflow sections that have no matching tasks.
-      // When no filter: keep all workflows (including unloaded ones) so lazy loading still fires.
+      .map(workflow => ({
+        key: `workflow-${workflow.id}`,
+        title: `🏃 ${formatWorkflowLabel(workflow)}`,
+        tasks: filteredTasks.filter(t => t.workflow_id === workflow.id),
+        workflowId: workflow.id,
+        total: boardWorkflowTotal(buckets, workflow.id),
+        workflowType: workflow.workflow_type,
+        statusLabel: workflow.status,
+      }))
       .filter(s => !isFiltered || s.tasks.length > 0);
 
     // Only show "No Workflow" when unassigned tasks actually exist and no workflow filter is active.
@@ -110,13 +99,15 @@ function TasksPageInner() {
           key: 'no-workflow',
           title: 'No Workflow',
           tasks: unworkflowed,
+          workflowId: null,
+          total: boardWorkflowTotal(buckets, null),
           tone: 'muted',
         });
       }
     }
 
     return workflowSections;
-  }, [workflows, filteredTasks, loadingWorkflowIds, selectedWorkflowIds, isFiltered]);
+  }, [workflows, filteredTasks, buckets, selectedWorkflowIds, isFiltered]);
 
   return (
     <div className="flex flex-1 min-h-0 flex-col bg-slate-950 p-2 md:p-6 overflow-x-hidden overflow-y-auto md:overflow-hidden md:pb-6">
@@ -145,11 +136,7 @@ function TasksPageInner() {
               <MultiWorkflowFilter
                 workflows={workflows}
                 selectedIds={selectedWorkflowIds}
-                onChange={ids => {
-                  setSelectedWorkflowIds(ids);
-                  // Trigger lazy load for newly-selected workflows
-                  ids.forEach(id => handleSectionVisible(`workflow-${id}`));
-                }}
+                onChange={setSelectedWorkflowIds}
               />
             </div>
           )}
@@ -174,27 +161,18 @@ function TasksPageInner() {
                 storageKey="tasks-visible-cols"
                 workflowId={selectedSingleWorkflowId}
                 workflowTypes={visibleWorkflowTypes}
-                onTaskClick={task => setViewTask(task as Task)}
+                onTaskClick={openTask}
                 onLinkTask={handleLinkTask}
                 onRemoveBlocker={handleRemoveBlocker}
                 onPause={handlePause}
                 onStatusChange={handleStatusChange}
                 showWorkflow
                 sections={desktopSections}
-                onSectionVisible={handleSectionVisible}
                 isFiltered={isFiltered}
+                buckets={buckets}
+                onLoadMore={loadMoreInColumn}
+                workflowFilterIds={selectedWorkflowIds}
               />
-              {/* Hint when workflow filter is active and tasks are still loading */}
-              {selectedWorkflowIds.length > 0 && filteredTasks.length === 0 && selectedWorkflowIds.some(id => loadingWorkflowIds.has(id)) && (
-                <div className="flex-shrink-0 flex items-center justify-center py-4 text-slate-400 text-sm italic text-center px-4 animate-pulse">
-                  Loading workflow tasks…
-                </div>
-              )}
-              {isBackgroundLoading && hasMore && (
-                <div className="flex-shrink-0 flex items-center justify-center pt-4 text-sm text-slate-400 animate-pulse">
-                  Loading remaining tasks…
-                </div>
-              )}
             </>
           )}
         </TaskBoardErrorBoundary>

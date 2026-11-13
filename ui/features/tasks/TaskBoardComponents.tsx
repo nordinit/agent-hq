@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { memo, useState, useEffect, useMemo, useRef, useCallback, type CSSProperties } from 'react';
 import { Plus, X, Shield, AlertTriangle, GripVertical, PauseCircle, Search, Maximize2 } from 'lucide-react';
 import Link from 'next/link';
 import { api } from '@/lib/api';
@@ -15,11 +15,20 @@ import { CSS } from '@dnd-kit/utilities';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
+/** A blocker or blocked task as a card lists it. */
+export interface BoardTaskLink {
+  id: number;
+  title: string;
+  status: string;
+  blocks_dispatch?: boolean;
+}
+
 export interface BoardTask {
   runtime_recovery?: import('@/lib/api').RuntimeRecovery | null;
   id: number;
   title: string;
-  description: string;
+  /** Not on board rows (GET /tasks/board); the full task carries it. */
+  description?: string;
   status: string;
   priority: 'low' | 'medium' | 'high';
   agent_id?: number | null;
@@ -37,8 +46,8 @@ export interface BoardTask {
   active_instance_status?: string | null;
   is_blocked?: boolean;
   blocks_dispatch?: boolean;
-  blockers?: BoardTask[];
-  blocking?: BoardTask[];
+  blockers?: BoardTaskLink[];
+  blocking?: BoardTaskLink[];
   origin_task_id?: number | null;
   origin_task_title?: string | null;
   defect_type?: string | null;
@@ -46,6 +55,8 @@ export interface BoardTask {
   paused_at?: string | null;
   pause_reason?: string | null;
   failure_detail?: string | null;
+  /** The board sends only the start of a long failure detail. */
+  failure_detail_truncated?: boolean;
   active_instance_task_outcome?: string | null;
   latest_task_outcome?: string | null;
 }
@@ -101,7 +112,10 @@ export function RelationshipPicker({ task, relationshipTypes, onLinkTask }: Rela
   const searchTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const selectedType = relationshipTypes.find(type => type.key === selectedTypeKey) ?? relationshipTypes[0] ?? null;
 
+  // Only an open picker listens for outside clicks. Every card has a picker, so a listener per
+  // closed picker meant thousands of handlers running on every click anywhere on the page.
   useEffect(() => {
+    if (!open) return;
     const handler = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) {
         setOpen(false);
@@ -111,7 +125,7 @@ export function RelationshipPicker({ task, relationshipTypes, onLinkTask }: Rela
     };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
-  }, []);
+  }, [open]);
 
   useEffect(() => {
     if (open && inputRef.current) {
@@ -286,8 +300,10 @@ export function RelationshipPicker({ task, relationshipTypes, onLinkTask }: Rela
 
 interface TaskCardProps {
   task: BoardTask;
-  allTasks: BoardTask[];
-  onClick: () => void;
+  /** Unused; kept so older callers still type-check. */
+  allTasks?: BoardTask[];
+  /** Receives the card's task, so one stable handler can serve every card. */
+  onClick: (task: BoardTask) => void;
   relationshipTypes: TaskRelationshipTypeConfig[];
   onLinkTask: (taskId: number, targetTaskId: number, relationshipTypeKey: string) => Promise<void>;
   onRemoveBlocker: (taskId: number, blockerId: number) => Promise<void>;
@@ -297,7 +313,8 @@ interface TaskCardProps {
   outcomeMap: TaskOutcomeMetaMap;
 }
 
-export function TaskCard({ task, allTasks, onClick, relationshipTypes, onLinkTask, onRemoveBlocker, onPause, showWorkflow = false, outcomeMap }: TaskCardProps) {
+/** Memoized: a board refresh that leaves a task unchanged keeps its object, so the card skips rendering. */
+export const TaskCard = memo(function TaskCard({ task, onClick, relationshipTypes, onLinkTask, onRemoveBlocker, onPause, showWorkflow = false, outcomeMap }: TaskCardProps) {
   const [pausing, setPausing] = useState(false);
   const blocked = isBlocked(task);
   const blockers = task.blockers ?? [];
@@ -308,7 +325,7 @@ export function TaskCard({ task, allTasks, onClick, relationshipTypes, onLinkTas
 
   return (
     <div
-      onClick={onClick}
+      onClick={() => onClick(task)}
       className={`bg-slate-800 border rounded-lg p-3 cursor-pointer transition-all group min-h-[44px] min-w-0 max-w-full overflow-hidden
         ${blocked
           ? 'border-orange-500/50 hover:border-orange-400/70 active:border-orange-400/70'
@@ -429,6 +446,7 @@ export function TaskCard({ task, allTasks, onClick, relationshipTypes, onLinkTas
       {task.failure_detail && failureSource && (
         <div className={`mt-2 max-w-full min-w-0 overflow-hidden rounded-md px-2.5 py-2 text-xs whitespace-pre-wrap break-words [overflow-wrap:anywhere] ${failureTone.panel} ${failureTone.text}`}>
           <span className="font-semibold">{pipelineBlocked ? 'Blocked' : 'Failure'}:</span> {task.failure_detail}
+          {task.failure_detail_truncated && <span className="opacity-70"> … (open the task for the full text)</span>}
         </div>
       )}
 
@@ -479,7 +497,7 @@ export function TaskCard({ task, allTasks, onClick, relationshipTypes, onLinkTas
       </div>
     </div>
   );
-}
+});
 
 // ── Draggable Task Card ───────────────────────────────────────────────────────
 
@@ -488,14 +506,20 @@ interface DraggableTaskCardProps extends TaskCardProps {
   dragEnabled?: boolean;
 }
 
-export function DraggableTaskCard({ dragEnabled = true, ...props }: DraggableTaskCardProps) {
+/**
+ * The browser skips layout and paint for cards scrolled out of view (content-visibility), so a
+ * long column costs what its visible cards cost. The intrinsic size keeps the scrollbar steady.
+ */
+const OFFSCREEN_CARD_STYLE: CSSProperties = { contentVisibility: 'auto', containIntrinsicSize: 'auto 150px' };
+
+export const DraggableTaskCard = memo(function DraggableTaskCard({ dragEnabled = true, ...props }: DraggableTaskCardProps) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: `task-${props.task.id}`,
     data: { task: props.task },
     disabled: !dragEnabled,
   });
 
-  const style = transform
+  const style: CSSProperties = transform
     ? {
         transform: CSS.Translate.toString(transform),
         zIndex: isDragging ? 50 : undefined,
@@ -505,7 +529,7 @@ export function DraggableTaskCard({ dragEnabled = true, ...props }: DraggableTas
       ? {
           opacity: 0,
         }
-      : undefined;
+      : OFFSCREEN_CARD_STYLE;
 
   return (
     <div
@@ -527,14 +551,20 @@ export function DraggableTaskCard({ dragEnabled = true, ...props }: DraggableTas
       <TaskCard {...props} />
     </div>
   );
-}
+});
 
 // ── Board Column ──────────────────────────────────────────────────────────────
 
 interface BoardColumnProps {
   col: ColumnDef;
   tasks: BoardTask[];
-  allTasks: BoardTask[];
+  /** Unused; kept so older callers still type-check. */
+  allTasks?: BoardTask[];
+  /** Every task in the column, loaded or not; the header shows it. Defaults to the loaded count. */
+  totalCount?: number;
+  /** Loads more of this column. `scope` is passed back unchanged so the board knows which workflows. */
+  onLoadMore?: (status: string, scope: string) => void;
+  loadMoreScope?: string;
   onClickTask: (task: BoardTask) => void;
   relationshipTypes: TaskRelationshipTypeConfig[];
   onLinkTask: (taskId: number, targetTaskId: number, relationshipTypeKey: string) => Promise<void>;
@@ -554,8 +584,9 @@ interface BoardColumnProps {
   outcomeMap: TaskOutcomeMetaMap;
 }
 
-export function BoardColumn({
-  col, tasks: colTasks, allTasks, onClickTask,
+export const BoardColumn = memo(function BoardColumn({
+  col, tasks: colTasks, onClickTask,
+  totalCount, onLoadMore, loadMoreScope = 'all',
   relationshipTypes, onLinkTask, onRemoveBlocker, onPause,
   showWorkflow = false, showHeader = true,
   dragEnabled = false, isDropTarget = false, isInvalidTarget = false,
@@ -568,10 +599,17 @@ export function BoardColumn({
     disabled: isInvalidTarget,
   });
 
-  const groups = groupByJob(colTasks);
-  const groupKeys = Object.keys(groups).sort((a, b) =>
-    a === '__none__' ? 1 : b === '__none__' ? -1 : a.localeCompare(b)
-  );
+  const { groups, groupKeys } = useMemo(() => {
+    const grouped = groupByJob(colTasks);
+    return {
+      groups: grouped,
+      groupKeys: Object.keys(grouped).sort((a, b) =>
+        a === '__none__' ? 1 : b === '__none__' ? -1 : a.localeCompare(b)
+      ),
+    };
+  }, [colTasks]);
+  const columnTotal = Math.max(totalCount ?? colTasks.length, colTasks.length);
+  const unloaded = columnTotal - colTasks.length;
 
   // Visual feedback classes
   const dropHighlight = isOver && isDropTarget
@@ -591,7 +629,7 @@ export function BoardColumn({
         <div className="flex min-w-0 items-center justify-between px-4 py-3 border-b border-slate-800">
           <div className="flex min-w-0 items-center gap-2">
             <span className="text-white font-semibold text-sm">{col.label}</span>
-            <span className="text-xs text-slate-500 bg-slate-800 rounded-full px-2 py-0.5">{colTasks.length}</span>
+            <span className="text-xs text-slate-500 bg-slate-800 rounded-full px-2 py-0.5" title={unloaded > 0 ? `${colTasks.length} newest shown` : undefined}>{columnTotal}</span>
           </div>
         </div>
       )}
@@ -615,8 +653,7 @@ export function BoardColumn({
                 <CardComponent
                   key={task.id}
                   task={task}
-                  allTasks={allTasks}
-                  onClick={() => onClickTask(task)}
+                  onClick={onClickTask}
                   relationshipTypes={relationshipTypes}
                   onLinkTask={onLinkTask}
                   onRemoveBlocker={onRemoveBlocker}
@@ -629,8 +666,17 @@ export function BoardColumn({
             </div>
           </div>
         ))}
+        {unloaded > 0 && onLoadMore && (
+          <button
+            type="button"
+            onClick={() => onLoadMore(col.key, loadMoreScope)}
+            className="w-full rounded-lg border border-dashed border-slate-700 py-2 text-xs text-slate-400 hover:border-amber-400/40 hover:text-amber-300 transition-colors"
+          >
+            Show more ({unloaded} older)
+          </button>
+        )}
       </div>
 
     </div>
   );
-}
+});

@@ -1073,6 +1073,43 @@ export interface RecurringTaskRunNowResponse {
   task: Task & { url?: string };
 }
 
+/** A page of a task's notes, history or runs (GET …?limit=N&before_id=…). */
+export interface TaskLogPage<T> {
+  items: T[];
+  total: number;
+  has_more: boolean;
+  /** Pass as before_id to fetch the next older page; null when there is none. */
+  next_before_id: number | null;
+}
+
+export interface TaskBoardQuery {
+  projectId?: number | null;
+  workflowIds?: number[];
+  q?: string;
+  taskType?: string;
+  liveInstancesOnly?: boolean;
+  perStatusLimit?: number;
+  /** Include tasks of closed workflows (a workflow's own page shows them). */
+  includeClosed?: boolean;
+  /** Column key ("workflowId:status", "none:status" for no workflow) → rows to load. */
+  expanded?: Record<string, number>;
+}
+
+/** One board column: a workflow (or none) and a status, with how many tasks it holds and how many came back. */
+export interface TaskBoardBucket {
+  workflow_id: number | null;
+  status: string;
+  total: number;
+  loaded: number;
+}
+
+export interface TaskBoardResponse {
+  tasks: Task[];
+  buckets: TaskBoardBucket[];
+  total: number;
+  per_status_limit: number;
+}
+
 export interface TaskNote {
   id: number;
   task_id: number;

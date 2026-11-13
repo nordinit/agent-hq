@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { ArrowLeft } from 'lucide-react';
@@ -17,11 +17,17 @@ export default function TaskDetailPage({ taskId }: { taskId: number }) {
   const router = useRouter();
   const [task, setTask] = useState<Task | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const lastJsonRef = useRef<string | null>(null);
 
   const load = useCallback(async () => {
     try {
       const fresh = await api.getTask(taskId);
-      setTask(fresh);
+      // A refresh that brings back the same task keeps the old object, so the page does not re-render.
+      const json = JSON.stringify(fresh);
+      if (json !== lastJsonRef.current) {
+        lastJsonRef.current = json;
+        setTask(fresh);
+      }
       setError(null);
     } catch (err) {
       // Keep showing the last good copy if a background refresh fails.
@@ -32,10 +38,11 @@ export default function TaskDetailPage({ taskId }: { taskId: number }) {
   useEffect(() => {
     setTask(null);
     setError(null);
+    lastJsonRef.current = null;
     void load();
   }, [load]);
 
-  useLiveRefresh(load, { enabled: task !== null });
+  useLiveRefresh(load, { enabled: task !== null, intervalMs: 30_000, hiddenIntervalMs: 300_000 });
 
   const handleSave = useCallback(async (data: Partial<Task> & { recurring: number }) => {
     setTask(await api.updateTask(taskId, { ...data, changed_by: 'User' } as Partial<Task>));

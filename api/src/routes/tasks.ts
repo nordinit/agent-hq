@@ -105,6 +105,7 @@ const storage = multer.diskStorage({
 const upload = multer({ storage, limits: { fileSize: 50 * 1024 * 1024 } }); // 50MB max
 
 import { requireNumericId } from '../lib/routeParams';
+import { listBoardTasks } from '../domains/tasks/boardReadModel';
 
 const router = Router();
 router.use((req,res,next)=>{if(req.method==='GET'&&req.path==='/'&&req.query.view==='summary'){const json=res.json.bind(res);res.json=((v:unknown)=>json(summaryTaskResponse(v))) as typeof res.json;}next();});
@@ -131,6 +132,19 @@ router.get('/search', async (req: Request, res: Response) => {
     const db = getDb();
     const tenantId = await resolveTenantIdFromRequest(db, req);
     res.json(await searchTasks(db, { ...req.query, tenant_id: tenantId }));
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+// ── GET /api/v1/tasks/board ─────────────────────────────────────────────────
+// The task board: the newest tasks of every (workflow, status) column plus each column's total,
+// bounded by the number of columns rather than the number of tasks. See boardReadModel.ts.
+router.get('/board', async (req: Request, res: Response) => {
+  try {
+    const db = getDb();
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    res.json(await listBoardTasks(db, { ...req.query, tenant_id: tenantId }));
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
@@ -910,7 +924,7 @@ router.get('/:id/history', async (req: Request, res: Response) => {
     const db = getDb();
     const tenantId = await resolveTenantIdFromRequest(db, req);
     if (!await requireTaskVisibleForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Task not found' });
-    res.json(await listTaskHistory(db, Number(req.params.id)));
+    res.json(await listTaskHistory(db, Number(req.params.id), req.query));
   } catch (err) {
     const status = (err as Error & { status?: number }).status ?? 500;
     res.status(status).json({ error: err instanceof Error ? err.message : String(err) });
@@ -941,7 +955,7 @@ router.get('/:id/notes', async (req: Request, res: Response) => {
     const db = getDb();
     const tenantId = await resolveTenantIdFromRequest(db, req);
     if (!await requireTaskVisibleForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Task not found' });
-    res.json(await listTaskNotes(db, Number(req.params.id)));
+    res.json(await listTaskNotes(db, Number(req.params.id), req.query));
   } catch (err) {
     const status = (err as Error & { status?: number }).status ?? 500;
     res.status(status).json({ error: err instanceof Error ? err.message : String(err) });
@@ -1110,7 +1124,7 @@ router.get('/:id/instances', async (req: Request, res: Response) => {
     const db = getDb();
     const tenantId = await resolveTenantIdFromRequest(db, req);
     if (!await requireTaskVisibleForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Task not found' });
-    return res.json(await listTaskInstances(db, Number(req.params.id)));
+    return res.json(await listTaskInstances(db, Number(req.params.id), req.query));
   } catch (err) {
     const status = (err as Error & { status?: number }).status ?? 500;
     return res.status(status).json({ error: err instanceof Error ? err.message : String(err) });
