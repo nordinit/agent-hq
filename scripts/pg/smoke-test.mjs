@@ -45,7 +45,10 @@ function toPositional(sql) {
   return out;
 }
 
-const pool = new Pool({ connectionString: PG_URL });
+// Keep in step with api/src/db/pg/schemas.ts (migration 51). The search path resolves the
+// unqualified table names below whether or not the database default is set.
+const APP_SCHEMAS = ['core', 'agents', 'workflow', 'tasks', 'runs', 'chat', 'access', 'telemetry'];
+const pool = new Pool({ connectionString: PG_URL, options: `-c search_path=public,${APP_SCHEMAS.join(',')}` });
 const results = [];
 let failures = 0;
 
@@ -89,7 +92,7 @@ async function main() {
   await check('deferred workflow rename is not partially applied', async () => {
     const rows = await q(`
       SELECT COUNT(*)::int AS c FROM information_schema.tables
-       WHERE table_schema = 'public' AND table_name = 'workflows'`);
+       WHERE table_schema = ANY(current_schemas(false)) AND table_name = 'workflows'`);
     if (rows[0].c !== 0) throw new Error('unexpected workflows table: the deferred rename is partially applied');
     return 'not applied';
   });
@@ -198,7 +201,7 @@ async function main() {
         FROM pg_class c
         JOIN pg_namespace n ON n.oid = c.relnamespace
         JOIN pg_attribute a ON a.attrelid = c.oid AND a.attidentity <> ''
-       WHERE n.nspname = 'public' AND c.relkind = 'r'
+       WHERE n.nspname = ANY(current_schemas(false)) AND c.relkind = 'r'
        ORDER BY 1`);
 
     const behind = [];

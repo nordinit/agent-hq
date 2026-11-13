@@ -158,7 +158,7 @@ describe('OpenClawRuntime terminal failure handling', () => {
       ],
       [
         `SELECT 1 AS found FROM information_schema.columns
-          WHERE table_schema = current_schema() AND table_name = ? AND column_name = ? LIMIT 1`,
+          WHERE table_schema = ANY(current_schemas(false)) AND table_name = ? AND column_name = ? LIMIT 1`,
         {
           get: jest.fn((table: string, column: string) => (
             table === 'tasks' && column === 'custom_fields_json' ? { found: 1 } : undefined
@@ -167,7 +167,7 @@ describe('OpenClawRuntime terminal failure handling', () => {
       ],
       [
         `SELECT 1 AS found FROM information_schema.tables
-          WHERE table_schema = current_schema() AND table_name = ? LIMIT 1`,
+          WHERE table_schema = ANY(current_schemas(false)) AND table_name = ? LIMIT 1`,
         {
           get: jest.fn((table: string) => (
             MOCKED_TABLES.has(table) ? { found: 1 } : undefined

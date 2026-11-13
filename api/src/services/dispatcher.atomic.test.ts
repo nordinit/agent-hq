@@ -179,7 +179,7 @@ it('holds routed tasks before instance creation during recovery and resumes thro
   const results = await Promise.all([runDispatcher(db, 86), runDispatcher(db, 86)]);
   expect(results.reduce((n, r) => n + r.dispatched, 0)).toBe(0);
   expect(await db.value('SELECT count(*) FROM job_instances')).toBe(0);
-  expect(await db.value('SELECT count(*) FROM openclaw_mcp_recovery_tasks WHERE task_id = 7')).toBe(1);
+  expect(await db.value('SELECT count(*) FROM agent_mcp_recovery_tasks WHERE task_id = 7')).toBe(1);
   expect(await db.value('SELECT status FROM tasks WHERE id = 7')).toBe('ready');
   expect(prepare).not.toHaveBeenCalled();
   await resolveMcpRecovery(db, '/gateway', 1);
@@ -286,5 +286,5 @@ it('holds review tasks during recovery like any other status', async () => {
   await beginMcpRecovery(db, '/gateway', 1, 'interrupted');
   await Promise.all([runDispatcher(db, 86), reconcileAssignedAgents(db)]);
   expect(await db.value('SELECT count(*) FROM job_instances')).toBe(0);
-  expect(await db.value('SELECT count(*) FROM openclaw_mcp_recovery_tasks WHERE task_id=7')).toBe(1);
+  expect(await db.value('SELECT count(*) FROM agent_mcp_recovery_tasks WHERE task_id=7')).toBe(1);
 });

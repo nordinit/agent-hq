@@ -1,9 +1,9 @@
 import { getDb } from '../db/client';
 import { setupTestDb, teardownTestDb } from '../db/testDb';
 
-const queued = async () => (await getDb().all<{ agent_id: number }>('SELECT agent_id FROM openclaw_mcp_sync_queue ORDER BY agent_id'))
+const queued = async () => (await getDb().all<{ agent_id: number }>('SELECT agent_id FROM agent_mcp_sync_queue ORDER BY agent_id'))
   .map(row => Number(row.agent_id));
-const clear = () => getDb().run('DELETE FROM openclaw_mcp_sync_queue');
+const clear = () => getDb().run('DELETE FROM agent_mcp_sync_queue');
 
 describe('MCP configuration edits enqueue only the agents they affect', () => {
   beforeEach(async () => {

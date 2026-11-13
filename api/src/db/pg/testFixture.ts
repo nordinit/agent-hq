@@ -5,6 +5,7 @@ import type { Db } from '../adapter/types';
 import { POSTGRES_MIGRATION_DIRS } from './migrationDirs';
 import { loadMigrations, runMigrations, verifyMigrationsCurrent } from './migrationRunner';
 import {makeWorkerDatabaseName,workerDatabaseOwnerComment} from './testDatabaseCleanup';
+import { APP_SCHEMAS, PG_CONNECTION_OPTIONS } from './schemas';
 
 /**
  * PostgreSQL fixtures for the test suite.
@@ -75,7 +76,7 @@ export async function ensureTemplateDatabase(): Promise<void> {
         // A process can die between CREATE DATABASE and the final migration. The fingerprint
         // prevents old schemas from being reused; if the current template is incomplete, rebuild
         // it under the same lock instead of leaving every future run permanently broken.
-        const existing = new Pool({ connectionString: urlFor(templateDb) });
+        const existing = new Pool({ connectionString: urlFor(templateDb), options: PG_CONNECTION_OPTIONS });
         try {
           await verifyMigrationsCurrent(new PostgresAdapter(existing), POSTGRES_MIGRATION_DIRS);
         } catch {
@@ -87,7 +88,7 @@ export async function ensureTemplateDatabase(): Promise<void> {
       }
       if (needsBuild) {
         await client.query(`CREATE DATABASE "${templateDb}"`);
-        const build = new Pool({ connectionString: urlFor(templateDb) });
+        const build = new Pool({ connectionString: urlFor(templateDb), options: PG_CONNECTION_OPTIONS });
         try {
           await runMigrations(new PostgresAdapter(build), POSTGRES_MIGRATION_DIRS);
         } finally {
@@ -190,12 +191,13 @@ async function createWorkerDatabase(): Promise<Db> {
     await admin.end();
   }
 
-  workerPool = new Pool({ connectionString: urlFor(workerDb) });
+  workerPool = new Pool({ connectionString: urlFor(workerDb), options: PG_CONNECTION_OPTIONS });
   return new PostgresAdapter(workerPool);
 }
 
 /**
- * Empties every table, for use between test files.
+ * Empties every application table (all of APP_SCHEMAS; the ledger stays in public), for use
+ * between test files.
  *
  * TRUNCATE ... CASCADE in one statement rather than per-table DELETE: it ignores foreign
  * keys within the truncated set, so no dependency ordering is needed, and RESTART IDENTITY
@@ -205,10 +207,10 @@ export async function resetTestDb(): Promise<void> {
   if (!workerPool) return;
   if (!cachedTables) {
     const { rows } = await workerPool.query(`
-      SELECT tablename FROM pg_tables
-       WHERE schemaname = 'public' AND tablename <> 'schema_migrations'
-    `);
-    cachedTables = rows.map((r) => `"${r.tablename}"`);
+      SELECT schemaname, tablename FROM pg_tables
+       WHERE schemaname = ANY($1::text[])
+    `, [APP_SCHEMAS]);
+    cachedTables = rows.map((r) => `${escapeIdentifier(r.schemaname)}.${escapeIdentifier(r.tablename)}`);
   }
   if (!cachedTables.length) return;
   await workerPool.query(`TRUNCATE ${cachedTables.join(', ')} RESTART IDENTITY CASCADE`);

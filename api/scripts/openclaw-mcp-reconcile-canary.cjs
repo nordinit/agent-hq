@@ -6,6 +6,7 @@ const { spawn } = require('node:child_process');
 const { Pool } = require('pg');
 const { PostgresAdapter } = require('../dist/db/adapter/PostgresAdapter');
 const fixtures = require('../dist/db/pg/testFixture');
+const { PG_CONNECTION_OPTIONS } = require('../dist/db/pg/schemas');
 const gateway = require('../dist/runtimes/openclaw/gatewayClient');
 const calls = [];
 const originalRpc = gateway.gatewayRpcCall;
@@ -45,7 +46,7 @@ async function waitForGateway() {
   if (mode) {
     const url = process.env.OPENCLAW_CANARY_DATABASE_URL;
     assert(new URL(url).pathname.startsWith('/agent_hq_test_'), 'must use a disposable test database');
-    pool = new Pool({ connectionString: url }); db = new PostgresAdapter(pool);
+    pool = new Pool({ connectionString: url, options: PG_CONNECTION_OPTIONS }); db = new PostgresAdapter(pool);
   } else {
     db = await fixtures.getTestDb();
     await db.run("INSERT INTO tenants (id,name,slug,is_default) VALUES (1,'Canary','canary',1)");
@@ -56,7 +57,7 @@ async function waitForGateway() {
   const input = { db, agentId: 1, bundlePath, bundlePluginId, configPath: process.env.OPENCLAW_CONFIG_PATH };
   if (mode === 'crash-before-rpc') {
     const run = db.run.bind(db);
-    db.run = async (...args) => { const result = await run(...args); if (args[0].includes('INSERT INTO openclaw_mcp_reconciliation')) process.exit(87); return result; };
+    db.run = async (...args) => { const result = await run(...args); if (args[0].includes('INSERT INTO agent_mcp_reconciliation')) process.exit(87); return result; };
   }
   if (mode) { await reconcileOpenClawMcp({ ...input, force: true }); throw new Error('fixture did not crash'); }
   await waitForGateway();
@@ -89,10 +90,10 @@ async function waitForGateway() {
   assert.equal(calls.length, count);
   // Automatic recovery inspects the running gateway and applies configuration through its
   // atomic lifecycle lease, under the original incident deadline. No business task is started.
-  const incident = await db.get('SELECT id FROM openclaw_mcp_recovery WHERE agent_id=1 AND resolved_at IS NULL');
+  const incident = await db.get('SELECT id FROM agent_mcp_recovery WHERE agent_id=1 AND resolved_at IS NULL');
   assert(incident, 'the interrupted update must create a durable recovery episode');
   await reconcileOpenClawMcp({ ...input, force: true, recoveryId: incident.id });
-  assert.equal(await db.value('SELECT state FROM openclaw_mcp_recovery WHERE id=?', incident.id), 'resolved');
+  assert.equal(await db.value('SELECT state FROM agent_mcp_recovery WHERE id=?', incident.id), 'resolved');
   console.log('PASS: killed process after publication recovers automatically after gateway inspection and a new verified receipt');
 })().catch(error => { console.error(error); process.exitCode = 1; }).finally(async () => {
   gateway.__resetGatewayConnectionPoolForTests();

@@ -43,7 +43,7 @@ describe('POST /api/v1/agents/:id/mcp-recovery/retry', () => {
     expect(busy.status).toBe(409);
     expect(await busy.json()).toMatchObject({ code: 'mcp_recovery_in_progress', runtime_recovery: { state: 'recovering' } });
 
-    await db.run("UPDATE openclaw_mcp_recovery SET deadline_at=now()-interval '1 minute'");
+    await db.run("UPDATE agent_mcp_recovery SET deadline_at=now()-interval '1 minute'");
     await escalateMcpRecoveries(db);
     const reopened = await retry(1);
     expect(reopened.status).toBe(202);

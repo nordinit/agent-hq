@@ -3,7 +3,7 @@ import { POSTGRES_MIGRATION_DIRS } from './migrationDirs';
 import { runMigrations } from './migrationRunner';
 
 const scheduleColumn = `SELECT count(*) FROM information_schema.columns
-  WHERE table_schema = current_schema() AND table_name = 'agents' AND column_name = 'schedule'`;
+  WHERE table_schema = ANY(current_schemas(false)) AND table_name = 'agents' AND column_name = 'schedule'`;
 
 it('drops the legacy agents.schedule column and keeps the agent rows', async () => {
   const fixture = await historicalTestFixture(45), db = fixture.db;

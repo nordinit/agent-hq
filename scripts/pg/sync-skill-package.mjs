@@ -46,9 +46,11 @@ const files = listFiles(root).map((file) => {
   }
 });
 
+// Same search path as api/src/db/pg/schemas.ts, so this works on a database without the default.
+const options = '-c search_path=public,core,agents,workflow,tasks,runs,chat,access,telemetry';
 const client = new Client(database.includes('://')
-  ? { connectionString: database }
-  : { database });
+  ? { connectionString: database, options }
+  : { database, options });
 
 try {
   await client.connect();

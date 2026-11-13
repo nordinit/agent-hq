@@ -13,11 +13,7 @@ No table was dropped and no runtime writer changed.
 | `task_outcome_metrics` | Task creation maintains `spawned_defects` (`domains/tasks/writeModel.ts`); task reads (`domains/tasks/readModel.ts`) and reflection context (`lib/reflectionContext.ts`, labeled `legacy_recorded_summary`) read it. The other columns were only written by the removed outcome endpoints. |
 | `task_events`, `task_history` | Written on every status transition. Read by task history, routing traces, and telemetry backfill. |
 | `integrity_events` | No longer written, and dropped by migration `36-drop-integrity-events.sql`. Missing handoffs are measured by the `core.missing_handoffs.v1` telemetry metric. |
-| `task_creation_events` | Only the removed creation-event endpoints wrote it. Retained as historical data. |
-| `telemetry_schema_config` | Retired singleton, already unreachable (410). Retained, unread. |
+| `task_creation_events` | Only the removed creation-event endpoints wrote it. Dropped by migration `50-retire-openclaw-and-legacy-tables.sql`. |
+| `telemetry_schema_config` | Retired singleton, already unreachable (410). Dropped by migration `50-retire-openclaw-and-legacy-tables.sql`. |
 
 The remaining tables stay in tenant scoping and in the agent-deletion reference check (`routes/agents.ts`).
-
-## Follow-ups
-
-- Drop `task_creation_events` and `telemetry_schema_config` in a later migration once their history is no longer wanted.

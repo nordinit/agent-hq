@@ -44,13 +44,19 @@ interface SessionIndexEntry {
   updatedAt?: unknown;
 }
 
-interface IngestStateRow {
-  instance_id: number;
+/** How far a run's session file has been read. Stored in instance_artifacts.transcript_cursor. */
+interface TranscriptCursor {
   session_file: string;
-  last_line_index: number;
+  line_index: number;
   last_event_at: string | null;
-  last_heartbeat_at: string | null;
-  last_meaningful_output_at: string | null;
+}
+
+/** What earlier passes over the same session file established. */
+interface PreviousIngest {
+  lineIndex: number;
+  lastEventAt: string | null;
+  heartbeatAt: string | null;
+  meaningfulOutputAt: string | null;
 }
 
 interface ArtifactRow {
@@ -403,40 +409,55 @@ function isOpenClawAgent(agent: BackfillAgentRow): boolean {
   return !runtimeType || runtimeType === 'openclaw';
 }
 
-async function readIngestState(db: Db, instanceId: number, sessionFile: string): Promise<IngestStateRow | null> {
-  const row = await db.get(`
-    SELECT instance_id, session_file, last_line_index, last_event_at,
-           last_heartbeat_at, last_meaningful_output_at
-      FROM openclaw_transcript_ingest_state
-      WHERE instance_id = ?
-  `, instanceId) as IngestStateRow | undefined;
-  if (!row || row.session_file !== sessionFile) return null;
-  return row;
+function parseTranscriptCursor(raw: unknown): TranscriptCursor | null {
+  const value = typeof raw === 'string' ? parseJsonObject(raw) : raw;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const cursor = value as Record<string, unknown>;
+  const sessionFile = asNonEmptyString(cursor.session_file);
+  const lineIndex = Number(cursor.line_index);
+  if (!sessionFile || !Number.isSafeInteger(lineIndex) || lineIndex < 0) return null;
+  return {
+    session_file: sessionFile,
+    line_index: lineIndex,
+    last_event_at: asNonEmptyString(cursor.last_event_at),
+  };
 }
 
-async function writeIngestState(db: Db, params: {
-  instanceId: number;
-  sessionFile: string;
-  lastLineIndex: number;
-  latestEventAt: string | null;
-  heartbeatAt: string | null;
-  meaningfulOutputAt: string | null;
-  now: string;
-}): Promise<void> {
-  await db.run(`
-    INSERT INTO openclaw_transcript_ingest_state (
-      instance_id, session_file, last_line_index, last_event_at,
-      last_heartbeat_at, last_meaningful_output_at, updated_at
-    )
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(instance_id) DO UPDATE SET
-      session_file = excluded.session_file,
-      last_line_index = excluded.last_line_index,
-      last_event_at = excluded.last_event_at,
-      last_heartbeat_at = excluded.last_heartbeat_at,
-      last_meaningful_output_at = excluded.last_meaningful_output_at,
-      updated_at = excluded.updated_at
-  `, params.instanceId, params.sessionFile, params.lastLineIndex, params.latestEventAt, params.heartbeatAt, params.meaningfulOutputAt, params.now);
+/**
+ * The cursor is only trusted for the file it was recorded against: a run that moved to a new
+ * session file starts again from line 0. The liveness timestamps already live on the same row.
+ */
+async function readPreviousIngest(db: Db, instanceId: number, sessionFile: string): Promise<PreviousIngest | null> {
+  const row = await db.get<{
+    transcript_cursor: unknown;
+    last_agent_heartbeat_at: string | null;
+    last_meaningful_output_at: string | null;
+  }>(`
+    SELECT transcript_cursor, last_agent_heartbeat_at, last_meaningful_output_at
+      FROM instance_artifacts
+      WHERE instance_id = ?
+  `, instanceId);
+  const cursor = parseTranscriptCursor(row?.transcript_cursor);
+  if (!row || !cursor || cursor.session_file !== sessionFile) return null;
+  return {
+    lineIndex: cursor.line_index,
+    lastEventAt: cursor.last_event_at,
+    heartbeatAt: row.last_agent_heartbeat_at,
+    meaningfulOutputAt: row.last_meaningful_output_at,
+  };
+}
+
+/**
+ * Updates an existing artifacts row only, and leaves its updated_at alone: recording read
+ * progress must neither create a row for a run with no liveness yet nor look like run activity.
+ * Without a row the next pass re-reads from line 0, which is safe because events upsert by id.
+ */
+async function writeTranscriptCursor(db: Db, instanceId: number, cursor: TranscriptCursor): Promise<void> {
+  await db.run(
+    'UPDATE instance_artifacts SET transcript_cursor = ? WHERE instance_id = ?',
+    JSON.stringify(cursor),
+    instanceId,
+  );
 }
 
 function classifyEvent(role: string, eventType: string, content: string, eventMeta: Record<string, unknown>): {
@@ -677,8 +698,8 @@ export async function backfillOpenClawJsonlTranscript(
     };
   }
 
-  const previousState = await readIngestState(db, instanceId, resolved.sessionFile);
-  const fromLineIndex = options.forceFull ? 0 : previousState?.last_line_index ?? 0;
+  const previous = await readPreviousIngest(db, instanceId, resolved.sessionFile);
+  const fromLineIndex = options.forceFull ? 0 : previous?.lineIndex ?? 0;
   const fallbackNow = options.now ?? new Date();
   const lines = readJsonlLines(resolved.sessionFile, fromLineIndex, fallbackNow);
 
@@ -715,9 +736,9 @@ export async function backfillOpenClawJsonlTranscript(
   `;
 
   let persistedEvents = 0;
-  let latestEventAt = previousState?.last_event_at ?? null;
-  let heartbeatAt = previousState?.last_heartbeat_at ?? null;
-  let meaningfulOutputAt = previousState?.last_meaningful_output_at ?? null;
+  let latestEventAt = previous?.lastEventAt ?? null;
+  let heartbeatAt = previous?.heartbeatAt ?? null;
+  let meaningfulOutputAt = previous?.meaningfulOutputAt ?? null;
   let firstHeartbeatAt: string | null = null;
 
   await db.withTransaction(async (db) => {
@@ -792,22 +813,19 @@ export async function backfillOpenClawJsonlTranscript(
     const lastLineIndex = lines.length > 0
       ? lines[lines.length - 1]?.lineIndex ?? fromLineIndex
       : fromLineIndex;
-    await writeIngestState(db, {
-            instanceId,
-            sessionFile: resolved.sessionFile,
-            lastLineIndex,
-            latestEventAt,
-            heartbeatAt,
-            meaningfulOutputAt,
-            now: timestampFromDate(fallbackNow) ?? nowTimestamp(),
-          });
-
+    // Artifacts first: it may create the row that the cursor is then recorded on.
     await updateInstanceArtifacts(db, {
             instance,
             heartbeatAt,
             meaningfulOutputAt,
             startedAt: firstHeartbeatAt ?? heartbeatAt ?? meaningfulOutputAt,
           });
+
+    await writeTranscriptCursor(db, instanceId, {
+      session_file: resolved.sessionFile,
+      line_index: lastLineIndex,
+      last_event_at: latestEventAt,
+    });
   });
 
   return {

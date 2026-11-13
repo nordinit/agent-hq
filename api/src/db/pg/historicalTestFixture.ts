@@ -7,6 +7,7 @@ import {PostgresAdapter} from '../adapter/PostgresAdapter';
 import {POSTGRES_MIGRATION_DIRS} from './migrationDirs';
 import {loadMigrations,runMigrations} from './migrationRunner';
 import {makeWorkerDatabaseName,workerDatabaseOwnerComment} from './testDatabaseCleanup';
+import {PG_CONNECTION_OPTIONS} from './schemas';
 
 /** A temporary migration directory holding the release's migrations numbered up to `through`. */
 export function migrationsThrough(through:number):string{
@@ -26,7 +27,8 @@ export async function historicalTestFixture(through:number){
     await admin.query(`COMMENT ON DATABASE ${escapeIdentifier(name)} IS ${escapeLiteral(workerDatabaseOwnerComment())}`);
   }finally{await admin.end();}
   url.pathname=`/${name}`;
-  const pool=new Pool({connectionString:url.toString()});const db=new PostgresAdapter(pool);
+  // The search path lets a regression replay later migrations, including 51, on this pool.
+  const pool=new Pool({connectionString:url.toString(),options:PG_CONNECTION_OPTIONS});const db=new PostgresAdapter(pool);
   // DROP DATABASE coordinates with all PostgreSQL backends and can wait beyond
   // a test's deadline under concurrent CI load. Use the same owner-stamped
   // lifecycle as the shared fixtures: close connections here, then let global

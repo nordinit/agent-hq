@@ -300,6 +300,25 @@ describe('OpenClaw JSONL transcript backfill', () => {
         });
     expect(second.persistedEvents).toBe(0);
     expect(await db.get(`SELECT COUNT(*) AS count FROM chat_messages`)).toEqual({ count: 3 });
+
+    // The read position lives on the run's artifacts row, against the file it was read from.
+    const cursor = await db.value(`SELECT transcript_cursor FROM instance_artifacts WHERE instance_id = 77`);
+    expect(cursor).toEqual({ session_file: sessionFile, line_index: 4, last_event_at: '2026-05-13 10:59:30.000' });
+
+    fs.appendFileSync(sessionFile, `${JSON.stringify({
+      type: 'message',
+      id: 'assistant-reply',
+      timestamp: '2026-05-13T11:00:30.000Z',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'Routing lives in policy/' }] },
+    })}\n`);
+    const third = await backfillOpenClawJsonlTranscript(db, 77, {
+          openclawHome,
+          now: new Date('2026-05-13T11:02:00.000Z'),
+        });
+    expect(third.processedLines).toBe(1);
+    expect(third.persistedEvents).toBe(1);
+    expect(third.latestEventAt).toBe('2026-05-13 11:00:30.000');
+    expect(await db.value(`SELECT transcript_cursor->>'line_index' FROM instance_artifacts WHERE instance_id = 77`)).toBe('5');
   });
 
   it('treats oc-stream-only rows as sparse until structured rows are present', async () => {

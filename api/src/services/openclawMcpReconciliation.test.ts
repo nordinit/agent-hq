@@ -50,7 +50,7 @@ describe('OpenClaw MCP reconciliation', () => {
     for (let i = 0; i < 10; i++) await reconcileOpenClawMcp(params);
     expect(mockRpc).toHaveBeenCalledTimes(1);
     expect(mockRpc).toHaveBeenCalledWith(expect.objectContaining({ method: 'plugins.reload', retryOnDisconnect: false }));
-    expect(await getDb().get('SELECT state, desired_revision, applied_revision FROM openclaw_mcp_reconciliation')).toEqual(expect.objectContaining({ state: 'applied' }));
+    expect(await getDb().get('SELECT state, desired_revision, applied_revision FROM agent_mcp_reconciliation')).toEqual(expect.objectContaining({ state: 'applied' }));
   });
 
   it('automatically repairs an uncertain update only after gateway inspection and verified receipt', async () => {
@@ -62,7 +62,7 @@ describe('OpenClaw MCP reconciliation', () => {
     await reconcileOpenClawMcp({ ...params, force: true, recoveryId: incident!.id });
     expect(mockRpc.mock.calls.map(c => c[0].method)).toEqual(['plugins.reload', 'plugins.list', 'plugins.reload']);
     expect(await getAgentMcpRecovery(getDb(), 1)).toBeNull();
-    expect(await getDb().get('SELECT state,recovery_required FROM openclaw_mcp_reconciliation'))
+    expect(await getDb().get('SELECT state,recovery_required FROM agent_mcp_reconciliation'))
       .toEqual({ state: 'applied', recovery_required: false });
   });
 
@@ -73,7 +73,7 @@ describe('OpenClaw MCP reconciliation', () => {
     const incident = await getAgentMcpRecovery(getDb(), 1);
     mockRpc.mockResolvedValueOnce({ ok: true, payload: {} });
     await expect(reconcileOpenClawMcp({ ...params, force: true, recoveryId: incident!.id })).rejects.toThrow('plugin state');
-    await getDb().run("UPDATE openclaw_mcp_recovery SET deadline_at=now()-interval '1 second'");
+    await getDb().run("UPDATE agent_mcp_recovery SET deadline_at=now()-interval '1 second'");
     await expect(reconcileOpenClawMcp({ ...params, force: true, recoveryId: incident!.id })).rejects.toThrow('deadline');
     expect(mockRpc.mock.calls.map(c => c[0].method)).toEqual(['plugins.reload', 'plugins.list']);
   });
@@ -101,7 +101,7 @@ describe('OpenClaw MCP reconciliation', () => {
       return { ok: true, payload: { ok: true, runtime: { generation: 2, pluginIds: ['fixture-1'] } } };
     });
     await expect(reconcileOpenClawMcp(params)).rejects.toThrow('configuration changed');
-    expect((await getDb().get<{ state: string }>('SELECT state FROM openclaw_mcp_reconciliation'))?.state).toBe('failed');
+    expect((await getDb().get<{ state: string }>('SELECT state FROM agent_mcp_reconciliation'))?.state).toBe('failed');
     await reconcileOpenClawMcp(params);
     expect(mockRpc).toHaveBeenCalledTimes(2);
   });
@@ -151,10 +151,10 @@ describe('OpenClaw MCP reconciliation', () => {
     resetOpenClawMcpReconciliationForTests();
     await expect(reconcileOpenClawMcp(params)).rejects.toThrow('another operation');
     expect(mockRpc).toHaveBeenCalledTimes(1);
-    await getDb().run("UPDATE openclaw_mcp_reconciliation SET retry_at = now() - interval '1 second'");
+    await getDb().run("UPDATE agent_mcp_reconciliation SET retry_at = now() - interval '1 second'");
     await expect(reconcileOpenClawMcp(params)).rejects.toThrow('another operation');
     expect(mockRpc).toHaveBeenCalledTimes(2);
-    expect(await getDb().get('SELECT attempts,recovery_required FROM openclaw_mcp_reconciliation'))
+    expect(await getDb().get('SELECT attempts,recovery_required FROM agent_mcp_reconciliation'))
       .toEqual({ attempts: 2, recovery_required: false });
   });
 
@@ -172,11 +172,11 @@ describe('OpenClaw MCP reconciliation', () => {
   it('recovers a crash before mutation and holds a crash after mutation starts', async () => {
     const params = input();
     await reconcileOpenClawMcp(params);
-    await getDb().run("UPDATE openclaw_mcp_reconciliation SET state = 'pending', operation_phase = 'prepared'");
+    await getDb().run("UPDATE agent_mcp_reconciliation SET state = 'pending', operation_phase = 'prepared'");
     resetOpenClawMcpReconciliationForTests();
     await reconcileOpenClawMcp(params);
     expect(mockRpc).toHaveBeenCalledTimes(2);
-    await getDb().run("UPDATE openclaw_mcp_reconciliation SET state = 'pending', operation_phase = 'reload'");
+    await getDb().run("UPDATE agent_mcp_reconciliation SET state = 'pending', operation_phase = 'reload'");
     resetOpenClawMcpReconciliationForTests();
     await expect(reconcileOpenClawMcp(params)).rejects.toThrow('interrupted after mutation began');
     expect(mockRpc).toHaveBeenCalledTimes(2);
@@ -188,7 +188,7 @@ describe('OpenClaw MCP reconciliation', () => {
       ok: true, runtime: { generation: 2, pluginIds: ['fixture-1'] },
     } }; });
     await expect(reconcileOpenClawMcp(params)).rejects.toThrow('connection changed');
-    expect(await getDb().get('SELECT state,recovery_required,applied_revision FROM openclaw_mcp_reconciliation'))
+    expect(await getDb().get('SELECT state,recovery_required,applied_revision FROM agent_mcp_reconciliation'))
       .toEqual({ state: 'failed', recovery_required: true, applied_revision: null });
   });
 
@@ -197,9 +197,9 @@ describe('OpenClaw MCP reconciliation', () => {
     mockRpc.mockResolvedValueOnce({ ok: false, error: 'admitted work did not settle within 60s',
       failure: { details: { runtime: { committed: false, generation: 2 } } } });
     await expect(reconcileOpenClawMcp(params)).rejects.toThrow('did not settle');
-    expect(await getDb().get('SELECT state,recovery_required,applied_revision FROM openclaw_mcp_reconciliation'))
+    expect(await getDb().get('SELECT state,recovery_required,applied_revision FROM agent_mcp_reconciliation'))
       .toEqual({ state: 'failed', recovery_required: false, applied_revision: null });
-    expect(await getDb().value('SELECT retry_at IS NOT NULL FROM openclaw_mcp_reconciliation')).toBe(true);
+    expect(await getDb().value('SELECT retry_at IS NOT NULL FROM agent_mcp_reconciliation')).toBe(true);
   });
 
 });

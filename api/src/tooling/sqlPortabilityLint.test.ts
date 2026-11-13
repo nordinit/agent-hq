@@ -108,7 +108,7 @@ describe('SQL portability lint', () => {
       const primaryKey = 'SELECT a.attname AS column_name FROM pg_index i JOIN pg_attribute a ON a.attrelid = i.indrelid WHERE i.indrelid = to_regclass($1) AND i.indisprimary';
     `);
     const introspectionFindings = analyze('src/db/introspection.ts', `
-      const columns = 'SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = ?';
+      const columns = 'SELECT column_name FROM information_schema.columns WHERE table_schema = ANY(current_schemas(false)) AND table_name = ?';
     `);
 
     expect(adapterFindings).toEqual([]);

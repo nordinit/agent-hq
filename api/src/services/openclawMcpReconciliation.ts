@@ -116,7 +116,7 @@ async function reconcile(input: Input, target: string, key: string, snapshot: Re
 
   const previous = await input.db.get<Persisted>(`SELECT desired_revision, applied_revision, metadata_revision,
     runtime_revision, state, operation_phase, attempts, retry_at, recovery_required, error
-    FROM openclaw_mcp_reconciliation WHERE target_key = ? AND agent_id = ?`, target, input.agentId);
+    FROM agent_mcp_reconciliation WHERE target_key = ? AND agent_id = ?`, target, input.agentId);
   // An interrupted RPC may have published. Neither a reconnect nor a newer edit proves otherwise.
   const interrupted = previous?.state === 'pending' && ['refresh', 'reload'].includes(previous.operation_phase);
   if (!input.force && (previous?.recovery_required || interrupted)) {
@@ -129,7 +129,7 @@ async function reconcile(input: Input, target: string, key: string, snapshot: Re
     throw new Error(previous.error || 'OpenClaw MCP configuration is awaiting recovery');
   }
   const attempts = input.force || !sameRevision ? 0 : previous?.attempts ?? 0;
-  await input.db.run(`INSERT INTO openclaw_mcp_reconciliation
+  await input.db.run(`INSERT INTO agent_mcp_reconciliation
     (target_key, agent_id, desired_revision, materialized_revision, state, operation_phase, attempts)
     VALUES (?, ?, ?, ?, 'pending', 'prepared', ?)
     ON CONFLICT (target_key, agent_id) DO UPDATE SET desired_revision = EXCLUDED.desired_revision,
@@ -137,7 +137,7 @@ async function reconcile(input: Input, target: string, key: string, snapshot: Re
     attempts = EXCLUDED.attempts, retry_at = NULL, recovery_required = false, error = NULL, updated_at = now()`,
   target, input.agentId, revision, revision, attempts);
   try {
-    const phase = async (value: string) => { await assertRecoveryActive(input.db, input.recoveryId); return input.db.run(`UPDATE openclaw_mcp_reconciliation
+    const phase = async (value: string) => { await assertRecoveryActive(input.db, input.recoveryId); return input.db.run(`UPDATE agent_mcp_reconciliation
       SET operation_phase = ?, updated_at = now() WHERE target_key = ? AND agent_id = ? AND desired_revision = ?`, value, target, input.agentId, revision); };
     // Metadata repair belongs to the running gateway's lifecycle, not a competing registry CLI.
     // Existing legacy mode retains its externally awaited registry fallback.
@@ -152,7 +152,7 @@ async function reconcile(input: Input, target: string, key: string, snapshot: Re
       throw new ApplicationFailure('OpenClaw MCP configuration changed during application; a newer revision must be applied', false, true);
     }
     if (getGatewayConnectionEpoch() !== epoch) throw new ApplicationFailure('OpenClaw disconnected before MCP application could be acknowledged', true);
-    const written = await input.db.run(`UPDATE openclaw_mcp_reconciliation SET applied_revision = ?, metadata_revision = ?,
+    const written = await input.db.run(`UPDATE agent_mcp_reconciliation SET applied_revision = ?, metadata_revision = ?,
       runtime_revision = ?, state = 'applied', operation_phase = 'verified', receipt_json = ?, attempts = 0,
       retry_at = NULL, recovery_required = false, error = NULL, updated_at = now()
       WHERE target_key = ? AND agent_id = ? AND desired_revision = ?`, revision, snapshot.metadata, snapshot.runtime,
@@ -166,7 +166,7 @@ async function reconcile(input: Input, target: string, key: string, snapshot: Re
     const known = error instanceof ApplicationFailure ? error : null;
     const retryable = known?.retryable && attempts + 1 < 3;
     const delayMs = Math.min(90_000, Math.max(known?.retryAfterMs ?? 0, [2000, 5000, 15000][Math.min(attempts, 2)]));
-    await input.db.run(`UPDATE openclaw_mcp_reconciliation SET state = 'failed', attempts = ?, retry_at = ?,
+    await input.db.run(`UPDATE agent_mcp_reconciliation SET state = 'failed', attempts = ?, retry_at = ?,
       recovery_required = ?, error = ?, updated_at = now() WHERE target_key = ? AND agent_id = ? AND desired_revision = ?`,
     attempts + 1, retryable ? new Date(Date.now() + delayMs).toISOString() : null,
     known?.recoveryRequired ?? true, message, target, input.agentId, revision);

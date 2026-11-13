@@ -33,7 +33,7 @@ async function lookupIndexNames(): Promise<string[]> {
   const rows = await db.all(`
         SELECT indexname AS name
         FROM pg_indexes
-        WHERE schemaname = 'public'
+        WHERE schemaname = ANY(current_schemas(false))
           AND indexname IN (${placeholders})
         ORDER BY indexname ASC
       `, ...LOOKUP_INDEXES);

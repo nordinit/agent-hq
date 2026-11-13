@@ -12,7 +12,7 @@ async function snapshotDatabaseRows(db: Db): Promise<DatabaseSnapshot> {
   const tables = await db.all<{ tablename: string }>(`
     SELECT tablename
     FROM pg_tables
-    WHERE schemaname = 'public'
+    WHERE schemaname = ANY(current_schemas(false))
     ORDER BY tablename
   `);
   const snapshot: DatabaseSnapshot = {};

@@ -252,18 +252,35 @@ Dispatch startup failures retry without an attempt limit. The wait increases by 
 - `system_policies` — retained from the baseline schema; no current reader or writer
 
 ### 7.5 Observability tables
-- `instance_artifacts` — per-instance stage, summary, commit, branch, heartbeat timestamps, stale flag
+- `instance_artifacts` — per-instance stage, summary, commit, branch, heartbeat timestamps, stale flag, and `transcript_cursor` (how far an OpenClaw session file has been ingested; migration 50 moved it here from `openclaw_transcript_ingest_state`)
 - `chat_messages` — transcript with event types (text, thought, tool_call, tool_result, turn_start, system, error)
 - `logs` — execution logs per instance/agent
 - `telemetry_*` — configurable telemetry (`/api/v1/telemetry/v2`): versioned definitions, captured observations, retained query results, coverage
 - `task_outcome_metrics` — legacy per-task summary; task creation maintains `spawned_defects`, read by task reads and reflection context
 - `task_events` — task status transitions, read by routing traces and telemetry backfill
-- `task_creation_events`, `telemetry_schema_config` — retained legacy data; no current writer or reader
 
 See [telemetry-legacy-consumers.md](telemetry-legacy-consumers.md) for the removed v1 telemetry API.
 
 ### 7.6 Supporting tables
 tenants, projects, workflows, workflow types and their statuses/outcomes/task types/relationship types, task_field_schemas, task_notes, task_history, task_relationships, task_dependencies, task_attachments, project_files, workflow_files, recurring_task_series, recurring_task_runs, teams, team_members, provider_config, provider_connections, github_identities, tools, agent_tool_assignments, mcp_servers, agent_mcp_assignments, agent_mcp_capability_policies, mcp_api_keys, mcp_oauth_*, skills, app_settings, notification_records, security_events, dispatch_log.
+
+`agent_mcp_sync_queue`, `agent_mcp_reconciliation`, `agent_mcp_recovery` and `agent_mcp_recovery_tasks` track an agent's MCP configuration reaching its runtime gateway (only OpenClaw agents are enqueued). Migration 50 renamed them from `openclaw_mcp_*`.
+
+### 7.7 Schemas
+Migration 51 groups the tables into schemas. Application SQL keeps naming tables without a schema, resolved by the search path:
+
+| Schema | Holds |
+|---|---|
+| `core` | tenants, projects and their files and audit log, app settings, system policies, providers, GitHub identities, security events |
+| `agents` | agents, teams, tools, skills, MCP servers and assignments, `agent_mcp_*` sync and recovery |
+| `workflow` | workflows, workflow types, statuses, transitions, requirements, routing rules and configuration, task field schemas |
+| `tasks` | tasks, history, notes, events, relationships, dependencies, recurring series and runs, external event mappings and receipts |
+| `runs` | job instances, instance artifacts, dispatch log and context bundles, runtime executions and checkpoints, sessions, logs, notifications |
+| `chat` | chat sessions, messages, attachments |
+| `access` | MCP API keys, OAuth clients and grants, executable revisions, secret values, execution bindings and audit |
+| `telemetry` | every `telemetry_*` table, plus the telemetry functions and `telemetry_source_context` view |
+
+`public` holds only `schema_migrations`. See the runbook for the rules new migrations follow.
 
 Schema changes are numbered files in `db/pg-migrations/`; see
 [database-migration-runbook.md](database-migration-runbook.md).

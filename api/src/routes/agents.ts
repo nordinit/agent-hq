@@ -113,7 +113,6 @@ const AGENT_REFERENCE_CHECKS: AgentReferenceCheck[] = [
   { table: 'sessions', column: 'agent_id', label: 'captured sessions', historical: true },
   { table: 'task_events', column: 'agent_id', label: 'task events', historical: true },
   { table: 'dispatch_log', column: 'agent_id', label: 'dispatch log entries', historical: true },
-  { table: 'task_creation_events', column: 'agent_id', label: 'task creation events', historical: true },
   { table: 'task_outcome_metrics', column: 'agent_id', label: 'task outcome metrics', historical: true },
   { table: 'logs', column: 'agent_id', label: 'logs', historical: true },
   { table: 'chat_messages', column: 'agent_id', label: 'chat messages', historical: true },
@@ -674,7 +673,7 @@ router.get('/', async (req: Request, res: Response) => {
       agents = await db.all(`${baseQuery} WHERE ${whereClause} ORDER BY a.created_at ASC`, tenantId);
     }
 
-    const recoveries = await db.all<{ agent_id: number }>(`SELECT r.* FROM openclaw_mcp_recovery r
+    const recoveries = await db.all<{ agent_id: number }>(`SELECT r.* FROM agent_mcp_recovery r
       JOIN agents a ON a.id = r.agent_id WHERE a.tenant_id = ? AND r.resolved_at IS NULL ORDER BY r.started_at DESC`, tenantId);
     const recoveryByAgent = new Map(recoveries.map(r => [r.agent_id, r]));
     res.json(parseAgents(agents).map(agent => ({ ...agent, runtime_recovery: recoveryByAgent.get(Number(agent.id)) ?? null })));

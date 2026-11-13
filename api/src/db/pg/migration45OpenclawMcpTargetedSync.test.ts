@@ -13,12 +13,12 @@ it('replaces enqueue-everyone triggers on a populated database and keeps pending
     await db.run(`DELETE FROM openclaw_mcp_sync_queue WHERE agent_id = 1`);
 
     expect(await runMigrations(db, POSTGRES_MIGRATION_DIRS)).toContain('45-openclaw-mcp-targeted-sync.sql');
-    expect(await db.get(`SELECT revision, error FROM openclaw_mcp_sync_queue WHERE agent_id = 2`))
+    expect(await db.get(`SELECT revision, error FROM agent_mcp_sync_queue WHERE agent_id = 2`))
       .toEqual({ revision: 7, error: 'pending before upgrade' });
     expect(await db.value(`SELECT count(*) FROM pg_proc WHERE proname = 'enqueue_openclaw_mcp_sync'`)).toBe(0);
 
     await db.run(`UPDATE mcp_servers SET env = '{"rotated":true}' WHERE id = 10`);
-    expect(await db.all(`SELECT agent_id, revision FROM openclaw_mcp_sync_queue ORDER BY agent_id`))
+    expect(await db.all(`SELECT agent_id, revision FROM agent_mcp_sync_queue ORDER BY agent_id`))
       .toEqual([{ agent_id: 1, revision: 1 }, { agent_id: 2, revision: 7 }]);
     expect(await runMigrations(db, POSTGRES_MIGRATION_DIRS)).toEqual([]);
   } finally { await fixture.close(); }

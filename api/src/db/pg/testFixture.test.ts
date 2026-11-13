@@ -9,7 +9,7 @@ describe('pg testFixture probe', () => {
 
   it('gives a worker database with the real baseline schema, legacy vocabulary', async () => {
     const tables = await db.all<{ table_name: string }>(
-      `SELECT table_name FROM information_schema.tables WHERE table_schema = current_schema()`);
+      `SELECT table_name FROM information_schema.tables WHERE table_schema = ANY(current_schemas(false))`);
     const names = tables.map((t) => t.table_name);
     expect(names).toContain('tasks');
     expect(names).toContain('workflows');       // legacy name the app's SQL still uses

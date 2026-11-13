@@ -1,6 +1,7 @@
 import { Pool } from 'pg';
 import { PostgresAdapter } from './adapter/PostgresAdapter';
 import type { Db } from './adapter/types';
+import { PG_CONNECTION_OPTIONS } from './pg/schemas';
 
 let pool: Pool | null = null;
 let adapter: Db | null = null;
@@ -28,6 +29,7 @@ export function getDb(): Db {
 
   pool = new Pool({
     connectionString: url,
+    options: PG_CONNECTION_OPTIONS,
     max: Number(process.env.AGENT_HQ_PG_POOL_MAX ?? 10),
     idleTimeoutMillis: 30_000,
   });

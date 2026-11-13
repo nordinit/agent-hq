@@ -16,12 +16,12 @@ describe('durable MCP recovery incidents', () => {
   afterEach(teardownTestDb);
   it('restores an interrupted update after process death using its original timestamp', async () => {
     const db = getDb();
-    await db.run(`INSERT INTO openclaw_mcp_reconciliation (target_key,agent_id,desired_revision,state,operation_phase,updated_at)
+    await db.run(`INSERT INTO agent_mcp_reconciliation (target_key,agent_id,desired_revision,state,operation_phase,updated_at)
       VALUES ('/gateway',1,'revision','pending','reload',now()-interval '31 minutes')`);
     await restoreMcpRecoveries(db);
     await restoreMcpRecoveries(db);
     await escalateMcpRecoveries(db);
-    expect(await db.value('SELECT count(*) FROM openclaw_mcp_recovery')).toBe(1);
+    expect(await db.value('SELECT count(*) FROM agent_mcp_recovery')).toBe(1);
     expect((await getAgentMcpRecovery(db, 1))?.state).toBe('attention');
     expect(await db.value('SELECT count(*) FROM notification_records')).toBe(1);
   });
@@ -31,12 +31,12 @@ describe('durable MCP recovery incidents', () => {
     const again = await beginMcpRecovery(db, '/gateway', 1, 'still disconnected');
     expect(again.id).toBe(first.id);
     expect(again.deadline_at).toEqual(first.deadline_at);
-    expect(await db.value('SELECT count(*) FROM openclaw_mcp_recovery_tasks')).toBe(0);
+    expect(await db.value('SELECT count(*) FROM agent_mcp_recovery_tasks')).toBe(0);
     expect(await db.value('SELECT count(*) FROM task_notes')).toBe(0);
     await attachRecoveryTask(db, again, 1);
     await attachRecoveryTask(db, again, 1);
     await attachRecoveryTask(db, again, 4);
-    expect(await db.all('SELECT task_id FROM openclaw_mcp_recovery_tasks ORDER BY task_id')).toEqual([{ task_id: 1 }]);
+    expect(await db.all('SELECT task_id FROM agent_mcp_recovery_tasks ORDER BY task_id')).toEqual([{ task_id: 1 }]);
     expect(await db.value('SELECT count(*) FROM task_notes')).toBe(1);
     expect(await db.value('SELECT status FROM tasks WHERE id=1')).toBe('ready');
     expect(await getTaskMcpRecovery(db, (await db.get('SELECT * FROM tasks WHERE id=4'))!)).toBeNull();
@@ -50,7 +50,7 @@ describe('durable MCP recovery incidents', () => {
     const incident = await beginMcpRecovery(db, '/gateway', 1, 'gateway restarting');
     const window = new Date(incident.deadline_at).getTime() - new Date(incident.started_at).getTime();
     expect(Math.abs(window - 30 * 60_000)).toBeLessThan(5_000);
-    await db.run("UPDATE openclaw_mcp_recovery SET started_at=now()-interval '11 minutes',deadline_at=deadline_at-interval '11 minutes'");
+    await db.run("UPDATE agent_mcp_recovery SET started_at=now()-interval '11 minutes',deadline_at=deadline_at-interval '11 minutes'");
     await escalateMcpRecoveries(db);
     expect((await getAgentMcpRecovery(db, 1))?.state).toBe('recovering');
   });
@@ -61,7 +61,7 @@ describe('durable MCP recovery incidents', () => {
     await attachRecoveryTask(db, incident, 2);
     await escalateMcpRecoveries(db);
     expect(await db.value('SELECT count(*) FROM notification_records')).toBe(0);
-    await db.run("UPDATE openclaw_mcp_recovery SET started_at=now()-interval '31 minutes',deadline_at=now()-interval '1 minute'");
+    await db.run("UPDATE agent_mcp_recovery SET started_at=now()-interval '31 minutes',deadline_at=now()-interval '1 minute'");
     await Promise.all([escalateMcpRecoveries(db), escalateMcpRecoveries(db)]);
     await escalateMcpRecoveries(db);
     expect((await getAgentMcpRecovery(db, 1))?.state).toBe('attention');
@@ -73,7 +73,7 @@ describe('durable MCP recovery incidents', () => {
     expect(metadata.taskIds).toEqual([1, 2]);
     // Escalation keeps the incident retryable on the slower schedule, each attempt with a normal budget.
     expect(await assertRecoveryActive(db, incident.id)).toBe(90_000);
-    const wait = await db.value<number>("SELECT EXTRACT(EPOCH FROM next_attempt_at - now()) FROM openclaw_mcp_recovery");
+    const wait = await db.value<number>("SELECT EXTRACT(EPOCH FROM next_attempt_at - now()) FROM agent_mcp_recovery");
     expect(Number(wait)).toBeGreaterThan(4 * 60);
     expect(Number(wait)).toBeLessThanOrEqual(5 * 60);
     await resolveMcpRecovery(db, '/gateway', 1);
@@ -91,16 +91,16 @@ describe('durable MCP recovery incidents', () => {
     await attachRecoveryTask(db, incident, 1);
     await attachRecoveryTask(db, incident, 2);
     expect(await retryMcpRecovery(db, 1)).toEqual([]);
-    await db.run("UPDATE openclaw_mcp_recovery SET started_at=now()-interval '3 days',deadline_at=now()-interval '1 minute',attempts=28");
+    await db.run("UPDATE agent_mcp_recovery SET started_at=now()-interval '3 days',deadline_at=now()-interval '1 minute',attempts=28");
     await escalateMcpRecoveries(db);
     expect((await getAgentMcpRecovery(db, 1))?.state).toBe('attention');
     const [retried] = await retryMcpRecovery(db, 1);
     expect(retried).toMatchObject({ id: incident.id, state: 'recovering', attempts: 28, escalation_notification_id: null });
     expect(await assertRecoveryActive(db, incident.id)).toBeGreaterThan(29 * 60_000);
-    expect(await db.value("SELECT count(*) FROM openclaw_mcp_recovery WHERE next_attempt_at <= now()")).toBe(1);
+    expect(await db.value("SELECT count(*) FROM agent_mcp_recovery WHERE next_attempt_at <= now()")).toBe(1);
     expect(await db.value("SELECT count(*) FROM task_notes WHERE content LIKE 'Summary: Operator retried%'")).toBe(2);
     expect(await retryMcpRecovery(db, 1)).toEqual([]);
-    await db.run("UPDATE openclaw_mcp_recovery SET deadline_at=now()-interval '1 minute'");
+    await db.run("UPDATE agent_mcp_recovery SET deadline_at=now()-interval '1 minute'");
     await escalateMcpRecoveries(db);
     expect((await getAgentMcpRecovery(db, 1))?.state).toBe('attention');
     expect(await db.value("SELECT count(*) FROM notification_records WHERE type='mcp_recovery_failed'")).toBe(2);

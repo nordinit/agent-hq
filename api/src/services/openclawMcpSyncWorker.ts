@@ -13,9 +13,9 @@ export function assertOpenClawMaintenanceOwner(): void {
 
 export async function drainOpenClawMcpSyncQueue(db: Db): Promise<void> {
   const jobs = await db.all<{ agent_id: number; revision: number }>(`
-    SELECT agent_id, revision FROM openclaw_mcp_sync_queue
+    SELECT agent_id, revision FROM agent_mcp_sync_queue
     WHERE attempts < 3 AND retry_at <= now()
-      AND NOT EXISTS (SELECT 1 FROM openclaw_mcp_recovery r WHERE r.agent_id = openclaw_mcp_sync_queue.agent_id AND r.resolved_at IS NULL)
+      AND NOT EXISTS (SELECT 1 FROM agent_mcp_recovery r WHERE r.agent_id = agent_mcp_sync_queue.agent_id AND r.resolved_at IS NULL)
     ORDER BY retry_at, agent_id LIMIT 32`);
   for (const job of jobs) {
     try {
@@ -25,14 +25,14 @@ export async function drainOpenClawMcpSyncQueue(db: Db): Promise<void> {
         refreshPluginRegistry: true, materializeOpenClawGlobalConfig: true });
       if (!result.ok) throw new Error(result.error ?? 'MCP materialization failed');
       // An edit committed while we worked retains its own queue revision.
-      await db.run('DELETE FROM openclaw_mcp_sync_queue WHERE agent_id = ? AND revision = ?', job.agent_id, job.revision);
+      await db.run('DELETE FROM agent_mcp_sync_queue WHERE agent_id = ? AND revision = ?', job.agent_id, job.revision);
     } catch (error) { await fail(db, job, error); }
   }
 }
 
 async function fail(db: Db, job: { agent_id: number; revision: number }, error: unknown): Promise<void> {
   const message = redactSensitiveRuntimeText(error instanceof Error ? error.message : String(error));
-  await db.run(`UPDATE openclaw_mcp_sync_queue SET attempts = attempts + 1,
+  await db.run(`UPDATE agent_mcp_sync_queue SET attempts = attempts + 1,
     retry_at = now() + interval '15 seconds', error = ? WHERE agent_id = ? AND revision = ?`, message, job.agent_id, job.revision);
   console.warn(`[openclaw-mcp] Agent #${job.agent_id} configuration remains pending: ${message}`);
 }

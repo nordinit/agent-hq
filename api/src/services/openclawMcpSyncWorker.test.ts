@@ -16,9 +16,9 @@ describe('durable MCP sync work', () => {
   it('recovers a committed edit without any in-memory enqueue callback', async () => {
     await drainOpenClawMcpSyncQueue(getDb());
     await getDb().run("UPDATE agents SET workspace_path = '/new/path' WHERE id = 1");
-    expect(await getDb().value('SELECT count(*) FROM openclaw_mcp_sync_queue')).toBe(1);
+    expect(await getDb().value('SELECT count(*) FROM agent_mcp_sync_queue')).toBe(1);
     await drainOpenClawMcpSyncQueue(getDb());
-    expect(await getDb().value('SELECT count(*) FROM openclaw_mcp_sync_queue')).toBe(0);
+    expect(await getDb().value('SELECT count(*) FROM agent_mcp_sync_queue')).toBe(0);
     expect(mockSync).toHaveBeenCalledTimes(2);
   });
   it('does not enqueue activity updates or rolled-back configuration changes', async () => {
@@ -28,7 +28,7 @@ describe('durable MCP sync work', () => {
       await tx.run("UPDATE agents SET workspace_path = '/rolled-back' WHERE id = 1");
       throw new Error('rollback');
     })).rejects.toThrow('rollback');
-    expect(await getDb().value('SELECT count(*) FROM openclaw_mcp_sync_queue')).toBe(0);
+    expect(await getDb().value('SELECT count(*) FROM agent_mcp_sync_queue')).toBe(0);
   });
   it('retains a newer edit arriving during processing', async () => {
     mockSync.mockImplementationOnce(async () => {
@@ -36,14 +36,14 @@ describe('durable MCP sync work', () => {
       return { ok: true };
     });
     await drainOpenClawMcpSyncQueue(getDb());
-    expect(await getDb().value('SELECT revision FROM openclaw_mcp_sync_queue')).toBe(2);
+    expect(await getDb().value('SELECT revision FROM agent_mcp_sync_queue')).toBe(2);
     await drainOpenClawMcpSyncQueue(getDb());
-    expect(await getDb().value('SELECT count(*) FROM openclaw_mcp_sync_queue')).toBe(0);
+    expect(await getDb().value('SELECT count(*) FROM agent_mcp_sync_queue')).toBe(0);
   });
   it('retains failed work with bounded retries', async () => {
     mockSync.mockResolvedValue({ ok: false, error: 'unavailable' });
     await drainOpenClawMcpSyncQueue(getDb());
-    const job = await getDb().get('SELECT attempts,error FROM openclaw_mcp_sync_queue');
+    const job = await getDb().get('SELECT attempts,error FROM agent_mcp_sync_queue');
     expect(job).toEqual({ attempts: 1, error: 'unavailable' });
     await drainOpenClawMcpSyncQueue(getDb());
     expect(mockSync).toHaveBeenCalledTimes(1);
