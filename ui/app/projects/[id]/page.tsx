@@ -130,6 +130,17 @@ export default function ProjectDetailPage() {
     }
   };
 
+  // Clicking into any editable field starts editing, so the Description and the context box
+  // never look editable while silently ignoring input. The header Edit button does the same.
+  const startEditing = () => {
+    if (editing || !project) return;
+    setEditName(project.name);
+    setEditDesc(project.description);
+    setEditContext(project.context_md);
+    setSaveError(null);
+    setEditing(true);
+  };
+
   const handleCancelEdit = () => {
     if (project) {
       setEditName(project.name);
@@ -266,7 +277,7 @@ export default function ProjectDetailPage() {
               <Button variant="ghost" size="sm" onClick={() => handleExport(true)} loading={exporting}>
                 <Paperclip className="w-3.5 h-3.5" /> Export Files
               </Button>
-              <Button variant="ghost" size="sm" onClick={() => setEditing(true)}>
+              <Button variant="ghost" size="sm" onClick={startEditing}>
                 <Pencil className="w-3.5 h-3.5" /> Edit
               </Button>
               {!project.is_default && (
@@ -321,9 +332,14 @@ export default function ProjectDetailPage() {
                 placeholder="What is this project about?"
               />
             ) : (
-              <p className="text-slate-300 text-sm">
-                {project.description || <span className="text-slate-500 italic">No description</span>}
-              </p>
+              <button
+                type="button"
+                onClick={startEditing}
+                className="w-full text-left text-slate-300 text-sm rounded-lg px-3 py-2 -mx-3 hover:bg-slate-700/40 transition-colors"
+                title="Click to edit"
+              >
+                {project.description || <span className="text-slate-500 italic">No description. Click to add one.</span>}
+              </button>
             )}
           </div>
 
@@ -347,7 +363,7 @@ export default function ProjectDetailPage() {
               <label className="text-slate-400 text-xs">Project Context (prepended to all agent dispatches)</label>
               <div className="flex gap-1">
                 <button
-                  onClick={() => setContextTab('edit')}
+                  onClick={() => { setContextTab('edit'); startEditing(); }}
                   className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${
                     contextTab === 'edit'
                       ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
@@ -374,9 +390,9 @@ export default function ProjectDetailPage() {
                 className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-amber-500 font-mono resize-y"
                 rows={12}
                 value={editing ? editContext : project.context_md}
-                onChange={e => editing && setEditContext(e.target.value)}
-                readOnly={!editing}
-                placeholder={editing ? "# Project Context\n\nDescribe the project background, goals, and any relevant information for the agent..." : "No context set. Click Edit to add context."}
+                onFocus={startEditing}
+                onChange={e => { startEditing(); setEditContext(e.target.value); }}
+                placeholder={"# Project Context\n\nDescribe the project background, goals, and any relevant information for the agent..."}
               />
             ) : (
               <div className="bg-slate-700/50 border border-slate-600 rounded-lg p-4 min-h-32 prose prose-invert prose-sm max-w-none
