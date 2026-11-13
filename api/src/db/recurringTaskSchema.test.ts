@@ -1,3 +1,4 @@
+import { configureTestWorkflowStatuses, RELEASE_STATUSES_FOR_TESTS } from '../db/testWorkflowStatuses';
 import { getDb } from './client';
 import { setupTestDb, teardownTestDb } from './testDb';
 import { getDefaultTenantId } from '../lib/tenantContext';
@@ -68,6 +69,7 @@ describe('recurring task scheduling schema', () => {
       INSERT INTO workflows (id, tenant_id, project_id, name, goal, workflow_type, status, length_kind, length_value)
       VALUES (6121, ?, 612, 'Fixed Workflow', '', 'dev', 'active', 'time', '2w')
     `, tenantId);
+    await configureTestWorkflowStatuses(db, 6121, { extra: RELEASE_STATUSES_FOR_TESTS });
     await db.run(`
       INSERT INTO agents (id, tenant_id, name, role, session_key)
       VALUES (6122, ?, 'Pinned Backend', 'backend', 'agent:pinned-backend:main')

@@ -1,3 +1,4 @@
+import { configureTestWorkflowStatuses, RELEASE_STATUSES_FOR_TESTS } from '../db/testWorkflowStatuses';
 import { setupTestDb, teardownTestDb } from '../db/testDb';
 import type { McpApiIdentity } from './mcpApiAuth';
 import { postTaskOutcome } from '../domains/tasks/release';
@@ -43,6 +44,7 @@ async function createDb(): Promise<Db> {
   `);
   await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (1, 1, 'Agent HQ')`);
   await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name, workflow_type) VALUES (10, 1, 1, 'Bugs', 'generic')`);
+  await configureTestWorkflowStatuses(db, 10, { extra: RELEASE_STATUSES_FOR_TESTS });
   await db.run(`
     INSERT INTO agents (id, tenant_id, name, job_title, session_key)
     VALUES (7, 1, 'Cinder', 'Backend Engineer', 'agent:cinder:main')
@@ -172,6 +174,7 @@ describe('applyTaskOutcome scoped routing_config resolution', () => {
   it('persists workflow-defined custom statuses from configured outcome transitions', async () => {
     db = await createDb();
     await db.run(`UPDATE tasks SET status = 'todo' WHERE id = 417`);
+    await db.run(`DELETE FROM workflow_task_statuses WHERE workflow_id = 10`);
     await db.run(`
       INSERT INTO workflow_task_statuses (workflow_id, status_key, label, color, terminal, is_system, stage_order, is_default_entry)
       VALUES
@@ -204,6 +207,7 @@ describe('applyTaskOutcome scoped routing_config resolution', () => {
   it('rejects configured outcome routes whose target status is not defined for the workflow', async () => {
     db = await createDb();
     await db.run(`UPDATE tasks SET status = 'todo' WHERE id = 417`);
+    await db.run(`DELETE FROM workflow_task_statuses WHERE workflow_id = 10`);
     await db.run(`
       INSERT INTO workflow_task_statuses (workflow_id, status_key, label, color, terminal, is_system, stage_order, is_default_entry)
       VALUES
@@ -233,7 +237,8 @@ describe('applyTaskOutcome scoped routing_config resolution', () => {
         code: 'task_status_not_allowed_for_workflow',
         field: 'status',
         attemptedValue: 'field_reported',
-        allowedValues: expect.arrayContaining(['todo', 'ready', 'done', 'cancelled', 'failed', 'needs_attention']),
+        // Only the workflow's configured statuses are allowed; there is no global status list.
+        allowedValues: ['todo', 'ready'],
         metadataTool: 'agent_hq_get_workflow_metadata',
         workflow: expect.objectContaining({
           workflow_id: 10,
@@ -249,6 +254,7 @@ describe('applyTaskOutcome scoped routing_config resolution', () => {
   it('returns workflow-specific allowed values for invalid outcome attempts', async () => {
     db = await createDb();
     await db.run(`UPDATE tasks SET status = 'todo' WHERE id = 417`);
+    await db.run(`DELETE FROM workflow_task_statuses WHERE workflow_id = 10`);
     await db.run(`
       INSERT INTO workflow_task_statuses (workflow_id, status_key, label, color, terminal, is_system, stage_order, is_default_entry)
       VALUES

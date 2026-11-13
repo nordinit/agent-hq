@@ -1,3 +1,4 @@
+import { configureTestWorkflowStatuses, RELEASE_STATUSES_FOR_TESTS } from '../db/testWorkflowStatuses';
 import express from 'express';
 import type { Server } from 'http';
 import { getDb } from '../db/client';
@@ -105,6 +106,7 @@ async function seedFixture(): Promise<void> {
 
   await db.run(`INSERT INTO projects (id, tenant_id, name, description, context_md) VALUES (86, 1, 'Agent HQ', '', '')`);
   await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name, goal, workflow_type, status) VALUES (42, 1, 86, 'Backend Domain Refactor', '', 'generic', 'active')`);
+  await configureTestWorkflowStatuses(db, 42, { extra: RELEASE_STATUSES_FOR_TESTS });
   await db.run(`
     INSERT INTO agents (id, tenant_id, project_id, name, role, session_key, workspace_path, status, preferred_provider)
     VALUES (7, 1, 86, 'Cinder', 'Backend Engineer', 'agent:cinder:test', '/tmp/cinder', 'idle', 'openai-codex')
@@ -196,7 +198,8 @@ describe('tasks route write-model handoff', () => {
   it('uses configured terminality for pause instead of built-in status names', async () => {
     const db = getDb();
     await db.run(`INSERT INTO workflow_task_statuses (workflow_id, status_key, label, terminal)
-      VALUES (42, 'failed', 'Recoverable', 0), (42, 'custom_final', 'Final', 1)`);
+      VALUES (42, 'failed', 'Recoverable', 0), (42, 'custom_final', 'Final', 1)
+      ON CONFLICT (workflow_id, status_key) DO UPDATE SET label = excluded.label, terminal = excluded.terminal`);
     const pause = await fetch(`${baseUrl}/api/v1/tasks/103/pause`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
     });
@@ -380,6 +383,7 @@ describe('tasks route write-model handoff', () => {
       VALUES (1, 'construction', 'compliance', 0), (1, 'construction', 'finance', 0)
     `);
     await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name, goal, workflow_type, status) VALUES (43, 1, 86, 'Construction Workflow', '', 'construction', 'active')`);
+    await configureTestWorkflowStatuses(db, 43, { extra: RELEASE_STATUSES_FOR_TESTS });
 
     const res = await fetch(`${baseUrl}/api/v1/tasks`, {
       method: 'POST',
@@ -410,6 +414,7 @@ describe('tasks route write-model handoff', () => {
       VALUES (1, 'construction', 'compliance', 0), (1, 'construction', 'finance', 0)
     `);
     await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name, goal, workflow_type, status) VALUES (43, 1, 86, 'Construction Workflow', '', 'construction', 'active')`);
+    await configureTestWorkflowStatuses(db, 43, { extra: RELEASE_STATUSES_FOR_TESTS });
 
     const res = await fetch(`${baseUrl}/api/v1/tasks`, {
       method: 'POST',
@@ -438,6 +443,7 @@ describe('tasks route write-model handoff', () => {
       VALUES (1, 'construction', 'compliance', 0), (1, 'construction', 'finance', 0)
     `);
     await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name, goal, workflow_type, status) VALUES (43, 1, 86, 'Construction Workflow', '', 'construction', 'active')`);
+    await configureTestWorkflowStatuses(db, 43, { extra: RELEASE_STATUSES_FOR_TESTS });
 
     const res = await fetch(`${baseUrl}/api/v1/tasks/102`, {
       method: 'PUT',
@@ -617,6 +623,7 @@ describe('tasks route write-model handoff', () => {
     await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (2, 'Workspace Two', 'workspace-two', 0)`);
     await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (287, 2, 'Workspace Two Project')`);
     await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name, workflow_type, status) VALUES (242, 2, 287, 'Workspace Two Workflow', 'generic', 'active')`);
+    await configureTestWorkflowStatuses(db, 242, { extra: RELEASE_STATUSES_FOR_TESTS });
     await db.run(`INSERT INTO agents (id, tenant_id, project_id, name, session_key) VALUES (27, 2, 287, 'Workspace Two Agent', 'agent:workspace-two')`);
     await db.run(`
       INSERT INTO tasks (id, tenant_id, project_id, workflow_id, agent_id, assigned_agent_id, title, status, task_type)

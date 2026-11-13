@@ -495,6 +495,7 @@ describe('routing rules API', () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const db = getDb();
+      await seedWorkflowTypeTaskStatuses(db, 'dev', { tenantId: 1 }); // type-level status configuration, as an install seeds it
       await db.run(`INSERT INTO workflow_type_task_types (tenant_id, workflow_type_key, task_type) VALUES (1, 'dev', 'backend')`);
 
       const response = await fetch(`${baseUrl}/api/v1/routing/rules`, {
@@ -1288,6 +1289,7 @@ describe('routing rules API', () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const db = getDb();
+      await seedWorkflowTypeTaskStatuses(db, 'dev', { tenantId: 1 }); // type-level status configuration, as an install seeds it
       await db.run(`INSERT INTO workflow_type_task_types (tenant_id, workflow_type_key, task_type) VALUES (1, 'dev', 'backend')`);
       await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name, workflow_type) VALUES (56, 1, 1, 'Development', 'dev')`);
       await db.run(`INSERT INTO agents (id, tenant_id, name, session_key, job_title, project_id, enabled) VALUES (108, 1, 'Vulcan', 'agent:vulcan:main', 'Backend Engineer', 1, 1)`);
@@ -2322,6 +2324,7 @@ describe('routing rules API', () => {
 
     try {
       const db = getDb();
+      await seedWorkflowTypeTaskStatuses(db, 'generic', { tenantId: 1 }); // type-level status configuration, as an install seeds it
       await db.run(`INSERT INTO workflows (id, tenant_id, name, project_id, workflow_type) VALUES (501, 1, 'Scoped Workflow', 1, 'generic')`);
       await seedWorkflowTaskPolicy(db, 501);
 

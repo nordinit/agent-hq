@@ -1,6 +1,5 @@
 import { listWorkflowTaskStatuses, listWorkflowTypeTaskStatuses } from '../domains/routing/policy/statuses';
 import { resolveWorkflowTypeForWorkflowId } from '../domains/workflow-definitions/config';
-import { RELEASE_TASK_STATUSES } from './taskStatuses';
 import { type Db } from "../db/adapter/types";
 
 export interface TaskStatusWorkflowScope {
@@ -63,6 +62,11 @@ function normalizeStatus(value: unknown): string | null {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
 }
 
+/**
+ * The statuses a task may hold, read only from configuration: the workflow's own statuses, or its
+ * workflow type's when the workflow has none. There is no global fallback list; an unconfigured
+ * workflow allows no status.
+ */
 export async function listAllowedTaskStatusesForWorkflow(
   db: Db,
   scope: TaskStatusWorkflowScope,
@@ -70,13 +74,11 @@ export async function listAllowedTaskStatusesForWorkflow(
   const workflowStatuses = typeof scope.workflowId === 'number' && Number.isFinite(scope.workflowId)
     ? (await listWorkflowTaskStatuses(db, scope.workflowId)).map((status) => status.name)
     : [];
-  if (workflowStatuses.length > 0) return [...new Set([...workflowStatuses, ...RELEASE_TASK_STATUSES])];
+  if (workflowStatuses.length > 0) return [...new Set(workflowStatuses)];
 
   const workflowType = normalizeStatus(scope.workflowType) ?? (await resolveWorkflowTypeForWorkflowId(db, scope.workflowId ?? null));
   const workflowTypeStatuses = (await listWorkflowTypeTaskStatuses(db, workflowType)).map((status) => status.name);
-  if (workflowTypeStatuses.length > 0) return [...new Set([...workflowTypeStatuses, ...RELEASE_TASK_STATUSES])];
-
-  return [...RELEASE_TASK_STATUSES];
+  return [...new Set(workflowTypeStatuses)];
 }
 
 export async function assertTaskStatusDefinedForWorkflow(
@@ -88,6 +90,16 @@ export async function assertTaskStatusDefinedForWorkflow(
   if (!normalized) throw new Error('status is required');
 
   const allowedStatuses = await listAllowedTaskStatusesForWorkflow(db, scope);
+  if (allowedStatuses.length === 0) {
+    throw new WorkflowAllowedValuesError({
+      message: `"${normalized}" cannot be set: no task statuses are configured for this workflow or its workflow type`,
+      code: 'workflow_statuses_not_configured',
+      field: 'status',
+      attemptedValue: normalized,
+      allowedValues: [],
+      scope,
+    });
+  }
   if (!allowedStatuses.includes(normalized)) {
     throw new WorkflowAllowedValuesError({
       message: `"${normalized}" is not a valid task status for this workflow. Valid values: ${allowedStatuses.join(', ')}`,

@@ -1,3 +1,4 @@
+import { configureTestWorkflowStatuses, RELEASE_STATUSES_FOR_TESTS } from '../db/testWorkflowStatuses';
 import { setupTestDb, teardownTestDb } from '../db/testDb';
 import { assertAtlasDirectStatusGate, canonicalOutcomeRoute, evaluateTaskIntegrity, requireReleaseGate } from './taskRelease';
 import { type Db } from "../db/adapter/types";
@@ -28,6 +29,7 @@ describe('taskRelease configurable outcome routing', () => {
     await db.run(`INSERT INTO projects (id, tenant_id, name, description, context_md, created_at) VALUES (1, ?, 'Agent HQ', '', '', CURRENT_TIMESTAMP)`, tenantId);
     await db.run(`INSERT INTO workflow_types (tenant_id, key, name, description, is_system, created_at, updated_at) VALUES (?, 'enhancements', 'Enhancements', '', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, tenantId);
     await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name, goal, workflow_type, status, length_kind, length_value, created_at) VALUES (10, ?, 1, 'Configurable outcomes', '', 'enhancements', 'active', 'time', '2w', CURRENT_TIMESTAMP)`, tenantId);
+    await configureTestWorkflowStatuses(db, 10, { extra: RELEASE_STATUSES_FOR_TESTS });
     await db.run(`INSERT INTO workflow_task_transitions (tenant_id, workflow_id, task_type, from_status, outcome, to_status, enabled, priority, is_protected, created_at, updated_at) VALUES (?, 10, NULL, 'in_progress', 'ship_it', 'review', 1, 10, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP), (?, 10, NULL, 'in_progress', 'blocked_custom', 'blocked_custom', 1, 5, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, tenantId, tenantId);
     await db.run(`INSERT INTO workflow_type_outcomes (tenant_id, workflow_type_key, task_type, outcome_key, label, description, enabled, behavior, badge_variant, stage_order, is_system, metadata_json, created_at, updated_at) VALUES (?, 'enhancements', NULL, 'ship_it', 'Ship It', 'Move to review', 1, 'base', NULL, 0, 0, '{}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP), (?, 'enhancements', NULL, 'blocked_custom', 'Blocked Custom', 'Custom blocked state', 1, 'base', NULL, 1, 0, '{}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, tenantId, tenantId);
     await db.run(`INSERT INTO tasks (id, tenant_id, title, status, workflow_id, task_type, created_at, updated_at) VALUES (42, ?, 'Configurable outcome task', 'in_progress', 10, 'backend', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, tenantId);

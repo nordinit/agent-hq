@@ -1,9 +1,14 @@
-import { RELEASE_TASK_STATUSES, DEFAULT_TERMINAL_TASK_STATUS_SEEDS } from '../../../lib/taskStatuses';
+import { DEFAULT_TERMINAL_TASK_STATUS_SEEDS } from '../../../lib/taskStatuses';
 import type { PolicyRequirementSeed, PolicyTransitionSeed, WorkflowSeedRow, StarterWorkflowType } from './types';
 import { type Db } from "../../../db/adapter/types";
 import { tableExists as sharedTableExists, columnExists as sharedColumnExists } from "../../../db/introspection";
 
-const DEV_WORKFLOW_STATUSES = RELEASE_TASK_STATUSES.filter(status => status !== 'qa_pass');
+// Starter templates: seed data written into a new workflow type's configuration (policy/seed.ts).
+// They are never consulted to decide whether a status is valid; only configured statuses are.
+const DEV_WORKFLOW_STATUSES = [
+  'todo', 'ready', 'in_progress', 'dev_deploy_queued', 'dev_deploying', 'review', 'ready_to_merge',
+  'deployed', 'done', 'needs_attention', 'cancelled', 'stalled', 'failed', 'blocked',
+] as const;
 const GENERIC_WORKFLOW_STATUSES = ['todo', 'ready', 'in_progress', 'review', 'done'] as const;
 const OPS_WORKFLOW_STATUSES = ['todo', 'intake', 'triage', 'risk_review', 'impact_review', 'action_plan', 'stakeholder_update', 'human_approval', 'blocked', 'stalled', 'done'] as const;
 const LEAD_GENERATION_WORKFLOW_STATUSES = ['intake', 'qualification', 'research', 'outreach_draft', 'human_approval', 'sent', 'follow_up', 'done'] as const;

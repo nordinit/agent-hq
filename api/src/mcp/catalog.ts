@@ -1,6 +1,5 @@
 import {
   VALID_TASK_PRIORITIES,
-  VALID_TASK_STATUSES,
   VALID_TASK_STORY_POINTS,
 } from './apiClient';
 import { toJSONSchema, type ZodTypeAny, z } from 'zod';
@@ -163,7 +162,6 @@ export function getMcpCatalog() {
       'execution',
     ],
     enums: {
-      default_task_statuses: VALID_TASK_STATUSES,
       task_statuses_source: 'workflow_metadata',
       task_statuses_metadata_tool: 'agent_hq_get_workflow_metadata',
       task_priorities: VALID_TASK_PRIORITIES,

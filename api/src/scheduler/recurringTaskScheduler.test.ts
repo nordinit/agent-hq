@@ -1,3 +1,4 @@
+import { configureTestWorkflowStatuses, RELEASE_STATUSES_FOR_TESTS } from '../db/testWorkflowStatuses';
 import { getDb } from '../db/client';
 import { setupTestDb, teardownTestDb } from '../db/testDb';
 import { createRecurringTaskSeries, recordRecurringTaskRun } from '../domains/recurring-tasks';
@@ -29,6 +30,7 @@ describe('recurring task scheduler', () => {
       INSERT INTO workflows (id, project_id, name, goal, workflow_type, status, length_kind, length_value, created_at)
       VALUES (6131, 613, 'Fixed Workflow', '', 'dev', ?, 'time', '2w', CURRENT_TIMESTAMP)
     `, status);
+    await configureTestWorkflowStatuses(db, 6131, { extra: RELEASE_STATUSES_FOR_TESTS });
     await db.run(`
       INSERT INTO agents (id, name, role, session_key)
       VALUES (6132, 'Backend Agent', 'backend', 'agent:backend:main')

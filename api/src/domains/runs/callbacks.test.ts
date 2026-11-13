@@ -1,3 +1,4 @@
+import { configureTestWorkflowStatuses, RELEASE_STATUSES_FOR_TESTS } from '../../db/testWorkflowStatuses';
 import { completeRunInstance, startRunInstance } from './callbacks';
 import { dispatchFailureBackoffSeconds, MAX_DISPATCH_FAILURE_BACKOFF_SECONDS } from '../../lib/dispatchBackoff';
 import { setupTestDb, teardownTestDb } from '../../db/testDb';
@@ -37,6 +38,7 @@ async function seedScope(db: Db): Promise<void> {
     INSERT INTO workflows (id, tenant_id, project_id, name, workflow_type, status)
     VALUES (?, ?, ?, 'Routing', 'dev', 'active')
   `, WORKFLOW_ID, TENANT_ID, PROJECT_ID);
+  await configureTestWorkflowStatuses(db, WORKFLOW_ID, { extra: RELEASE_STATUSES_FOR_TESTS });
   await db.run(`
     INSERT INTO agents (id, tenant_id, name, session_key, openclaw_agent_id, runtime_type)
     VALUES (?, ?, 'Cinder (Backend)', 'cinder-backend', 'cinder-backend', 'openclaw')

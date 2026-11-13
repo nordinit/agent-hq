@@ -1,3 +1,4 @@
+import { configureTestWorkflowStatuses, RELEASE_STATUSES_FOR_TESTS } from '../db/testWorkflowStatuses';
 import express from 'express';
 import type { Server } from 'http';
 import { getDb } from '../db/client';
@@ -35,6 +36,7 @@ describe('manual MCP/admin task moves', () => {
     await db.run(`INSERT INTO projects (id, tenant_id, name, description, context_md, created_at) VALUES (1, ?, 'Agent HQ', '', '', CURRENT_TIMESTAMP)`, tenantId);
     await db.run(`INSERT INTO workflow_types (tenant_id, key, name, description, is_system, created_at, updated_at) VALUES (?, 'bugs', 'Bugs', '', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, tenantId);
     await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name, goal, workflow_type, status, length_kind, length_value, created_at) VALUES (56, ?, 1, 'Bugs', '', 'bugs', 'active', 'time', '2w', CURRENT_TIMESTAMP)`, tenantId);
+    await configureTestWorkflowStatuses(db, 56, { extra: RELEASE_STATUSES_FOR_TESTS });
     await db.run(`INSERT INTO workflow_task_transitions (tenant_id, workflow_id, task_type, from_status, outcome, to_status, enabled, priority, is_protected, created_at, updated_at) VALUES
       (?, 56, NULL, 'dev_deploy_queued', 'completed_for_review', 'review', 1, 30, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
       (?, 56, NULL, 'dev_deploy_queued', 'blocked', 'blocked', 1, 20, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),

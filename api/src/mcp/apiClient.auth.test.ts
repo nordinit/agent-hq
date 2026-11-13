@@ -1,3 +1,4 @@
+import { configureTestWorkflowStatuses, RELEASE_STATUSES_FOR_TESTS } from '../db/testWorkflowStatuses';
 import express from 'express';
 import type { Server } from 'http';
 import { getDb } from '../db/client';
@@ -61,6 +62,7 @@ async function seedAtlasTask(): Promise<{ agentId: number; taskId: number }> {
     INSERT INTO workflows (id, tenant_id, project_id, name, goal, workflow_type, status, length_kind, length_value)
     VALUES (9103, ?, 9101, 'MCP Auth Workflow', '', 'dev', 'active', 'time', '2w')
   `, tenantId);
+  await configureTestWorkflowStatuses(db, 9103, { extra: RELEASE_STATUSES_FOR_TESTS });
   await db.run(`
     INSERT INTO tasks (id, tenant_id, title, description, status, priority, project_id, workflow_id, agent_id, task_type, custom_fields_json)
     VALUES (9102, ?, 'MCP auth task', '', 'todo', 'medium', 9101, 9103, ?, 'backend', '{}')
@@ -77,6 +79,7 @@ async function seedCustomFieldWorkflow(): Promise<{ projectId: number; workflowI
     INSERT INTO workflows (id, tenant_id, project_id, name, goal, workflow_type, status)
     VALUES (9202, ?, 9201, 'Configurable Workflow', '', 'custom_mcp', 'active')
   `, tenantId);
+  await configureTestWorkflowStatuses(db, 9202, { extra: RELEASE_STATUSES_FOR_TESTS });
   await db.run(`
     INSERT INTO task_field_schemas (tenant_id, workflow_type_key, task_type, schema_json)
     VALUES (?, 'custom_mcp', NULL, ?)

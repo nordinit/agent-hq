@@ -6,11 +6,10 @@ import {
   recordRecurringTaskRun,
 } from '../domains/recurring-tasks';
 import type { RecurringTaskRunRecord, RecurringTaskSeriesRecord } from '../domains/recurring-tasks';
-import { isTaskStatus } from '../lib/taskStatuses';
+import { listAllowedTaskStatusesForWorkflow } from '../lib/taskStatusValidation';
 import { listConfiguredTerminalStatuses } from '../domains/tasks/terminality';
 import { isValidTaskType } from '../lib/taskTypes';
 import { isTaskTypeAllowedForWorkflowType } from '../domains/workflow-definitions/config';
-import { listWorkflowTaskStatuses } from '../domains/routing/policy/statuses';
 import { type Db } from "../db/adapter/types";
 
 const DEFAULT_LIMIT = 25;
@@ -190,14 +189,12 @@ async function validateSeriesForCreation(db: Db, series: RecurringTaskSeriesReco
   if (!isValidTaskType(series.task_type)) {
     throw new Error(`invalid_task_type: "${series.task_type}" is not a valid task type`);
   }
-  if (!isTaskStatus(series.status_on_create)) {
-    throw new Error(`invalid_status_on_create: "${series.status_on_create}" is not a valid task status`);
-  }
   if (!await isTaskTypeAllowedForWorkflowType(db, workflow.workflow_type ?? 'generic', series.task_type)) {
     throw new Error(`invalid_task_type: "${series.task_type}" is not allowed for workflow type "${workflow.workflow_type ?? 'generic'}"`);
   }
-  const workflowStatuses = await listWorkflowTaskStatuses(db, series.workflow_id);
-  if (workflowStatuses.length > 0 && !workflowStatuses.some(status => status.name === series.status_on_create)) {
+  // Valid statuses are the workflow's configured ones (or its type's); there is no global list.
+  const workflowStatuses = await listAllowedTaskStatusesForWorkflow(db, { workflowId: series.workflow_id, workflowType: workflow.workflow_type ?? null });
+  if (!workflowStatuses.includes(series.status_on_create)) {
     throw new Error(`invalid_status_on_create: "${series.status_on_create}" is not configured for workflow ${series.workflow_id}`);
   }
 }

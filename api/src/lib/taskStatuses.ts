@@ -1,31 +1,16 @@
-export const TASK_STATUSES = [
-  'todo',
-  'ready',
-  'in_progress',
-  'dev_deploy_queued',
-  'dev_deploying',
-  'review',
-  'qa_pass',
-  'ready_to_merge',
-  'deployed',
-  'done',
-  'needs_attention',
-  'cancelled',
-  'stalled',
-  'failed',
-  'blocked',
-] as const;
-
-export type TaskStatus = typeof TASK_STATUSES[number];
-
-export const RELEASE_TASK_STATUSES = TASK_STATUSES;
-export type ReleaseTaskStatus = TaskStatus;
-
-export const DIRECT_GATED_TASK_STATUSES = ['review', 'qa_pass', 'ready_to_merge', 'deployed', 'done'] as const;
-export type DirectGatedTaskStatus = typeof DIRECT_GATED_TASK_STATUSES[number];
+/**
+ * Task statuses are 100% configuration. Valid statuses for a task come only from its workflow's
+ * configured statuses (workflow_task_statuses), or from its workflow type's (workflow_type_task_statuses)
+ * when the workflow has none of its own. There is no global list of valid statuses: see
+ * lib/taskStatusValidation.ts.
+ *
+ * Code that reacts to a status by name ('blocked', 'in_progress', ...) is engine behaviour for
+ * workflows that configure that status. It does not make the status valid anywhere.
+ */
+export type TaskStatus = string;
 
 /**
- * Seed data only — the terminal defaults a fresh install starts with.
+ * Seed data only: the terminal defaults the starter workflow templates are created with.
  *
  * This is NOT the answer to "is this status terminal?". Terminality is operator
  * configuration held in task_statuses / workflow_type_task_statuses /
@@ -35,7 +20,3 @@ export type DirectGatedTaskStatus = typeof DIRECT_GATED_TASK_STATUSES[number];
  * this constant would override what the user configured.
  */
 export const DEFAULT_TERMINAL_TASK_STATUS_SEEDS = ['done', 'cancelled', 'failed'] as const;
-
-export function isTaskStatus(value: unknown): value is TaskStatus {
-  return typeof value === 'string' && (TASK_STATUSES as readonly string[]).includes(value);
-}

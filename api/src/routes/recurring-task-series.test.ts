@@ -1,3 +1,4 @@
+import { configureTestWorkflowStatuses, RELEASE_STATUSES_FOR_TESTS } from '../db/testWorkflowStatuses';
 import express from 'express';
 import type { Server } from 'http';
 import { getDb } from '../db/client';
@@ -44,6 +45,7 @@ async function seedFixture(): Promise<void> {
       (6142, ?, 614, 'Closed Workflow', '', 'recurring_api', 'closed', 'time', '2w'),
       (6151, ?, 615, 'Other Workflow', '', 'recurring_api', 'active', 'time', '2w')
   `, tenantId, tenantId, tenantId);
+  await configureTestWorkflowStatuses(db, 6141, { extra: RELEASE_STATUSES_FOR_TESTS });
   await db.run(`
     INSERT INTO agents (id, tenant_id, project_id, name, role, session_key, workspace_path, status, preferred_provider)
     VALUES (6143, ?, 614, 'Pinned Cinder', 'Backend Engineer', 'agent:pinned-cinder:test', '/tmp/cinder', 'idle', 'openai-codex')
@@ -256,7 +258,7 @@ describe('recurring task series API', () => {
       [{ workflow_id: 6142 }, 'fixed_workflow_unavailable'],
       [{ schedule: 'weekly on monday' }, 'schedule_invalid'],
       [{ timezone: 'Mars/Olympus' }, 'timezone_invalid'],
-      [{ status_on_create: 'not_real' }, 'status_on_create_unsupported'],
+      [{ status_on_create: 'not_real' }, 'status_on_create_not_allowed_for_workflow'],
       [{ task_type: 'qa' }, 'task_type_not_allowed_for_workflow_type'],
     ] as Array<[Record<string, unknown>, string]>) {
       const res = await fetch(`${baseUrl}/api/v1/recurring-task-series`, {
@@ -318,6 +320,7 @@ describe('recurring task series API', () => {
       INSERT INTO workflows (id, tenant_id, project_id, name, goal, workflow_type, status, length_kind, length_value)
       VALUES (7141, ?, 714, 'Globex Workflow', '', 'recurring_api', 'active', 'time', '2w')
     `, globexTenantId);
+    await configureTestWorkflowStatuses(db, 7141, { extra: RELEASE_STATUSES_FOR_TESTS });
     await db.run(`
       INSERT INTO agents (id, tenant_id, project_id, name, role, session_key, workspace_path, status, preferred_provider)
       VALUES (7143, ?, 714, 'Globex Agent', 'Backend Engineer', 'agent:globex:test', '/tmp/globex', 'idle', 'openai-codex')

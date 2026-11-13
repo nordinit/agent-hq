@@ -1,3 +1,4 @@
+import { configureTestWorkflowStatuses, RELEASE_STATUSES_FOR_TESTS } from '../db/testWorkflowStatuses';
 import { setupTestDb, teardownTestDb } from '../db/testDb';
 import express from 'express';
 import type { Server } from 'http';
@@ -23,6 +24,7 @@ async function resetDb(): Promise<void> {
   await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (1, 1, 'Agent HQ')`);
   await db.run(`INSERT INTO workflow_types (tenant_id, key, name, is_system) VALUES (1, 'generic', 'Generic', 1)`);
   await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name, workflow_type) VALUES (10, 1, 1, 'Bugs', 'generic')`);
+  await configureTestWorkflowStatuses(db, 10, { extra: RELEASE_STATUSES_FOR_TESTS });
   await db.run(`INSERT INTO agents (id, tenant_id, name, session_key, enabled) VALUES (7, 1, 'Talon', 'agent:talon:main', 1)`);
   await db.run(`
     INSERT INTO tasks (id, tenant_id, title, status, task_type, workflow_id, project_id, agent_id, custom_fields_json, active_instance_id)

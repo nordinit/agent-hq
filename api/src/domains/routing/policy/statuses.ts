@@ -1,7 +1,5 @@
 import type { WorkflowTaskRoutingRuleRow, WorkflowTaskStatusMeta, WorkflowTaskTransitionRequirementRow, WorkflowTaskTransitionRow } from './types';
 import {
-  buildCanonicalPolicyStatuses,
-  isWorkflowTypeStatusSeeded,
   parseJsonArray,
   parseJsonObject,
   workflowTypeTenantPredicate,
@@ -55,18 +53,8 @@ export async function listWorkflowTaskStatuses(
     return [];
   }
 
-  return buildCanonicalPolicyStatuses(null).map((row, index) => ({
-    name: row.name,
-    label: row.label,
-    color: row.color,
-    terminal: Boolean(row.terminal),
-    is_system: Boolean(row.is_system),
-    allowed_transitions: parseJsonArray(row.allowed_transitions),
-    emoji: row.emoji,
-    metadata: row.emoji ? { emoji: row.emoji } : {},
-    stage_order: index,
-    is_default_entry: index === 0,
-  }));
+  // Statuses are configuration only: without a configured workflow there are none (no built-in fallback list).
+  return [];
 }
 
 export async function listWorkflowTypeTaskStatuses(
@@ -112,23 +100,11 @@ export async function listWorkflowTypeTaskStatuses(
         };
       });
     }
-    if (await isWorkflowTypeStatusSeeded(db, normalizedWorkflowType, options?.tenantId)) {
-      return [];
-    }
   }
 
-  return buildCanonicalPolicyStatuses(normalizedWorkflowType).map((row, index) => ({
-    name: row.name,
-    label: row.label,
-    color: row.color,
-    terminal: Boolean(row.terminal),
-    is_system: Boolean(row.is_system),
-    allowed_transitions: parseJsonArray(row.allowed_transitions),
-    emoji: row.emoji,
-    metadata: row.emoji ? { emoji: row.emoji } : {},
-    stage_order: index,
-    is_default_entry: index === 0,
-  }));
+  // Statuses are configuration only: an unconfigured workflow type has none. Starter templates
+  // (buildCanonicalPolicyStatuses) are used solely to seed configuration in policy/seed.ts.
+  return [];
 }
 
 export async function listWorkflowTaskTransitions(

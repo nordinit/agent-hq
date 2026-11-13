@@ -1,5 +1,6 @@
 // Routing fixtures mock the independent publication boundary; authority is tested in access/boundaries.test.ts.
 jest.mock('../domains/execution/authority', () => ({...jest.requireActual('../domains/execution/authority'),requirePublishedProfile:jest.fn(async()=>({}))}));
+import { configureTestWorkflowStatuses, RELEASE_STATUSES_FOR_TESTS } from '../db/testWorkflowStatuses';
 import { setupTestDb, teardownTestDb } from '../db/testDb';
 import { type Db } from '../db/adapter/types';
 
@@ -131,6 +132,7 @@ beforeEach(async () => {
   await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (86, 1, 'Agent HQ')`);
   await db.run(`INSERT INTO workflow_types (tenant_id, key, name, description, is_system) VALUES (1, 'team', 'Team', '', 0)`);
   await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name, workflow_type, status) VALUES (10, 1, 86, 'Build', 'team', 'active')`);
+  await configureTestWorkflowStatuses(db, 10, { extra: RELEASE_STATUSES_FOR_TESTS });
   await addAgent(DEV_ONE, 'Dev One');
   await addAgent(DEV_TWO, 'Dev Two');
   await addAgent(REVIEWER, 'Reviewer');

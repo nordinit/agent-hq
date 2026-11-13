@@ -1,4 +1,4 @@
-import { VALID_TASK_PRIORITIES, VALID_TASK_STATUSES, VALID_TASK_STORY_POINTS } from '../apiClient';
+import { VALID_TASK_PRIORITIES, VALID_TASK_STORY_POINTS } from '../apiClient';
 import { getMcpCatalog } from '../catalog';
 import { McpDomainContext } from '../registrar';
 
@@ -9,12 +9,11 @@ export function registerResourcesTools(ctx: McpDomainContext) {
     [{ id: 'agent-hq-workflow-statuses', uri: 'agent-hq://workflow/statuses' }],
     () =>
       JSON.stringify({
-        default_statuses: VALID_TASK_STATUSES,
         statuses_source: 'workflow_metadata',
         metadata_tool: 'agent_hq_get_workflow_metadata',
-        pipeline: 'todo → ready → dispatched → in_progress → dev_deploy_queued → dev_deploying → review → ready_to_merge → deployed → done',
-        terminal: ['done', 'cancelled', 'failed'],
-        other: ['stalled', 'blocked'],
+        note: 'Task statuses, their order and which are terminal are configured per workflow (or its workflow type). '
+          + 'There is no global status list: read the statuses of your task\'s workflow with agent_hq_get_workflow_metadata '
+          + 'and use only those.',
       }),
   );
   

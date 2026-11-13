@@ -1,8 +1,7 @@
-import { listWorkflowTaskStatuses } from '../routing/policy/statuses';
+import { listAllowedTaskStatusesForWorkflow } from '../../lib/taskStatusValidation';
 import { hideArchivedProjectsCondition } from '../../lib/projectArchive';
 import { createTaskRecord } from '../tasks/writeModel';
 import { VALID_STORY_POINTS } from '../tasks/fields';
-import { isTaskStatus } from '../../lib/taskStatuses';
 import { isValidTaskType } from '../../lib/taskTypes';
 import { isTaskTypeAllowedForWorkflowType } from '../workflow-definitions/config';
 import type {
@@ -330,12 +329,15 @@ async function validateWorkflowFields(db: Db, workflow: WorkflowValidationRow, t
   if (!await isTaskTypeAllowedForWorkflowType(db, workflow.workflow_type ?? 'generic', taskType)) {
     throw badRequest(`task_type "${taskType}" is not allowed for workflow type "${workflow.workflow_type ?? 'generic'}"`, 'task_type_not_allowed_for_workflow_type');
   }
-  if (!isTaskStatus(statusOnCreate)) {
-    throw badRequest(`status_on_create "${statusOnCreate}" is not supported`, 'status_on_create_unsupported');
-  }
-  const statuses = (await listWorkflowTaskStatuses(db, workflow.id)).map(status => status.name);
-  if (statuses.length > 0 && !statuses.includes(statusOnCreate)) {
-    throw badRequest(`status_on_create "${statusOnCreate}" is not valid for workflow_id ${workflow.id}`, 'status_on_create_not_allowed_for_workflow');
+  // Valid statuses are the workflow's configured ones (or its type's); there is no global list.
+  const statuses = await listAllowedTaskStatusesForWorkflow(db, { workflowId: workflow.id, workflowType: workflow.workflow_type ?? null });
+  if (!statuses.includes(statusOnCreate)) {
+    throw badRequest(
+      statuses.length > 0
+        ? `status_on_create "${statusOnCreate}" is not valid for workflow_id ${workflow.id}`
+        : `status_on_create "${statusOnCreate}" cannot be used: no task statuses are configured for workflow_id ${workflow.id}`,
+      'status_on_create_not_allowed_for_workflow',
+    );
   }
 }
 

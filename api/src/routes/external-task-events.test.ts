@@ -1,4 +1,5 @@
 import { setupTestDb, teardownTestDb } from '../db/testDb';
+import { configureTestWorkflowStatuses, RELEASE_STATUSES_FOR_TESTS } from '../db/testWorkflowStatuses';
 import express from 'express';
 import type { Server } from 'http';
 import fs from 'fs';
@@ -51,6 +52,7 @@ async function resetDb(): Promise<void> {
   await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (1, 1, 'Agent HQ')`);
   await db.run(`INSERT INTO workflow_types (tenant_id, key, name, is_system) VALUES (1, 'generic', 'Generic', 1)`);
   await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name, workflow_type) VALUES (10, 1, 1, 'Enhancements', 'generic')`);
+  await configureTestWorkflowStatuses(db, 10, { extra: RELEASE_STATUSES_FOR_TESTS });
   await db.run(`INSERT INTO agents (id, tenant_id, project_id, name, session_key, slug, openclaw_agent_id, job_title, enabled) VALUES (7, 1, 1, 'Lease Manager', 'agent:lease-manager:main', ?, ?, 'Service', 1)`, DEV_ENV_LEASE_MANAGER_SOURCE, DEV_ENV_LEASE_MANAGER_SOURCE);
   await db.run(`INSERT INTO agents (id, tenant_id, project_id, name, session_key, slug, job_title, enabled) VALUES (42, 1, 1, 'Cinder', 'agent:cinder:main', 'cinder-backend', 'Backend Engineer', 1)`);
   await db.run(`INSERT INTO agents (id, tenant_id, project_id, name, session_key, slug, job_title, enabled) VALUES (43, 1, 1, 'Scoped No Access', 'agent:scoped-no-access:main', 'scoped-no-access', 'Backend Engineer', 1)`);
@@ -270,6 +272,7 @@ describe('external task events route', () => {
     const db = getDb();
     await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (2, 1, 'Other Project')`);
     await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name, workflow_type) VALUES (20, 1, 2, 'Other Project Workflow', 'generic')`);
+    await configureTestWorkflowStatuses(db, 20, { extra: RELEASE_STATUSES_FOR_TESTS });
     await db.run(`
       INSERT INTO tasks (
         id, tenant_id, title, status, task_type, workflow_id, project_id, agent_id, active_instance_id, review_owner_agent_id, updated_at

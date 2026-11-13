@@ -9,7 +9,6 @@ import { agentRunHeaders, runIdentitySourceFromEnv, type AgentRunIdentity } from
  * Never accesses the database directly.
  */
 
-import { TASK_STATUSES } from '../lib/taskStatuses';
 import { isBackendSystemOutcome } from '../lib/systemOutcomes';
 
 type RecordLike = Record<string, unknown>;
@@ -501,7 +500,6 @@ export const VALID_TASK_TYPES = [
   'adhoc',
   'other',
 ] as const;
-export const VALID_TASK_STATUSES = TASK_STATUSES;
 
 export class AgentHqApiClient {
   private readonly runIdentity: () => AgentRunIdentity | null;
