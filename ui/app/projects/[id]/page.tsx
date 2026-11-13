@@ -50,7 +50,8 @@ export default function ProjectDetailPage() {
   const [editName, setEditName] = useState('');
   const [editDesc, setEditDesc] = useState('');
   const [editContext, setEditContext] = useState('');
-  const [contextTab, setContextTab] = useState<TabMode>('edit');
+  // The context box opens on the rendered Preview; editing switches it to the editor.
+  const [contextTab, setContextTab] = useState<TabMode>('preview');
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
@@ -123,6 +124,7 @@ export default function ProjectDetailPage() {
       });
       setProject(updated);
       setEditing(false);
+      setContextTab('preview');
     } catch (e) {
       setSaveError(String(e));
     } finally {
@@ -138,6 +140,7 @@ export default function ProjectDetailPage() {
     setEditDesc(project.description);
     setEditContext(project.context_md);
     setSaveError(null);
+    setContextTab('edit');
     setEditing(true);
   };
 
@@ -148,6 +151,7 @@ export default function ProjectDetailPage() {
       setEditContext(project.context_md);
     }
     setEditing(false);
+    setContextTab('preview');
     setSaveError(null);
   };
 

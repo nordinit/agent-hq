@@ -19,3 +19,9 @@ test('the context Edit tab, the description and the header button all start edit
   assert.match(page, /<button\s+type="button"\s+onClick=\{startEditing\}[\s\S]*?No description\. Click to add one\./);
   assert.match(page, /<Button variant="ghost" size="sm" onClick=\{startEditing\}>/);
 });
+
+test('the context box opens on Preview and returns to it after saving or cancelling', () => {
+  assert.match(page, /useState<TabMode>\('preview'\)/);
+  assert.match(page, /setEditing\(false\);\s*setContextTab\('preview'\);/);
+  assert.match(page, /setContextTab\('edit'\);\s*setEditing\(true\);/);
+});
