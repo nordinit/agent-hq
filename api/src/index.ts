@@ -1,4 +1,5 @@
 import executionRouter from './routes/execution';
+import { activeProjectPredicate } from './lib/projectArchive';
 import './config/loadRootEnv';
 import { assertOpenClawMaintenanceOwner, startOpenClawMcpSyncWorker } from './services/openclawMcpSyncWorker';
 import express, { type Request } from 'express';
@@ -527,13 +528,15 @@ app.get('/api/v1/stats', async (req, res) => {
     const db = getDb();
     const tenantId = await resolveTenantIdFromRequest(db, req);
     const projectId = Number(req.query.project_id) || null;
-    const agentProjectWhere = projectId ? 'WHERE tenant_id = ? AND project_id = ?' : 'WHERE tenant_id = ?';
-    const enabledAgentProjectWhere = projectId ? 'AND tenant_id = ? AND project_id = ?' : 'AND tenant_id = ?';
+    // Without a project filter, archived projects and their agents and runs are left out.
+    const activeAgentProject = activeProjectPredicate('agents.project_id');
+    const agentProjectWhere = projectId ? 'WHERE tenant_id = ? AND project_id = ?' : `WHERE tenant_id = ? AND ${activeAgentProject}`;
+    const enabledAgentProjectWhere = projectId ? 'AND tenant_id = ? AND project_id = ?' : `AND tenant_id = ? AND ${activeAgentProject}`;
     const agentProjectParams = projectId ? [tenantId, projectId] : [tenantId];
     const scopedJobJoin = 'LEFT JOIN tasks t ON t.id = ji.task_id LEFT JOIN agents a ON a.id = ji.agent_id';
     const scopedJobWhere = projectId
       ? ' AND ((t.tenant_id = ? AND t.project_id = ?) OR (ji.task_id IS NULL AND a.tenant_id = ? AND a.project_id = ?))'
-      : ' AND (t.tenant_id = ? OR (ji.task_id IS NULL AND a.tenant_id = ?))';
+      : ` AND (t.tenant_id = ? OR (ji.task_id IS NULL AND a.tenant_id = ?)) AND ${activeProjectPredicate('COALESCE(t.project_id, a.project_id)')}`;
     const scopedJobParams = projectId ? [tenantId, projectId, tenantId, projectId] : [tenantId, tenantId];
 
     const totalAgents = (await db.get(`SELECT COUNT(*) as n FROM agents ${agentProjectWhere}`, ...agentProjectParams) as { n: number }).n;

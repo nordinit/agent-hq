@@ -1,4 +1,5 @@
 import type { EnvironmentSetup } from '../../lib/environmentSetup';
+import { hideArchivedProjectsCondition } from '../../lib/projectArchive';
 import { type Db } from "../../db/adapter/types";
 import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../../db/introspection";
 
@@ -50,7 +51,7 @@ async function workflowRoutingJobsPredicate(db: Db): Promise<string> {
 
 export async function listWorkflows(
   db: Db,
-  query: { project_id?: unknown; include_closed?: unknown; tenant_id?: unknown },
+  query: { project_id?: unknown; include_closed?: unknown; tenant_id?: unknown; include_archived?: unknown },
 ) {
   const { project_id, tenant_id } = query;
   const routingAgentCountPredicate = await workflowRoutingAgentCountPredicate(db);
@@ -80,6 +81,8 @@ export async function listWorkflows(
     conditions.push('s.project_id = ?');
     params.push(Number(project_id));
   }
+  const hideArchived = hideArchivedProjectsCondition(query, 's.project_id');
+  if (hideArchived) conditions.push(hideArchived);
   if (tenant_id) {
     conditions.push('s.tenant_id = ?');
     params.push(Number(tenant_id));

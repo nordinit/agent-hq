@@ -15,6 +15,11 @@ deleteTenant: (tenantId: number, confirmation: string) =>
   }),
 // Projects
 getProjects: () => apiFetch<Project[]>('/api/v1/projects'),
+getArchivedProjects: () => apiFetch<Project[]>('/api/v1/projects?archived=true'),
+archiveProject: (id: number) =>
+  apiFetch<{ ok: boolean; project: Project; running_instances: number }>(`/api/v1/projects/${id}/archive`, { method: 'POST' }),
+unarchiveProject: (id: number) =>
+  apiFetch<{ ok: boolean; project: Project }>(`/api/v1/projects/${id}/unarchive`, { method: 'POST' }),
 getProject: (id: number) => apiFetch<Project>(`/api/v1/projects/${id}`),
 getDefaultProject: () => apiFetch<{ project: Project | null; default_project_id: number | null }>('/api/v1/projects/default'),
 exportProjectManifest: (id: number, includeFiles = false) =>
@@ -44,7 +49,10 @@ deleteProject: (id: number, options?: { force?: boolean; confirm?: boolean }) =>
   if (options?.force) params.set('force', 'true');
   if (options?.confirm) params.set('confirm', 'true');
   const query = params.toString();
-  return apiFetch<{ ok: boolean }>(`/api/v1/projects/${id}${query ? `?${query}` : ''}`, { method: 'DELETE' });
+  return apiFetch<{ ok: boolean; agents_deleted?: number; agents_archived?: number; agents_kept?: string[] }>(
+    `/api/v1/projects/${id}${query ? `?${query}` : ''}`,
+    { method: 'DELETE' },
+  );
 },
 checkProjectCascade: (id: number) =>
   apiFetch<{ active_tasks: number; running_instances: number; dependent_workflows: number; dependent_tasks: number; dependent_agents: number }>(`/api/v1/projects/${id}/cascade-check`),

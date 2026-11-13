@@ -1,4 +1,5 @@
 import {projectContext} from '../domains/access/projectContext';
+import { ATLAS_SYSTEM_ROLE } from '../lib/atlasAgent';
 import { Router, Request, Response } from 'express';
 import { getDb } from '../db/client';
 import { writeProjectAudit, diffFields, extractActor } from '../lib/projectAudit';
@@ -21,6 +22,9 @@ import {
 } from '../lib/projectPortability';
 
 import { requireNumericId } from '../lib/routeParams';
+import { archivedScopeFromQuery } from '../lib/projectArchive';
+import { triggerDispatch } from '../services/dispatchTrigger';
+import { deleteAgentWithCleanup } from './agents';
 
 const router = Router();
 // Rejects a non-numeric :id with a 404 before it reaches the database. Must be per-router:
@@ -71,6 +75,7 @@ interface Project {
   repo_url: string | null;
   repo_access_mode: 'worktree' | 'clone' | null;
   created_at: string;
+  archived_at: string | Date | null;
   is_default?: number;
 }
 
@@ -105,14 +110,32 @@ async function projectExistsForTenant(db: ReturnType<typeof getDb>, projectId: n
   }
 }
 
-// GET /api/v1/projects
-router.get('/', async (_req: Request, res: Response) => {
+async function projectArchivedAt(db: ReturnType<typeof getDb>, projectId: number): Promise<string | Date | null> {
+  const row = await db.get<{ archived_at: string | Date | null }>('SELECT archived_at FROM projects WHERE id = ?', projectId);
+  return row?.archived_at ?? null;
+}
+
+async function countRunningProjectInstances(db: ReturnType<typeof getDb>, projectId: number, tenantId: number): Promise<number> {
+  const row = await db.get<{ count: number }>(`
+    SELECT COUNT(*) as count FROM job_instances ji
+    JOIN agents a ON a.id = ji.agent_id
+    WHERE a.project_id = ? AND a.tenant_id = ? AND ji.status IN ('queued', 'dispatched', 'running')
+  `, projectId, tenantId);
+  return Number(row?.count ?? 0);
+}
+
+// GET /api/v1/projects — active projects. ?archived=true lists archived ones instead, and
+// ?include_archived=true lists both.
+router.get('/', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = await resolveTenantIdFromRequest(db, _req);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    const scope = archivedScopeFromQuery(req.query as Record<string, unknown>);
+    const where = scope === 'active' ? 'WHERE p.archived_at IS NULL'
+      : scope === 'archived' ? 'WHERE p.archived_at IS NOT NULL' : '';
     const projects = await db.all(`
-      ${projectSelectSqlForTenant()}
-      ORDER BY p.created_at DESC
+      ${projectSelectSqlForTenant(where)}
+      ORDER BY ${scope === 'archived' ? 'p.archived_at DESC' : 'p.created_at DESC'}
     `, tenantId);
     res.json(projects);
   } catch (err) {
@@ -187,6 +210,9 @@ router.put('/:id/default', async (req: Request, res: Response) => {
     }
 
     if (!await projectExistsForTenant(db, projectId, tenantId)) return res.status(404).json({ error: 'Project not found' });
+    if (await projectArchivedAt(db, projectId)) {
+      return res.status(409).json({ error: 'An archived project cannot be the default project. Unarchive it first.', code: 'project_archived' });
+    }
     await setDefaultProjectId(db, projectId);
     const actor = extractActor(req);
     await writeProjectAudit(db, projectId, 'project', projectId, 'updated', actor, { default_project: true });
@@ -337,6 +363,65 @@ router.put('/:id', async (req: Request, res: Response) => {
   }
 });
 
+// POST /api/v1/projects/:id/archive — stop automation and hide the project and its contents.
+// Runs already in flight finish normally; nothing new is dispatched or scheduled.
+router.post('/:id/archive', async (req: Request, res: Response) => {
+  try {
+    const db = getDb();
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    const projectId = Number(req.params.id);
+    const project = await db.get(`SELECT * FROM projects ${tenantScopedWhere({ where: 'id = ?' })}`, ...tenantScopedParams(tenantId, [projectId])) as Project | undefined;
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    if (await getDefaultProjectId(db) === projectId) {
+      return res.status(409).json({
+        error: 'The default project cannot be archived. Make another project the default first.',
+        code: 'project_is_default',
+      });
+    }
+
+    if (!project.archived_at) {
+      await runTenantScopedUpdate(db, {
+        table: 'projects',
+        id: projectId,
+        tenantId,
+        values: { archived_at: new Date().toISOString() },
+      });
+      await writeProjectAudit(db, projectId, 'project', projectId, 'updated', extractActor(req), { archived: true });
+    }
+
+    const archived = await db.get(projectSelectSqlForTenant('WHERE p.id = ?'), projectId, tenantId);
+    return res.json({
+      ok: true,
+      project: archived,
+      running_instances: await countRunningProjectInstances(db, projectId, tenantId),
+    });
+  } catch (err) {
+    return sendRouteError(res, err);
+  }
+});
+
+// POST /api/v1/projects/:id/unarchive — return the project to navigation and automation.
+router.post('/:id/unarchive', async (req: Request, res: Response) => {
+  try {
+    const db = getDb();
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    const projectId = Number(req.params.id);
+    const project = await db.get(`SELECT * FROM projects ${tenantScopedWhere({ where: 'id = ?' })}`, ...tenantScopedParams(tenantId, [projectId])) as Project | undefined;
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    if (project.archived_at) {
+      await runTenantScopedUpdate(db, { table: 'projects', id: projectId, tenantId, values: { archived_at: null } });
+      await writeProjectAudit(db, projectId, 'project', projectId, 'updated', extractActor(req), { archived: false });
+      triggerDispatch(projectId);
+    }
+
+    const restored = await db.get(projectSelectSqlForTenant('WHERE p.id = ?'), projectId, tenantId);
+    return res.json({ ok: true, project: restored });
+  } catch (err) {
+    return sendRouteError(res, err);
+  }
+});
+
 // GET /api/v1/projects/:id/cascade-check — check for active work before deleting
 router.get('/:id/cascade-check', async (req: Request, res: Response) => {
   try {
@@ -371,59 +456,75 @@ router.get('/:id/cascade-check', async (req: Request, res: Response) => {
   }
 });
 
-// DELETE /api/v1/projects/:id
-// Query params: ?force=true to bypass cascade warnings
+// DELETE /api/v1/projects/:id — permanently delete an archived project with everything it owns:
+// workflows, tasks and their history, recurring series and files cascade with the project row,
+// and each agent is deleted the way DELETE /agents/:id does it (soft-deleted when run or chat
+// history still references it). Archiving first is the confirmation step.
 router.delete('/:id', async (req: Request, res: Response) => {
   try {
     const db = getDb();
     const tenantId = await resolveTenantIdFromRequest(db, req);
-    const project = await db.get(`SELECT * FROM projects ${tenantScopedWhere({ where: 'id = ?' })}`, ...tenantScopedParams(tenantId, [req.params.id])) as Project | undefined;
+    const projectId = Number(req.params.id);
+    const project = await db.get(`SELECT * FROM projects ${tenantScopedWhere({ where: 'id = ?' })}`, ...tenantScopedParams(tenantId, [projectId])) as Project | undefined;
     if (!project) return res.status(404).json({ error: 'Project not found' });
 
-    const force = req.query.force === 'true';
-
-    const activeTasksRow = await db.get(`
-      SELECT COUNT(*) as count FROM tasks
-      WHERE project_id = ? AND tenant_id = ? AND status IN ('in_progress', 'review')
-    `, req.params.id, tenantId) as { count: number };
-
-    const runningInstancesRow = await db.get(`
-      SELECT COUNT(*) as count FROM job_instances ji
-      JOIN agents a ON a.id = ji.agent_id
-      WHERE a.project_id = ? AND a.tenant_id = ? AND ji.status IN ('queued', 'dispatched', 'running')
-    `, req.params.id, tenantId) as { count: number };
-
-    const workflowCountRow = await db.get(`SELECT COUNT(*) as count FROM workflows WHERE project_id = ? AND tenant_id = ?`, req.params.id, tenantId) as { count: number };
-    const taskCountRow = await db.get(`SELECT COUNT(*) as count FROM tasks WHERE project_id = ? AND tenant_id = ?`, req.params.id, tenantId) as { count: number };
-    const agentCountRow = await db.get(`SELECT COUNT(*) as count FROM agents WHERE project_id = ? AND tenant_id = ?`, req.params.id, tenantId) as { count: number };
-
-    const activeTasks = activeTasksRow.count ?? 0;
-    const runningInstances = runningInstancesRow.count ?? 0;
-    const workflowCount = workflowCountRow.count ?? 0;
-    const taskCount = taskCountRow.count ?? 0;
-    const agentCount = agentCountRow.count ?? 0;
-
-    if (!force && (activeTasks > 0 || runningInstances > 0 || workflowCount > 0 || taskCount > 0 || agentCount > 0)) {
+    if (!project.archived_at) {
       return res.status(409).json({
-        error: 'Project delete requires confirmation',
-        code: 'project_delete_requires_force',
-        active_tasks: activeTasks,
-        running_instances: runningInstances,
-        dependent_workflows: workflowCount,
-        dependent_tasks: taskCount,
-        dependent_agents: agentCount,
-        message: `Project ${req.params.id} still owns ${workflowCount} workflow(s), ${taskCount} task(s), and ${agentCount} agent(s), with ${activeTasks} active task(s) and ${runningInstances} running instance(s). Pass ?force=true to delete this project and its dependents.`,
+        error: 'Only an archived project can be deleted. Archive it first.',
+        code: 'project_not_archived',
       });
     }
 
+    const runningInstances = await countRunningProjectInstances(db, projectId, tenantId);
+    if (runningInstances > 0) {
+      return res.status(409).json({
+        error: `Project ${projectId} still has ${runningInstances} run(s) in flight. Wait for them to finish, then delete it.`,
+        code: 'project_has_running_instances',
+        running_instances: runningInstances,
+      });
+    }
+
+    const agents = await db.all<Record<string, unknown>>(
+      'SELECT * FROM agents WHERE project_id = ? AND tenant_id = ? AND deleted_at IS NULL ORDER BY id',
+      projectId,
+      tenantId,
+    );
+    const busy = agents.filter((agent) => agent.status !== 'idle');
+    if (busy.length > 0) {
+      return res.status(409).json({
+        error: `Agents still busy: ${busy.map((agent) => `${agent.name} (${agent.status})`).join(', ')}. Wait until they are idle.`,
+        code: 'project_agents_busy',
+      });
+    }
+
+    let agentsDeleted = 0;
+    let agentsArchived = 0;
+    const agentsKept: string[] = [];
+    for (const agent of agents) {
+      // Atlas is the operator's assistant, not project content: it leaves the project and survives.
+      if (agent.system_role === ATLAS_SYSTEM_ROLE) {
+        await db.run('UPDATE agents SET project_id = NULL WHERE id = ?', agent.id);
+        agentsKept.push(String(agent.name));
+        continue;
+      }
+      const result = await deleteAgentWithCleanup(db, agent);
+      if (result.archived) agentsArchived++; else agentsDeleted++;
+    }
+
     const actor = extractActor(req);
-    const proj = project as Project;
-    await writeProjectAudit(db, proj.id, 'project', proj.id, 'deleted', actor, {
-            name: proj.name, description: proj.description,
+    await writeProjectAudit(db, project.id, 'project', project.id, 'deleted', actor, {
+            name: project.name, description: project.description,
           });
 
-    await runTenantScopedDelete(db, { table: 'projects', id: req.params.id, tenantId });
-    return res.json({ ok: true, deleted: true, project_id: Number(req.params.id), forced: force });
+    await runTenantScopedDelete(db, { table: 'projects', id: projectId, tenantId });
+    return res.json({
+      ok: true,
+      deleted: true,
+      project_id: projectId,
+      agents_deleted: agentsDeleted,
+      agents_archived: agentsArchived,
+      agents_kept: agentsKept,
+    });
   } catch (err) {
     return sendRouteError(res, err);
   }

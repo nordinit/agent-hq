@@ -1,4 +1,5 @@
 import { getDb } from '../db/client';
+import { activeProjectPredicate } from '../lib/projectArchive';
 import { runDispatcher, type DispatchResult, getNonDispatchableTaskStatusPredicate } from '../services/dispatcher';
 import { cleanupImpossibleTaskLifecycleStates } from '../lib/taskLifecycle';
 import { backfillInstanceTokensAsync } from '../domains/runs/tokenBackfill';
@@ -247,6 +248,7 @@ async function getReconcilerProjectIds(db: Db): Promise<number[]> {
       SELECT project_id FROM routing_config WHERE project_id IS NOT NULL
     ) project_ids
     WHERE project_id IS NOT NULL
+      AND ${activeProjectPredicate('project_ids.project_id')}
     ORDER BY project_id ASC
   `) as Array<{ project_id: number }>;
 
@@ -271,6 +273,7 @@ export async function reconcileAssignedAgents(db: Db = getDb()): Promise<void> {
       AND (t.workflow_id IS NULL OR EXISTS (
         SELECT 1 FROM workflows sp WHERE sp.id = t.workflow_id AND sp.status != 'closed'
       ))
+      AND ${activeProjectPredicate('t.project_id')}
     ORDER BY t.updated_at ASC
   `, ...statusEligibility.params) as TaskRow[];
 

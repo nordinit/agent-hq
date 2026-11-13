@@ -660,6 +660,8 @@ export interface Project {
   repo_access_mode: 'worktree' | 'clone' | null;
   created_at: string;
   is_default?: number | boolean;
+  /** Set while the project is archived: automation skips it and navigation hides it. */
+  archived_at?: string | null;
 }
 
 export interface ProjectImportWarning {

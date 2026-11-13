@@ -291,3 +291,15 @@ describe('reconciler with Keep same agent', () => {
     expect(await db.value('SELECT assigned_agent_id FROM tasks WHERE id = ?', TASK)).toBe(DEV_TWO);
   });
 });
+
+describe('archived projects', () => {
+  it('dispatches nothing from an archived project, and resumes once it is unarchived', async () => {
+    await db.run('UPDATE projects SET archived_at = now() WHERE id = 86');
+    expect((await runDispatcher(db, 86)).dispatched).toBe(0);
+    expect((await runDispatcher(db)).dispatched).toBe(0);
+    expect(await dispatchedAgentIds()).toEqual([]);
+
+    await db.run('UPDATE projects SET archived_at = NULL WHERE id = 86');
+    expect((await runDispatcher(db, 86)).dispatched).toBe(1);
+  });
+});

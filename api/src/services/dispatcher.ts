@@ -1,4 +1,5 @@
 import {requirePublishedProfile} from '../domains/execution/authority';
+import { activeProjectPredicate } from '../lib/projectArchive';
 import fs from 'fs';
 import path from 'path';
 import { notifyTaskStatusChange } from '../lib/taskNotifications';
@@ -951,6 +952,7 @@ async function getAllDispatchableTasks(db: Db, projectId?: number | null, annota
       AND (t.workflow_id IS NULL OR EXISTS (
         SELECT 1 FROM workflows sp WHERE sp.id = t.workflow_id AND sp.status = 'active'
       ))
+      AND ${activeProjectPredicate('t.project_id')}
       ${legacyBlockerEligibilityClause}
   `;
   const params: unknown[] = [...statusEligibility.params];

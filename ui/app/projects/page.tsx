@@ -6,10 +6,10 @@ import { api, Project, ProjectImportPreview } from '@/lib/api';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { AlertTriangle, FolderOpen, Plus, Trash2, Upload, X, Check, Briefcase, Star } from 'lucide-react';
+import { AlertTriangle, Archive, FolderOpen, Plus, Upload, X, Check, Briefcase, Star } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { DeleteProjectModal } from '@/components/DeleteProjectModal';
+import { archiveConfirmMessage, runningAfterArchiveNotice } from '@/lib/projectArchive';
 
 interface FormState {
   name: string;
@@ -27,7 +27,8 @@ export default function ProjectsPage() {
   const [form, setForm] = useState<FormState>(emptyForm);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
-  const [deleteTarget, setDeleteTarget] = useState<{ id: number; name: string } | null>(null);
+  const [archivingId, setArchivingId] = useState<number | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [settingDefaultId, setSettingDefaultId] = useState<number | null>(null);
   const [showImport, setShowImport] = useState(false);
   const [importManifest, setImportManifest] = useState<unknown | null>(null);
@@ -82,15 +83,21 @@ export default function ProjectsPage() {
     }
   };
 
-  const handleDeleteClick = (id: number, name: string, e: React.MouseEvent) => {
+  // Deleting is only offered for archived projects, on the Archived page.
+  const handleArchiveClick = async (id: number, name: string, e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    setDeleteTarget({ id, name });
-  };
-
-  const handleDeleteConfirmed = () => {
-    setDeleteTarget(null);
-    load();
+    if (!confirm(archiveConfirmMessage(name))) return;
+    setArchivingId(id);
+    try {
+      const result = await api.archiveProject(id);
+      setNotice(runningAfterArchiveNotice(result.running_instances) ?? `Archived ${name}.`);
+      load();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : String(err));
+    } finally {
+      setArchivingId(null);
+    }
   };
 
   const handleSetDefault = async (projectId: number, e: React.MouseEvent) => {
@@ -172,6 +179,9 @@ export default function ProjectsPage() {
           <p className="text-slate-400 text-sm mt-1">{projects.length} project{projects.length !== 1 ? 's' : ''}</p>
         </div>
         <div className="flex items-center gap-2">
+          <Link href="/projects/archived" className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-colors">
+            <Archive className="w-4 h-4" /> Archived
+          </Link>
           <Button variant="ghost" onClick={() => { setShowImport(true); setImportError(null); }}>
             <Upload className="w-4 h-4" /> Import
           </Button>
@@ -296,13 +306,13 @@ export default function ProjectsPage() {
       )}
 
       {/* Delete Modal */}
-      {deleteTarget && (
-        <DeleteProjectModal
-          projectId={deleteTarget.id}
-          projectName={deleteTarget.name}
-          onConfirm={handleDeleteConfirmed}
-          onCancel={() => setDeleteTarget(null)}
-        />
+      {notice && (
+        <div className="flex items-center justify-between gap-3 bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-sm text-slate-300">
+          <span>{notice}</span>
+          <button onClick={() => setNotice(null)} className="text-slate-500 hover:text-slate-300" title="Dismiss">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
       )}
 
       {/* Projects Grid */}
@@ -340,13 +350,16 @@ export default function ProjectsPage() {
                         <Star className="w-3.5 h-3.5" />
                       </button>
                     )}
-                    <button
-                      onClick={(e) => handleDeleteClick(project.id, project.name, e)}
-                      className="p-1 rounded text-slate-600 hover:text-red-400 hover:bg-slate-700 transition-colors"
-                      title="Delete project"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
+                    {!project.is_default && (
+                      <button
+                        onClick={(e) => handleArchiveClick(project.id, project.name, e)}
+                        disabled={archivingId === project.id}
+                        className="p-1 rounded text-slate-600 hover:text-amber-300 hover:bg-slate-700 transition-colors disabled:opacity-50"
+                        title="Archive project"
+                      >
+                        <Archive className="w-3.5 h-3.5" />
+                      </button>
+                    )}
                   </div>
                 </div>
 

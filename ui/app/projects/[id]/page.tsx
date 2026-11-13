@@ -12,12 +12,14 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
   ArrowLeft, Save, Pencil, Trash2, Check, X,
-  ToggleLeft, ToggleRight, Plus, FolderOpen, PanelRightOpen, Paperclip, Rocket, Target, History, Bot, Download
+  ToggleLeft, ToggleRight, Plus, FolderOpen, PanelRightOpen, Paperclip, Rocket, Target, History, Bot, Download,
+  Archive, ArchiveRestore
 } from 'lucide-react';
 import Link from 'next/link';
 // JobDetailPanel removed — agent details now live at /agents/:id (T#459)
 import ProjectFiles from '@/components/ProjectFiles';
 import { DeleteProjectModal } from '@/components/DeleteProjectModal';
+import { archiveConfirmMessage, isArchivedProject, projectDeletionNotice, runningAfterArchiveNotice } from '@/lib/projectArchive';
 import ProjectAuditLog from '@/features/observability/ProjectAuditLog';
 import { AgentDeleteNotice, buildAgentDeleteNotice, type AgentDeleteNoticeData } from '@/components/AgentDeleteNotice';
 
@@ -55,8 +57,10 @@ export default function ProjectDetailPage() {
   // Page tab
   const [pageTab, setPageTab] = useState<PageTab>('agents');
 
-  // Delete modal
+  // Archive and delete. Only an archived project can be deleted.
   const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [archiving, setArchiving] = useState(false);
+  const [archiveNotice, setArchiveNotice] = useState<string | null>(null);
 
   // Agent actions
   const [addAgentId, setAddAgentId] = useState<string>('');
@@ -85,6 +89,28 @@ export default function ProjectDetailPage() {
   }, [projectId]);
 
   useEffect(() => { load(); }, [load]);
+
+  const archived = isArchivedProject(project);
+
+  const handleArchiveToggle = async () => {
+    if (!project) return;
+    if (!archived && !confirm(archiveConfirmMessage(project.name))) return;
+    setArchiving(true);
+    try {
+      if (archived) {
+        await api.unarchiveProject(projectId);
+        setArchiveNotice(null);
+      } else {
+        const result = await api.archiveProject(projectId);
+        setArchiveNotice(runningAfterArchiveNotice(result.running_instances));
+      }
+      load();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : String(err));
+    } finally {
+      setArchiving(false);
+    }
+  };
 
   const handleSave = async () => {
     setSaving(true);
@@ -218,6 +244,7 @@ export default function ProjectDetailPage() {
               <FolderOpen className="w-5 h-5 text-amber-400 shrink-0" />
               <h1 className="text-xl font-bold text-white truncate">{project.name}</h1>
               <Badge variant="workspace">{projectAgents.length} agents</Badge>
+              {archived && <Badge variant="default">Archived</Badge>}
             </div>
           )}
         </div>
@@ -242,19 +269,36 @@ export default function ProjectDetailPage() {
               <Button variant="ghost" size="sm" onClick={() => setEditing(true)}>
                 <Pencil className="w-3.5 h-3.5" /> Edit
               </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setShowDeleteModal(true)}
-                className="text-red-400 hover:text-red-300 hover:bg-red-900/20"
-                title="Delete project"
-              >
-                <Trash2 className="w-3.5 h-3.5" /> Delete
-              </Button>
+              {!project.is_default && (
+                <Button variant="ghost" size="sm" onClick={handleArchiveToggle} loading={archiving}>
+                  {archived
+                    ? <><ArchiveRestore className="w-3.5 h-3.5" /> Unarchive</>
+                    : <><Archive className="w-3.5 h-3.5" /> Archive</>}
+                </Button>
+              )}
+              {archived && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setShowDeleteModal(true)}
+                  className="text-red-400 hover:text-red-300 hover:bg-red-900/20"
+                  title="Permanently delete this archived project"
+                >
+                  <Trash2 className="w-3.5 h-3.5" /> Delete
+                </Button>
+              )}
             </>
           )}
         </div>
       </div>
+
+      {archived && (
+        <div className="bg-slate-800 border border-slate-700 rounded-lg px-4 py-3 text-sm text-slate-300">
+          Archived{project.archived_at ? ` ${formatDateTime(project.archived_at)}` : ''}. Agents don&apos;t pick up its tasks, its
+          recurring tasks are paused, and it is hidden from the rest of Agent HQ.
+          {archiveNotice ? ` ${archiveNotice}` : ''}
+        </div>
+      )}
 
       {deleteNotice && (
         <AgentDeleteNotice
@@ -613,7 +657,10 @@ export default function ProjectDetailPage() {
         <DeleteProjectModal
           projectId={projectId}
           projectName={project.name}
-          onConfirm={() => router.push('/projects')}
+          onConfirm={(summary) => {
+            alert(projectDeletionNotice(project.name, summary));
+            router.push('/projects/archived');
+          }}
           onCancel={() => setShowDeleteModal(false)}
         />
       )}

@@ -282,6 +282,15 @@ Migration 51 groups the tables into schemas. Application SQL keeps naming tables
 
 `public` holds only `schema_migrations`. See the runbook for the rules new migrations follow.
 
+### 7.8 Archived projects
+`projects.archived_at` (migration 52) marks a project archived. It keeps all of its rows, but:
+- the dispatcher, the reconciler's per-project loop, assignment display and the recurring-task scheduler skip it, while runs already in flight finish normally;
+- `GET /projects` lists active projects (`?archived=true` for archived ones, `?include_archived=true` for both), and the all-projects lists of tasks, workflows, agents, recurring series, task search, recently completed tasks, dashboard stats and the telemetry project picker leave out its contents. Naming the project (or one of its workflows) still shows them, so an archived project can be opened from Projects → Archived;
+- Atlas (`system_role = 'atlas'`) stays in the agent list, because the chat surfaces find it there;
+- the default project cannot be archived, and an archived project cannot become the default.
+
+`POST /projects/:id/archive` and `/unarchive` switch it. `DELETE /projects/:id` deletes only an archived project with no runs in flight: workflows, tasks, recurring series and files cascade, each agent is deleted as `DELETE /agents/:id` does (soft-deleted when history references it), and Atlas is moved out of the project instead of deleted.
+
 Schema changes are numbered files in `db/pg-migrations/`; see
 [database-migration-runbook.md](database-migration-runbook.md).
 

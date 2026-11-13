@@ -1,4 +1,5 @@
 import { getDb } from '../../db/client';
+import { activeProjectPredicate, hideArchivedProjectsCondition } from '../../lib/projectArchive';
 import { listTaskStatusOwners } from './statusOwners';
 import { getTaskMcpRecovery } from '../../lib/mcpRecovery';
 import { evaluateTaskIntegrity } from '../../lib/taskRelease';
@@ -322,6 +323,8 @@ export async function searchTasks(
     contextCondition += ' AND t.workflow_id = ?';
     params.push(workflowId);
   }
+  const hideArchived = hideArchivedProjectsCondition({ project_id: projectId }, 't.project_id', [workflowId]);
+  if (hideArchived) contextCondition += ` AND ${hideArchived}`;
   if (tenantId !== null && Number.isInteger(tenantId) && tenantId > 0) {
     contextCondition += ' AND t.tenant_id = ?';
     params.push(tenantId);
@@ -558,7 +561,7 @@ export async function listRecentlyCompletedTasks(
   const hours = Math.max(1, Math.min(168, Number(hoursRaw) || 24));
   const projectId = Number(projectIdRaw) || null;
   const tenantId = Number(tenantIdRaw) || null;
-  const projectFilter = projectId ? 'AND t.project_id = ?' : '';
+  const projectFilter = projectId ? 'AND t.project_id = ?' : `AND ${activeProjectPredicate('t.project_id')}`;
   const tenantFilter = tenantId ? 'AND t.tenant_id = ?' : '';
   // The cutoff is computed HERE and bound as one parameter rather than assembled in SQL: an
   // interval literal cannot be built by string concatenation. updated_at is canonical-format
@@ -651,6 +654,7 @@ export async function listTasks(
     active_instances_only?: unknown;
     live_instances_only?: unknown;
     tenant_id?: unknown;
+    include_archived?: unknown;
   },
 ): Promise<Record<string, unknown>[] | Record<string, unknown>> {
   const {
@@ -679,6 +683,8 @@ export async function listTasks(
     conditions.push('t.project_id = ?');
     params.push(Number(project_id));
   }
+  const hideArchived = hideArchivedProjectsCondition(query, 't.project_id', [workflow_id, origin_task_id]);
+  if (hideArchived) conditions.push(hideArchived);
   if (tenant_id) {
     conditions.push('t.tenant_id = ?');
     params.push(Number(tenant_id));

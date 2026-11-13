@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { api } from '@/lib/api';
 import { AlertTriangle, Trash2, X } from 'lucide-react';
+import type { ProjectDeletionSummary } from '@/lib/projectArchive';
 
 interface CascadeInfo {
   active_tasks: number;
@@ -16,7 +17,8 @@ interface CascadeInfo {
 interface DeleteProjectModalProps {
   projectId: number;
   projectName: string;
-  onConfirm: () => void;
+  /** Receives what happened to the project's agents. */
+  onConfirm: (summary: ProjectDeletionSummary) => void;
   onCancel: () => void;
 }
 
@@ -39,30 +41,21 @@ export function DeleteProjectModal({
       .finally(() => setCascadeLoading(false));
   }, [projectId]);
 
-  const hasActiveWork = cascade
-    ? cascade.active_tasks > 0 || cascade.running_instances > 0
-    : false;
-  const hasDependents = cascade
-    ? (cascade.dependent_workflows ?? 0) > 0 || (cascade.dependent_tasks ?? 0) > 0 || (cascade.dependent_agents ?? 0) > 0
-    : false;
+  // Only archived projects reach this dialog. The server refuses while runs are in flight.
+  const runsInFlight = cascade?.running_instances ?? 0;
 
   const nameMatches = confirmText.trim() === projectName.trim();
-  const canDelete = nameMatches && !cascadeLoading;
+  const canDelete = nameMatches && !cascadeLoading && runsInFlight === 0;
 
   const handleDelete = async () => {
     if (!canDelete) return;
     setDeleting(true);
     setError(null);
     try {
-      await api.deleteProject(projectId, { confirm: hasDependents || hasActiveWork, force: hasDependents || hasActiveWork });
-      onConfirm();
+      const result = await api.deleteProject(projectId);
+      onConfirm(result);
     } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      setError(
-        message.includes('Project delete requires confirmation')
-          ? 'Project deletion still requires explicit confirmation from the server. If this persists from this dialog, the API confirmation contract likely changed.'
-          : message,
-      );
+      setError(e instanceof Error ? e.message : String(e));
       setDeleting(false);
     }
   };
@@ -84,7 +77,7 @@ export function DeleteProjectModal({
               <Trash2 className="w-4 h-4 text-red-400" />
             </div>
             <div>
-              <h2 className="font-semibold text-white text-base">Delete Project</h2>
+              <h2 className="font-semibold text-white text-base">Delete archived project</h2>
               <p className="text-slate-400 text-xs mt-0.5">This action cannot be undone</p>
             </div>
           </div>
@@ -96,40 +89,31 @@ export function DeleteProjectModal({
           </button>
         </div>
 
-        {/* Cascade warnings */}
+        {/* What goes with it */}
         {cascadeLoading ? (
           <div className="flex items-center gap-2 text-slate-400 text-sm">
             <span className="w-4 h-4 border-2 border-slate-500 border-t-transparent rounded-full animate-spin" />
-            Checking for active work…
-          </div>
-        ) : hasActiveWork ? (
-          <div className="bg-amber-900/30 border border-amber-700/60 rounded-lg p-4 space-y-1.5">
-            <div className="flex items-center gap-2 text-amber-300 font-medium text-sm">
-              <AlertTriangle className="w-4 h-4 shrink-0" />
-              Active work detected
-            </div>
-            {cascade!.active_tasks > 0 && (
-              <p className="text-amber-200/80 text-xs">
-                • {cascade!.active_tasks} active task{cascade!.active_tasks !== 1 ? 's' : ''} (in_progress / review / dev_deploying)
-              </p>
-            )}
-            {cascade!.running_instances > 0 && (
-              <p className="text-amber-200/80 text-xs">
-                • {cascade!.running_instances} running agent instance{cascade!.running_instances !== 1 ? 's' : ''}
-              </p>
-            )}
-            <p className="text-amber-200/70 text-xs pt-1">
-              Deleting will cascade-remove all tasks and workflows. Jobs will be unassigned.
-            </p>
-            {hasDependents ? (
-              <p className="text-amber-200/70 text-xs">
-                This project still owns {cascade?.dependent_workflows ?? 0} workflow{(cascade?.dependent_workflows ?? 0) !== 1 ? 's' : ''}, {cascade?.dependent_tasks ?? 0} task{(cascade?.dependent_tasks ?? 0) !== 1 ? 's' : ''}, and {cascade?.dependent_agents ?? 0} agent{(cascade?.dependent_agents ?? 0) !== 1 ? 's' : ''}.
-              </p>
-            ) : null}
+            Checking what this project owns…
           </div>
         ) : (
-          <div className="bg-slate-700/40 border border-slate-600/50 rounded-lg px-4 py-3 text-slate-300 text-sm">
-            Deleting <span className="font-semibold text-white">{projectName}</span> will permanently remove all tasks and workflows associated with it. Jobs will be unassigned from the project.
+          <div className="bg-slate-700/40 border border-slate-600/50 rounded-lg px-4 py-3 text-slate-300 text-sm space-y-2">
+            <p>
+              Permanently deletes <span className="font-semibold text-white">{projectName}</span> with its{' '}
+              {cascade?.dependent_workflows ?? 0} workflow{(cascade?.dependent_workflows ?? 0) !== 1 ? 's' : ''},{' '}
+              {cascade?.dependent_tasks ?? 0} task{(cascade?.dependent_tasks ?? 0) !== 1 ? 's' : ''} and their history,
+              recurring tasks and files, and its {cascade?.dependent_agents ?? 0} agent{(cascade?.dependent_agents ?? 0) !== 1 ? 's' : ''}.
+            </p>
+            <p className="text-slate-400 text-xs">
+              Agents with run or chat history are kept as deleted records so that history stays readable. Atlas is never
+              deleted: it is moved out of the project.
+            </p>
+          </div>
+        )}
+
+        {runsInFlight > 0 && (
+          <div className="bg-amber-900/30 border border-amber-700/60 rounded-lg p-3 flex items-start gap-2 text-amber-200 text-xs">
+            <AlertTriangle className="w-4 h-4 shrink-0 text-amber-300" />
+            {runsInFlight} run{runsInFlight !== 1 ? 's are' : ' is'} still finishing. Wait for {runsInFlight !== 1 ? 'them' : 'it'} to end, then delete the project.
           </div>
         )}
 
@@ -165,7 +149,7 @@ export function DeleteProjectModal({
             disabled={!canDelete}
           >
             <Trash2 className="w-3.5 h-3.5" />
-            {hasDependents || hasActiveWork ? 'Delete Project and Dependents' : 'Delete Project'}
+            Delete permanently
           </Button>
         </div>
       </div>

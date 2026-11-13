@@ -101,7 +101,7 @@ async function buildTelemetryCatalog(db: Db, access: TelemetryAccess, scope: Tel
   const workflowTypes = types.filter(row=>applicable({project_id:row.project_id??undefined,workflow_type:row.key}));
   const allowedTypeKeys = new Set(workflowTypes.map(row=>row.key));
   const workflows = await db.all<any>(`SELECT id,name,project_id,workflow_type AS workflow_type,status FROM workflows WHERE tenant_id = ?${project==null?'':' AND project_id = ?'}${scope.workflow_id?' AND id = ?':''}${scope.workflow_type?' AND workflow_type = ?':''} ORDER BY name`,access.tenantId,...(project==null?[]:[project]),...(scope.workflow_id?[scope.workflow_id]:[]),...(scope.workflow_type?[scope.workflow_type]:[]));
-  const projects = await db.all<any>(`SELECT id,name FROM projects WHERE tenant_id = ?${project==null?'':' AND id = ?'} ORDER BY name`,access.tenantId,...(project==null?[]:[project]));
+  const projects = await db.all<any>(`SELECT id,name FROM projects WHERE tenant_id = ?${project==null?' AND archived_at IS NULL':' AND id = ?'} ORDER BY name`,access.tenantId,...(project==null?[]:[project]));
   const agents = await db.all<any>(`SELECT id,name,project_id FROM agents WHERE tenant_id = ?${project==null?'':' AND project_id = ?'} ORDER BY name`,access.tenantId,...(project==null?[]:[project]));
   const taskTypes = await db.all<any>('SELECT task_type AS key, task_type AS label,workflow_type_key AS workflow_type FROM workflow_type_task_types WHERE tenant_id = ? ORDER BY task_type',access.tenantId);
   const typeStatuses = await db.all<any>('SELECT id,status_key AS key,label,workflow_type_key AS workflow_type,terminal FROM workflow_type_task_statuses WHERE tenant_id = ? ORDER BY stage_order,id',access.tenantId);

@@ -1,4 +1,5 @@
 import { getAgentResolution } from '../domains/agents/resolution';
+import { activeProjectPredicate } from '../lib/projectArchive';
 import { getAgentMcpRecovery, retryMcpRecovery } from '../lib/mcpRecovery';
 import { describeToolAccess } from '../mcp/accessView';
 import { Router, Request, Response } from 'express';
@@ -213,6 +214,52 @@ async function cleanupAgentGlobalMcpBeforeDeletion(db: ReturnType<typeof getDb>,
   if (result.path) {
     console.log(`[agents] Cleaned Agent HQ-managed OpenClaw MCP entries for deleted agent #${agentId} in ${result.path}`);
   }
+}
+
+export interface AgentDeletionResult {
+  /** True when historical records kept the agent row, so it was soft-deleted instead. */
+  archived: boolean;
+  dependency_counts: AgentReferenceCount[];
+}
+
+/**
+ * Deletes an idle agent and everything Agent HQ provisioned for it: its OpenClaw MCP entries,
+ * its OpenClaw agent and its workspace. An agent that historical tasks, runs, chat or audit rows
+ * still reference is soft-deleted instead of hard-deleted. Callers check that the agent is idle.
+ */
+export async function deleteAgentWithCleanup(db: ReturnType<typeof getDb>, agent: Record<string, unknown>): Promise<AgentDeletionResult> {
+  const id = Number(agent.id);
+  await cleanupAgentGlobalMcpBeforeDeletion(db, id);
+
+  // OpenClaw native cleanup (if provisioned)
+  if (agent.openclaw_agent_id) {
+    const result = runOpenClawSync(
+      ['agents', 'delete', '--force', agent.openclaw_agent_id as string],
+      { stdio: 'pipe' },
+    );
+    if (result.status !== 0) {
+      console.warn(`[agents] openclaw agents delete ${agent.openclaw_agent_id}: ${(result.stderr ?? '').toString().trim()}`);
+    } else {
+      console.log(`[agents] Deleted OpenClaw agent: ${agent.openclaw_agent_id}`);
+    }
+  }
+
+  // Workspace cleanup — only delete a real ~/.openclaw/workspace-* directory
+  const workspacePath = agent.workspace_path as string;
+  if (workspacePath && isDeletableOpenClawWorkspace(workspacePath) && fs.existsSync(workspacePath)) {
+    fs.rmSync(workspacePath, { recursive: true, force: true });
+    console.log(`[agents] Removed workspace: ${workspacePath}`);
+  }
+
+  const referenceCounts = await countAgentReferences(db, id);
+  const nonZeroReferences = referenceCounts.filter((entry) => entry.count > 0);
+  if (nonZeroReferences.some((entry) => entry.historical)) {
+    await archiveAgentForDeletion(db, agent, referenceCounts);
+    return { archived: true, dependency_counts: nonZeroReferences };
+  }
+
+  await db.run('DELETE FROM agents WHERE id = ?', id);
+  return { archived: false, dependency_counts: nonZeroReferences };
 }
 
 async function getProjectName(projectId: number | null | undefined): Promise<string | null> {
@@ -669,7 +716,12 @@ router.get('/', async (req: Request, res: Response) => {
       const whereClause = [hasProjectsTable ? 'a.project_id = ?' : '1 = 0', visibleFilter, 'a.tenant_id = ?'].filter(Boolean).join(' AND ');
       agents = await db.all(`${baseQuery} WHERE ${whereClause} ORDER BY a.created_at ASC`, projectId, tenantId);
     } else {
-      const whereClause = [visibleFilter, 'a.tenant_id = ?'].filter(Boolean).join(' AND ');
+      // Agents of archived projects leave the all-projects list. Atlas stays: the chat surfaces
+      // find it in this list, and it is the operator's assistant rather than project content.
+      const archivedFilter = hasProjectsTable && req.query.include_archived !== 'true'
+        ? `(a.system_role = '${ATLAS_SYSTEM_ROLE}' OR ${activeProjectPredicate('a.project_id')})`
+        : '';
+      const whereClause = [visibleFilter, archivedFilter, 'a.tenant_id = ?'].filter(Boolean).join(' AND ');
       agents = await db.all(`${baseQuery} WHERE ${whereClause} ORDER BY a.created_at ASC`, tenantId);
     }
 
@@ -2780,7 +2832,6 @@ router.delete('/:id', async (req: Request, res: Response) => {
     }
     const agent = await db.get('SELECT * FROM agents WHERE id = ? AND tenant_id = ?', id, tenantId) as Record<string, unknown> | undefined;
     if (!agent) return res.status(404).json({ error: 'Agent not found' });
-    const previousProjectId = (agent.project_id as number | null | undefined) ?? null;
 
     // Idle guard — only allow deletion of idle agents
     if (agent.status !== 'idle') {
@@ -2789,52 +2840,24 @@ router.delete('/:id', async (req: Request, res: Response) => {
       });
     }
 
-    await cleanupAgentGlobalMcpBeforeDeletion(db, id);
-
-    // OpenClaw native cleanup (if provisioned)
-    if (agent.openclaw_agent_id) {
-      const result = runOpenClawSync(
-        ['agents', 'delete', '--force', agent.openclaw_agent_id as string],
-        { stdio: 'pipe' },
-      );
-      if (result.status !== 0) {
-        console.warn(`[agents] openclaw agents delete ${agent.openclaw_agent_id}: ${(result.stderr ?? '').toString().trim()}`);
-      } else {
-        console.log(`[agents] Deleted OpenClaw agent: ${agent.openclaw_agent_id}`);
-      }
-    }
-
-    // Workspace cleanup — only delete a real ~/.openclaw/workspace-* directory
-    const workspacePath = agent.workspace_path as string;
-    if (workspacePath && isDeletableOpenClawWorkspace(workspacePath) && fs.existsSync(workspacePath)) {
-      fs.rmSync(workspacePath, { recursive: true, force: true });
-      console.log(`[agents] Removed workspace: ${workspacePath}`);
-    }
-
-    const referenceCounts = await countAgentReferences(db, id);
-    const nonZeroReferences = referenceCounts.filter((entry) => entry.count > 0);
-    const historicalReferences = nonZeroReferences.filter((entry) => entry.historical);
-
-    if (historicalReferences.length > 0) {
-      await archiveAgentForDeletion(db, agent, referenceCounts);
+    const deletion = await deleteAgentWithCleanup(db, agent);
+    if (deletion.archived) {
       return res.json({
         ok: true,
         deleted: true,
         hard_deleted: false,
         archived: true,
         message: 'Agent was archived instead of hard-deleted because historical task, run, chat, or audit records still reference it.',
-        dependency_counts: nonZeroReferences,
+        dependency_counts: deletion.dependency_counts,
       });
     }
-
-    await db.run('DELETE FROM agents WHERE id = ?', id);
 
     return res.json({
       ok: true,
       deleted: true,
       hard_deleted: true,
       archived: false,
-      dependency_counts: nonZeroReferences,
+      dependency_counts: deletion.dependency_counts,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

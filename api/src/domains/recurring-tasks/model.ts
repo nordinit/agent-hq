@@ -1,4 +1,5 @@
 import { listWorkflowTaskStatuses } from '../routing/policy/statuses';
+import { hideArchivedProjectsCondition } from '../../lib/projectArchive';
 import { createTaskRecord } from '../tasks/writeModel';
 import { VALID_STORY_POINTS } from '../tasks/fields';
 import { isTaskStatus } from '../../lib/taskStatuses';
@@ -433,6 +434,8 @@ export async function listRecurringTaskSeries(
     conditions.push('rts.workflow_id = ?');
     params.push(workflowId);
   }
+  const hideArchived = hideArchivedProjectsCondition(filters, 'rts.project_id', [workflowId]);
+  if (hideArchived) conditions.push(hideArchived);
   if (filters.enabled !== undefined && filters.enabled !== '') {
     conditions.push('rts.enabled = ?');
     params.push(parseBooleanInt(filters.enabled, 1));

@@ -1,4 +1,5 @@
 import { createTaskRecord } from '../domains/tasks/writeModel';
+import { activeProjectPredicate } from '../lib/projectArchive';
 import {
   finishRecurringTaskRun,
   linkRecurringRunToGeneratedTask,
@@ -153,6 +154,7 @@ async function loadDueSeries(db: Db, nowIso: string, limit: number): Promise<Due
     WHERE enabled = 1
       AND next_run_at IS NOT NULL
       AND next_run_at <= ?
+      AND ${activeProjectPredicate('recurring_task_series.project_id')}
     ORDER BY next_run_at ASC, id ASC
     LIMIT ?
   `, nowIso, limit) as DueSeriesRow[];

@@ -112,6 +112,17 @@ describe('recurring task scheduler', () => {
     expect((await db.get(`SELECT COUNT(*) AS n FROM recurring_task_runs`) as { n: number }).n).toBe(0);
   });
 
+  it('does not process series in an archived project', async () => {
+    const db = getDb();
+    await createDueSeries();
+    await db.run(`UPDATE projects SET archived_at = now() WHERE id = 613`);
+
+    const summary = await runRecurringTaskSchedulerTick(db, { now: new Date('2026-05-18T13:00:01.000Z') });
+
+    expect(summary.checked).toBe(0);
+    expect((await db.get(`SELECT COUNT(*) AS n FROM tasks`) as { n: number }).n).toBe(0);
+  });
+
   it('uses the run uniqueness key to prevent duplicate task creation for an occurrence', async () => {
     const db = getDb();
     const series = await createDueSeries();
