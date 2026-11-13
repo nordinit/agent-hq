@@ -2,7 +2,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { POSTGRES_MIGRATION_DIRS } from './migrationDirs';
-import { loadMigrations, migrationStatus, runMigrations, verifyMigrationsCurrent } from './migrationRunner';
+import { FOLDED_MIGRATIONS, SCHEMA_BASELINE_ID, loadMigrations, migrationStatus, runMigrations, verifyMigrationsCurrent } from './migrationRunner';
 
 /**
  * The boot gate must refuse to serve on a schema that is behind the code.
@@ -11,7 +11,7 @@ import { loadMigrations, migrationStatus, runMigrations, verifyMigrationsCurrent
  * migrations were never verified and a pending migration started cleanly. That happened
  * because migrations 10 and 11 sat in the sequence deliberately unapplied — verifying the real
  * directory would have refused to boot production, so the check was aimed where it could not
- * fail. Those two now live in db/pg-migrations/staged.
+ * fail. They were parked in a staged subdirectory, which the runner does not read, and later removed.
  */
 
 function writeDir(files: Record<string, string>): string {
@@ -107,18 +107,26 @@ describe('migration loading', () => {
       .toEqual(['01-tables.sql', '02-indexes.sql', '03-foreign-keys.sql', '14-audit.sql']);
   });
 
-  it('ships one authoritative directory whose first migration is the folded baseline', () => {
+  it('ships one authoritative directory that starts with the whole-schema baseline', () => {
     expect(POSTGRES_MIGRATION_DIRS).toHaveLength(1);
     expect(path.basename(POSTGRES_MIGRATION_DIRS[0])).toBe('pg-migrations');
 
     const [baseline] = loadMigrations(POSTGRES_MIGRATION_DIRS);
-    expect(baseline.id).toBe('00-baseline.sql');
-    expect(baseline.sql).not.toMatch(/CREATE TABLE schema_migrations/i);
-    const sections = ['tables', 'indexes', 'foreign-keys']
-      .map((name) => baseline.sql.indexOf(`-- === BASELINE SECTION: ${name} ===`));
-    expect(sections[0]).toBeGreaterThanOrEqual(0);
-    expect(sections[0]).toBeLessThan(sections[1]);
-    expect(sections[1]).toBeLessThan(sections[2]);
+    expect(baseline.id).toBe(SCHEMA_BASELINE_ID);
+    // The runner owns the ledger; the baseline must not create it.
+    expect(baseline.sql).not.toMatch(/CREATE TABLE (?:public\.)?schema_migrations/i);
+    // Session settings stay inside the migration's transaction.
+    expect(baseline.sql).toMatch(/^SET LOCAL check_function_bodies = false;$/m);
+    expect(baseline.sql).not.toMatch(/^SET (?!LOCAL)/m);
+    expect(baseline.sql).toMatch(/ALTER DATABASE %I SET search_path = public, core, agents, workflow, tasks, runs, chat, access, telemetry/);
+  });
+
+  it('keeps every folded migration out of the directory', () => {
+    const shipped = new Set(loadMigrations(POSTGRES_MIGRATION_DIRS).map((m) => m.id));
+    expect(FOLDED_MIGRATIONS).toHaveLength(43);
+    expect(FOLDED_MIGRATIONS[0].id).toBe('00-baseline.sql');
+    expect(FOLDED_MIGRATIONS.at(-1)?.id).toBe('53-drop-system-policies.sql');
+    expect(FOLDED_MIGRATIONS.filter(({ id }) => shipped.has(id))).toEqual([]);
   });
 
   it('ignores subdirectories, so a staged migration is not pending', () => {
@@ -155,7 +163,7 @@ describe('verifyMigrationsCurrent', () => {
   });
 
   it('serves when every migration in the authoritative directory is applied', async () => {
-    const migrations = writeDir({ '00-baseline.sql': 'SELECT 1;', '14-audit.sql': 'SELECT 14;' });
+    const migrations = writeDir({ '00-schema.sql': 'SELECT 1;', '54-audit.sql': 'SELECT 54;' });
     const all = loadMigrations(migrations);
     const db = ledgerStub(all.map((m) => ({ id: m.id, checksum: m.checksum })));
 
@@ -163,7 +171,7 @@ describe('verifyMigrationsCurrent', () => {
   });
 
   it('refuses a ledger migration that is absent from this release', async () => {
-    const dir = writeDir({ '00-baseline.sql': 'SELECT 1;' });
+    const dir = writeDir({ '00-schema.sql': 'SELECT 1;' });
     const [baseline] = loadMigrations(dir);
     const db = ledgerStub([
       { id: baseline.id, checksum: baseline.checksum },
@@ -181,14 +189,15 @@ describe('verifyMigrationsCurrent', () => {
       .rejects.toThrow(/ledger migration.*99-from-a-newer-release\.sql/is);
   });
 
-  it('accepts only the exact retained legacy ledger entries', async () => {
-    const dir = writeDir({ '00-baseline.sql': 'SELECT 1;' });
+  it('accepts only the exact retained legacy and folded ledger entries', async () => {
+    const dir = writeDir({ '00-schema.sql': 'SELECT 1;' });
     const [baseline] = loadMigrations(dir);
     const legacy = [
       { id: '01-tables.sql', checksum: '55312bc3474ba438' },
       { id: '02-indexes.sql', checksum: 'c5ca4ac7657a4b47' },
       { id: '03-foreign-keys.sql', checksum: '6adec7d22ec4e219' },
       { id: 'init_schema', checksum: 'initSchema' },
+      ...FOLDED_MIGRATIONS,
     ];
 
     await expect(verifyMigrationsCurrent(ledgerStub([
@@ -196,26 +205,25 @@ describe('verifyMigrationsCurrent', () => {
       ...legacy,
     ]) as never, dir)).resolves.toBeUndefined();
 
-    const changed = legacy.map((row) => row.id === 'init_schema'
-      ? { ...row, checksum: 'not-the-known-provenance-value' }
+    const changed = legacy.map((row) => row.id === 'init_schema' || row.id === '46-keep-same-agent.sql'
+      ? { ...row, checksum: 'not-the-known-value' }
       : row);
     const status = await migrationStatus(ledgerStub([
       { id: baseline.id, checksum: baseline.checksum },
       ...changed,
     ]) as never, dir);
-    expect(status.unexpected).toEqual([{
-      id: 'init_schema',
-      recorded: 'not-the-known-provenance-value',
-      expected: 'initSchema',
-    }]);
+    expect(status.unexpected).toEqual([
+      { id: 'init_schema', recorded: 'not-the-known-value', expected: 'initSchema' },
+      { id: '46-keep-same-agent.sql', recorded: 'not-the-known-value', expected: FOLDED_MIGRATIONS.find(({ id }) => id === '46-keep-same-agent.sql')!.checksum },
+    ]);
   });
 
   it('treats a missing ledger as nothing applied rather than creating one', async () => {
     // Reading must not create. A fresh database has no ledger until explicit db:install applies
-    // migration 00 and records it in the runner-owned table.
-    const dir = writeDir({ '00-baseline.sql': 'SELECT 1;' });
+    // the baseline and records it in the runner-owned table.
+    const dir = writeDir({ '00-schema.sql': 'SELECT 1;' });
     const status = await migrationStatus(ledgerStub([], false) as never, dir);
-    expect(status.pending).toEqual(['00-baseline.sql']);
+    expect(status.pending).toEqual(['00-schema.sql']);
     expect(status.applied).toEqual([]);
   });
 
@@ -229,19 +237,21 @@ describe('verifyMigrationsCurrent', () => {
   });
 });
 
-describe('folded baseline migration', () => {
-  const legacyBaseline = [
+describe('whole-schema baseline', () => {
+  const legacyRows = [
     { id: '01-tables.sql', checksum: '55312bc3474ba438' },
     { id: '02-indexes.sql', checksum: 'c5ca4ac7657a4b47' },
     { id: '03-foreign-keys.sql', checksum: '6adec7d22ec4e219' },
+    { id: 'init_schema', checksum: 'initSchema' },
   ];
+  const folded = [...FOLDED_MIGRATIONS];
 
-  it('applies migration 00 and creates the runner-owned ledger on a fresh database', async () => {
-    const dir = writeDir({ '00-baseline.sql': 'CREATE TABLE example (id bigint);' });
+  it('applies 00-schema.sql and creates the runner-owned ledger on a fresh database', async () => {
+    const dir = writeDir({ '00-schema.sql': 'CREATE TABLE example (id bigint);' });
     const { db, events, rows } = runnerStub([], false);
     const [baseline] = loadMigrations(dir);
 
-    await expect(runMigrations(db as never, dir)).resolves.toEqual(['00-baseline.sql']);
+    await expect(runMigrations(db as never, dir)).resolves.toEqual(['00-schema.sql']);
     expect(rows()).toEqual([{ id: baseline.id, checksum: baseline.checksum }]);
     expect(events.map(({ kind }) => kind)).toEqual([
       'tx:start', 'exec', 'exec', 'run', 'tx:commit',
@@ -250,51 +260,75 @@ describe('folded baseline migration', () => {
     expect(events[2].sql).toContain('CREATE TABLE IF NOT EXISTS schema_migrations');
   });
 
-  it('adopts the exact legacy 01/02/03 ledger without executing migration 00', async () => {
-    const dir = writeDir({ '00-baseline.sql': 'CREATE TABLE must_not_run (id bigint);' });
-    const { db, events, rows } = runnerStub(legacyBaseline);
-    const [baseline] = loadMigrations(dir);
+  it('adopts a ledger holding the whole folded chain without executing 00-schema.sql', async () => {
+    const dir = writeDir({
+      '00-schema.sql': 'CREATE TABLE must_not_run (id bigint);',
+      '54-next.sql': 'CREATE TABLE runs_after (id bigint);',
+    });
+    const { db, events, rows } = runnerStub([...legacyRows, ...folded]);
+    const [baseline, next] = loadMigrations(dir);
 
-    await expect(runMigrations(db as never, dir)).resolves.toEqual([]);
-    expect(rows()).toEqual([...legacyBaseline, { id: baseline.id, checksum: baseline.checksum }]);
+    await expect(runMigrations(db as never, dir)).resolves.toEqual(['54-next.sql']);
+    expect(rows()).toEqual([
+      ...legacyRows, ...folded,
+      { id: baseline.id, checksum: baseline.checksum },
+      { id: next.id, checksum: next.checksum },
+    ]);
     expect(events.some(({ sql }) => sql?.includes('CREATE TABLE must_not_run'))).toBe(false);
+    expect(events.some(({ sql }) => sql?.includes('CREATE TABLE runs_after'))).toBe(true);
+  });
+
+  it('adopts without the pre-baseline rows, which only older databases carry', async () => {
+    const dir = writeDir({ '00-schema.sql': 'CREATE TABLE must_not_run (id bigint);' });
+    const { db, events, rows } = runnerStub(folded);
+    await expect(runMigrations(db as never, dir)).resolves.toEqual([]);
+    expect(rows()).toHaveLength(folded.length + 1);
     expect(events.map(({ kind }) => kind)).toEqual(['tx:start', 'exec', 'run', 'tx:commit']);
   });
 
-  it('fails closed on a partial legacy baseline ledger', async () => {
-    const dir = writeDir({ '00-baseline.sql': 'CREATE TABLE must_not_run (id bigint);' });
-    const { db, events, rows } = runnerStub(legacyBaseline.slice(0, 1));
+  it('fails closed on a ledger that holds only part of the folded chain', async () => {
+    const dir = writeDir({ '00-schema.sql': 'CREATE TABLE must_not_run (id bigint);' });
+    const partial = folded.slice(0, -1);
+    const { db, events, rows } = runnerStub(partial);
 
-    await expect(runMigrations(db as never, dir)).rejects.toThrow(/partial.*missing 02-indexes\.sql, 03-foreign-keys\.sql/is);
-    expect(rows()).toEqual(legacyBaseline.slice(0, 1));
+    await expect(runMigrations(db as never, dir)).rejects.toThrow(
+      /only part of the folded migration chain[\s\S]*missing 53-drop-system-policies\.sql[\s\S]*release e88d5e77/,
+    );
+    expect(rows()).toEqual(partial);
     expect(events.some(({ sql }) => sql?.includes('CREATE TABLE must_not_run'))).toBe(false);
     expect(events.at(-1)?.kind).toBe('tx:rollback');
   });
 
-  it('fails closed when a legacy baseline checksum does not match', async () => {
-    const dir = writeDir({ '00-baseline.sql': 'CREATE TABLE must_not_run (id bigint);' });
-    const changed = legacyBaseline.map((row, i) => i === 1 ? { ...row, checksum: 'changed' } : row);
-    const { db, events, rows } = runnerStub(changed);
+  it('fails closed when a folded checksum does not match, before opening a transaction', async () => {
+    const dir = writeDir({ '00-schema.sql': 'CREATE TABLE must_not_run (id bigint);' });
+    const changed = folded.map((row, i) => i === 5 ? { ...row, checksum: 'changed' } : row);
+    const { db, events } = runnerStub(changed);
 
     await expect(runMigrations(db as never, dir)).rejects.toThrow(
-      /02-indexes\.sql: recorded changed, expected c5ca4ac7657a4b47/,
+      new RegExp(`${folded[5].id.replace(/\./g, '\\.')}: recorded changed, expected ${folded[5].checksum}`),
     );
-    expect(rows()).toEqual(changed);
-    expect(events.some(({ sql }) => sql?.includes('CREATE TABLE must_not_run'))).toBe(false);
-    // The status preflight recognizes the bad retained checksum before opening a transaction.
     expect(events).toEqual([]);
   });
 
+  it('fails closed on a database from before migration 00', async () => {
+    const dir = writeDir({ '00-schema.sql': 'CREATE TABLE must_not_run (id bigint);' });
+    const { db, events } = runnerStub(legacyRows.slice(0, 3));
+
+    await expect(runMigrations(db as never, dir)).rejects.toThrow(/predates migration 00-baseline\.sql[\s\S]*e88d5e77/);
+    expect(events.some(({ sql }) => sql?.includes('CREATE TABLE must_not_run'))).toBe(false);
+  });
+
   it('leaves adoption to the explicit migration command, never status or boot', async () => {
-    const dir = writeDir({ '00-baseline.sql': 'CREATE TABLE must_not_run (id bigint);' });
-    const { db, events, rows } = runnerStub(legacyBaseline);
+    const dir = writeDir({ '00-schema.sql': 'CREATE TABLE must_not_run (id bigint);' });
+    const { db, events, rows } = runnerStub(folded);
 
     await expect(migrationStatus(db as never, dir)).resolves.toMatchObject({
-      pending: ['00-baseline.sql'],
+      pending: ['00-schema.sql'],
       drifted: [],
+      unexpected: [],
     });
-    await expect(verifyMigrationsCurrent(db as never, dir)).rejects.toThrow(/00-baseline\.sql/);
-    expect(rows()).toEqual(legacyBaseline);
+    await expect(verifyMigrationsCurrent(db as never, dir)).rejects.toThrow(/00-schema\.sql/);
+    expect(rows()).toEqual(folded);
     expect(events).toEqual([]);
   });
 

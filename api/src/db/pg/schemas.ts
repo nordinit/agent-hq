@@ -1,5 +1,5 @@
 /**
- * The PostgreSQL schemas that hold Agent HQ's tables (migration 51).
+ * The PostgreSQL schemas that hold Agent HQ's tables (introduced by migration 51, now in 00-schema.sql).
  *
  * Application SQL names tables without a schema, so the search path is what resolves them.
  * public comes first and holds only schema_migrations: the migration runner finds its ledger

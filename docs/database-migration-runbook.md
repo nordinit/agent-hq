@@ -39,28 +39,36 @@ Applied files are immutable; change the schema with a new numbered file.
 
 ## Schemas
 
-Since migration 51 the tables live in eight schemas: `core`, `agents`, `workflow`,
+The tables live in eight schemas: `core`, `agents`, `workflow`,
 `tasks`, `runs`, `chat`, `access` and `telemetry`. `public` holds only
 `schema_migrations`. Application SQL names tables without a schema, and the search
 path `public, core, agents, workflow, tasks, runs, chat, access, telemetry` resolves
 them. Every Agent HQ pool sets that path when it connects (`api/src/db/pg/schemas.ts`).
-Migration 51 also sets it as the database default, so psql and DBeaver sessions see
+The baseline also sets it as the database default, so psql and DBeaver sessions see
 the same names. A restore without `--create` drops that default, but the API still works.
 
 - Name the schema when a migration creates a table, function or view, for example
   `CREATE TABLE tasks.task_labels (...)`. An unqualified `CREATE TABLE` lands in
   `public`, and `schemaLayout.test.ts` fails.
 - Keep table names unique across schemas, so that an unqualified name means one table.
-- Migration 51 runs `ALTER DATABASE … SET search_path`, which needs the database
+- `00-schema.sql` runs `ALTER DATABASE … SET search_path`, which needs the database
   owner or a superuser.
 
-## Baseline-00 adoption
+## The whole-schema baseline
 
-Databases created before the baseline fold record `01-tables.sql`,
-`02-indexes.sql`, and `03-foreign-keys.sql`. The explicit migration command verifies
-their exact known checksums and records `00-baseline.sql` without replaying its DDL.
-Partial or mismatched legacy ledgers fail closed. Startup only reports the pending
-baseline and never performs adoption.
+`00-schema.sql` creates the entire schema. On 2026-11-12 it replaced `00-baseline.sql` and
+migrations 12 through 53, and it was checked to build a database identical to that chain. New
+migrations continue the numbering from 54.
+
+A database that applied the whole folded chain adopts the baseline. The explicit migration
+command checks that every folded migration is in the ledger with its known checksum, then records
+`00-schema.sql` without running it. The folded rows, and the older 01/02/03 rows, stay in the
+ledger as provenance (`FOLDED_MIGRATIONS` in `api/src/db/pg/migrationRunner.ts`).
+
+A ledger that holds only part of the chain fails closed, and so does one from before migration 00.
+Migrate such a database with release `e88d5e77` first, which still ships the full chain, and then
+with the current release. Startup and `db:migrate:status` only report the pending baseline; they
+never adopt it.
 
 ## Deployment order
 

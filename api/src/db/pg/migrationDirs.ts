@@ -9,8 +9,9 @@ import path from 'path';
  * ran a migration. `db:migrate:status` — a command whose entire purpose is to report without
  * touching anything — applied migrations as a side effect of asking what was applied.
  *
- * The baseline is migration 00, so there is exactly one schema authority and one directory to
- * ship in every deployment. The array shape is retained for the migration runner's existing API.
+ * The whole schema is migration 00-schema.sql, and later migrations follow it in the same
+ * directory, so there is exactly one schema authority to ship in every deployment. The array
+ * shape is retained for the migration runner's existing API.
  */
 const REPO_ROOT = path.resolve(__dirname, '../../../..');
 

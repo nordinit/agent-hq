@@ -3,7 +3,7 @@ import { closeTestDb, getTestDb } from './testFixture';
 import { APP_SCHEMAS, APP_SEARCH_PATH } from './schemas';
 
 /**
- * Guards the layout from migration 51. A later migration that creates a table, function or view
+ * Guards the schema layout (00-schema.sql). A later migration that creates a table, function or view
  * without naming a schema puts it in public, and fails here until it names one of APP_SCHEMAS.
  */
 describe('PostgreSQL schema layout', () => {

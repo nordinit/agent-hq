@@ -46,17 +46,80 @@ export class MigrationPendingError extends Error {
   }
 }
 
-const FOLDED_BASELINE_ID = '00-baseline.sql';
-const LEGACY_BASELINE = [
+/**
+ * The whole schema in one migration: the squash of 00-baseline.sql and 12 through 53, made on
+ * 2026-11-12 and verified to build a database identical to that chain.
+ */
+export const SCHEMA_BASELINE_ID = '00-schema.sql';
+
+/**
+ * Every migration folded into 00-schema.sql, with the checksum it was applied with. The files no
+ * longer ship. A database that applied all of them already has the schema 00-schema.sql creates,
+ * so the explicit migrate command records it without running it; the old rows stay as provenance.
+ */
+export const FOLDED_MIGRATIONS: ReadonlyArray<{ id: string; checksum: string }> = [
+  { id: '00-baseline.sql', checksum: '3372e6772906d885' },
+  { id: '12-drop-dead-workflow-template-model.sql', checksum: '2e74d43fa72e3644' },
+  { id: '13-drop-sprints-workflow-template-key.sql', checksum: 'bfb0833ab5535f62' },
+  { id: '14-routing-config-audit-log.sql', checksum: '69a4e1fca2f0de6b' },
+  { id: '15-drop-global-transition-requirements.sql', checksum: 'd0dce274103b2c43' },
+  { id: '16-job-instance-stopped-status.sql', checksum: '5145645d6c089f44' },
+  { id: '17-skill-package-files-and-content-repair.sql', checksum: '44d2c6a78f456646' },
+  { id: '18-runtime-event-tenant-and-integrity-types.sql', checksum: '31b9ced088060456' },
+  { id: '19-backfill-legacy-tenant-ownership.sql', checksum: 'de968393512bcad9' },
+  { id: '20-runtime-executions-and-checkpoints.sql', checksum: '7b870ac6ac235581' },
+  { id: '21-agent-teams.sql', checksum: 'd229d2757a2a4edd' },
+  { id: '22-dispatch-context-bundles.sql', checksum: '679086c9e79dd51d' },
+  { id: '23-mcp-oauth.sql', checksum: '55f7302baa840a7f' },
+  { id: '24-mcp-api-key-role.sql', checksum: '879c007f920a3ce2' },
+  { id: '25-drop-legacy-mcp-admin-flags.sql', checksum: '208387d2e2bcc05f' },
+  { id: '26-telemetry-capture.sql', checksum: '0cdf752fef447b7d' },
+  { id: '27-telemetry-definitions.sql', checksum: 'e2e874388f6b0c33' },
+  { id: '28-telemetry-retention.sql', checksum: '3a2c57408ba3e32a' },
+  { id: '29-telemetry-field-generations.sql', checksum: 'aefcf9098517e8fd' },
+  { id: '30-telemetry-signal-generations.sql', checksum: '30263a8174a9b20d' },
+  { id: '31-workflow-environment-setup.sql', checksum: 'de038c265624cadb' },
+  { id: '32-workflow-terminology.sql', checksum: '592d5fba5560aeaf' },
+  { id: '33-recurring-series-gates.sql', checksum: '462d0bd4b2a8d15c' },
+  { id: '34-runtime-abort-target.sql', checksum: '026783e56edcbd40' },
+  { id: '35-dashboard-pages.sql', checksum: '2ce8d035eb9f71d5' },
+  { id: '36-drop-integrity-events.sql', checksum: '7800d01789835b85' },
+  { id: '37-openclaw-mcp-reconciliation.sql', checksum: '5264996f9ac5e760' },
+  { id: '38-telemetry-source-invalidation.sql', checksum: 'e4aeccf786e59525' },
+  { id: '39-openclaw-mcp-recovery.sql', checksum: 'c93a1f13d43421cc' },
+  { id: '40-dispatch-retry-backoff.sql', checksum: 'fd7ce2b87b7c2a4a' },
+  { id: '41-telemetry-outcome-evidence.sql', checksum: '3fa12578381b65d5' },
+  { id: '42-telemetry-invalidation-scan.sql', checksum: '77759470ad00c5ef' },
+  { id: '43-agent-call-liveness.sql', checksum: '0cab6bb4dad2259c' },
+  { id: '44-openclaw-automatic-recovery.sql', checksum: '81ff4d42d41a2b2e' },
+  { id: '45-openclaw-mcp-targeted-sync.sql', checksum: '784c37877333da64' },
+  { id: '46-keep-same-agent.sql', checksum: 'e233e1987c7602ea' },
+  { id: '47-built-in-runtime-failed.sql', checksum: 'b5737a49c3c74a98' },
+  { id: '48-drop-agent-schedule.sql', checksum: '675db284d07d0920' },
+  { id: '49-execution-authority.sql', checksum: '3ad77021011efd71' },
+  { id: '50-retire-openclaw-and-legacy-tables.sql', checksum: 'd0f492f5357e411f' },
+  { id: '51-organize-schemas.sql', checksum: '0eab208ca2ddfc2d' },
+  { id: '52-project-archive.sql', checksum: 'a48b19082cb41b90' },
+  { id: '53-drop-system-policies.sql', checksum: 'abc601fe976784c0' },
+];
+
+/** The commit that last shipped the folded chain, for databases that applied only part of it. */
+const LAST_UNFOLDED_RELEASE = 'e88d5e77';
+
+/** The baseline folded into 00-baseline.sql earlier. Databases that predate 00 recorded these. */
+const PRE_BASELINE_LEDGER = [
   { id: '01-tables.sql', checksum: '55312bc3474ba438' },
   { id: '02-indexes.sql', checksum: 'c5ca4ac7657a4b47' },
   { id: '03-foreign-keys.sql', checksum: '6adec7d22ec4e219' },
 ] as const;
+
+/** Ledger rows that are known and immutable but no longer have a file on disk. */
 const RETAINED_LEGACY_LEDGER = new Map<string, string>([
-  ...LEGACY_BASELINE.map(({ id, checksum: legacyChecksum }) => [id, legacyChecksum] as const),
+  ...PRE_BASELINE_LEDGER.map(({ id, checksum: legacyChecksum }) => [id, legacyChecksum] as const),
   // Databases created by the original data-transfer path retain this provenance row. It never
   // represented PostgreSQL DDL, but its exact value is immutable and known.
   ['init_schema', 'initSchema'],
+  ...FOLDED_MIGRATIONS.map(({ id, checksum: foldedChecksum }) => [id, foldedChecksum] as const),
 ]);
 
 const checksum = (sql: string): string =>
@@ -117,15 +180,25 @@ async function ledgerExists(db: Db): Promise<boolean> {
   return row != null;
 }
 
-function validateLegacyBaselineLedger(
+function validateFoldedLedger(
   recorded: Array<{ id: string; checksum: string }>,
 ): 'absent' | 'complete' {
   const byId = new Map(recorded.map((row) => [row.id, row.checksum]));
-  const present = LEGACY_BASELINE.filter(({ id }) => byId.has(id));
-  if (present.length === 0) return 'absent';
+  const present = FOLDED_MIGRATIONS.filter(({ id }) => byId.has(id));
+  if (present.length === 0) {
+    // A database from before migration 00 holds only 01/02/03. Running 00-schema.sql on it would
+    // collide with its tables, so it has to go through the folded chain first.
+    if (PRE_BASELINE_LEDGER.some(({ id }) => byId.has(id))) {
+      throw new MigrationDriftError(
+        `Cannot apply ${SCHEMA_BASELINE_ID}: this database predates migration 00-baseline.sql. ` +
+        `Migrate it with release ${LAST_UNFOLDED_RELEASE}, which still ships the full chain, then retry.`,
+      );
+    }
+    return 'absent';
+  }
 
-  const missing = LEGACY_BASELINE.filter(({ id }) => !byId.has(id)).map(({ id }) => id);
-  const mismatched = LEGACY_BASELINE
+  const missing = FOLDED_MIGRATIONS.filter(({ id }) => !byId.has(id)).map(({ id }) => id);
+  const mismatched = FOLDED_MIGRATIONS
     .filter(({ id, checksum: expected }) => {
       const actual = byId.get(id);
       return actual !== undefined && actual !== expected;
@@ -138,9 +211,10 @@ function validateLegacyBaselineLedger(
       ...mismatched,
     ].filter(Boolean).join('\n  ');
     throw new MigrationDriftError(
-      `Cannot adopt the folded PostgreSQL baseline: the legacy baseline ledger is partial or ` +
-      `does not match the immutable 01/02/03 checksums.\n  ${details}\n` +
-      `No schema changes were made. Restore the original ledger entries before retrying.`,
+      `Cannot adopt ${SCHEMA_BASELINE_ID}: the ledger holds only part of the folded migration chain, ` +
+      `or a folded checksum differs.\n  ${details}\n` +
+      `No schema changes were made. Migrate with release ${LAST_UNFOLDED_RELEASE}, which still ships ` +
+      `the full chain, then retry.`,
     );
   }
 
@@ -148,13 +222,13 @@ function validateLegacyBaselineLedger(
 }
 
 /**
- * Records migration 00 for a database that already applied the former 01/02/03 baseline.
+ * Records 00-schema.sql for a database that already applied every folded migration.
  *
  * This is deliberately reachable only from runMigrations(), the explicit migration command.
  * migrationStatus() and verifyMigrationsCurrent() never call it, so starting the API or asking
- * for status cannot mutate configuration. The old rows remain in the ledger as provenance.
+ * for status cannot mutate the ledger. The folded rows remain in the ledger as provenance.
  */
-async function adoptFoldedBaseline(db: Db, baseline: Migration): Promise<boolean> {
+async function adoptSchemaBaseline(db: Db, baseline: Migration): Promise<boolean> {
   if (!await ledgerExists(db)) return false;
 
   return await db.withTransaction(async (tx) => {
@@ -164,7 +238,7 @@ async function adoptFoldedBaseline(db: Db, baseline: Migration): Promise<boolean
     const recorded = await tx.all<{ id: string; checksum: string }>(
       `SELECT id, checksum FROM schema_migrations`,
     );
-    if (validateLegacyBaselineLedger(recorded) === 'absent') return false;
+    if (validateFoldedLedger(recorded) === 'absent') return false;
 
     await tx.run(
       `INSERT INTO schema_migrations (id, checksum) VALUES (?, ?)
@@ -179,7 +253,7 @@ async function adoptFoldedBaseline(db: Db, baseline: Migration): Promise<boolean
 /**
  * Masks comments and quoted bodies without changing string offsets.
  *
- * Migration 12-15 were authored with their own BEGIN/COMMIT wrappers. Executing one inside
+ * Some migrations (12-15, now folded) were authored with BEGIN/COMMIT wrappers. Executing one inside
  * Db.withTransaction() lets its COMMIT end the runner's transaction before the ledger insert,
  * destroying the all-or-nothing guarantee. We identify only transaction control at the outer
  * edges and strip it from the execution copy; the checksum remains over the original file.
@@ -342,13 +416,13 @@ export async function runMigrations(db: Db, dir: string | string[]): Promise<str
   const pending = new Set(status.pending);
   const appliedNow: string[] = [];
 
-  const foldedBaseline = onDisk.find((migration) => migration.id === FOLDED_BASELINE_ID);
-  if (foldedBaseline && pending.has(FOLDED_BASELINE_ID)) {
-    if (await adoptFoldedBaseline(db, foldedBaseline)) {
-      pending.delete(FOLDED_BASELINE_ID);
+  const schemaBaseline = onDisk.find((migration) => migration.id === SCHEMA_BASELINE_ID);
+  if (schemaBaseline && pending.has(SCHEMA_BASELINE_ID)) {
+    if (await adoptSchemaBaseline(db, schemaBaseline)) {
+      pending.delete(SCHEMA_BASELINE_ID);
       console.log(
-        `[migrate] adopted ${FOLDED_BASELINE_ID} from immutable legacy baseline entries; ` +
-        `kept 01/02/03 rows for provenance`,
+        `[migrate] adopted ${SCHEMA_BASELINE_ID}: the ledger already holds every folded migration, ` +
+        `kept as provenance`,
       );
     }
   }
