@@ -129,8 +129,6 @@
     "workflows.task_policy_seeded_at",
     "story_point_model_routing.created_at",
     "story_point_model_routing.updated_at",
-    "system_policies.created_at",
-    "system_policies.updated_at",
     "task_attachments.created_at",
     "task_dependencies.created_at",
     "task_events.created_at",

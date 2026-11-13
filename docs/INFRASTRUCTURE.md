@@ -249,7 +249,6 @@ Dispatch startup failures retry without an attempt limit. The wait increases by 
 - `story_point_model_routing` — model routing rules
 - `routing_config_audit_log` — audit trail of routing configuration changes
 - `routing_config` / `lifecycle_rules` / `routing_transitions` — legacy configuration tables retained for compatibility and migration; runtime task outcome routing uses explicit `workflow_task_transitions`
-- `system_policies` — retained from the baseline schema; no current reader or writer
 
 ### 7.5 Observability tables
 - `instance_artifacts` — per-instance stage, summary, commit, branch, heartbeat timestamps, stale flag, and `transcript_cursor` (how far an OpenClaw session file has been ingested; migration 50 moved it here from `openclaw_transcript_ingest_state`)
@@ -271,7 +270,7 @@ Migration 51 groups the tables into schemas. Application SQL keeps naming tables
 
 | Schema | Holds |
 |---|---|
-| `core` | tenants, projects and their files and audit log, app settings, system policies, providers, GitHub identities, security events |
+| `core` | tenants, projects and their files and audit log, app settings, providers, GitHub identities, security events |
 | `agents` | agents, teams, tools, skills, MCP servers and assignments, `agent_mcp_*` sync and recovery |
 | `workflow` | workflows, workflow types, statuses, transitions, requirements, routing rules and configuration, task field schemas |
 | `tasks` | tasks, history, notes, events, relationships, dependencies, recurring series and runs, external event mappings and receipts |
