@@ -30,6 +30,7 @@ import { syncAssignedMcpForAgent } from '../runtimes/mcpMaterialization';
 import { getDb } from '../db/client';
 import { loadTaskRecurrenceMetadata } from '../domains/tasks/recurrence';
 import { nowTimestamp, parseTimestamp } from '../lib/timestamps';
+import { dispatchFailureBackoffSeconds } from '../lib/dispatchBackoff';
 import { buildHookSessionKey, resolveRuntimeAgentSlug } from '../lib/sessionKeys';
 import { createDurableRunId, ensureJobInstanceDurableRunId, tableHasColumn as durableTableHasColumn } from '../lib/durableRunIdentity';
 import { insertRuntimeLog, resolveRuntimeTenantId, tenantInsertColumns } from '../lib/runtimeTenantScope';
@@ -145,22 +146,12 @@ function requiredOpenClawMcpToolsByServerName(serverNames: string[]): Record<str
   return Object.fromEntries(entries);
 }
 
-// Startup failures retry indefinitely: 2, 4, 6, 8, then 10 minutes by default.
-// The configured base interval is also the increment; the cap is always 10 minutes.
-// retry_count and dispatched_at persist the cooldown across API restarts.
-export const MAX_DISPATCH_FAILURE_BACKOFF_SECONDS = 600;
-const configuredDispatchBackoff = Number(process.env.DISPATCH_FAILURE_BACKOFF_SECONDS ?? 120);
-export const DISPATCH_FAILURE_BACKOFF_SECONDS: number =
-  Number.isFinite(configuredDispatchBackoff) && configuredDispatchBackoff >= 1
-    ? Math.min(Math.floor(configuredDispatchBackoff), MAX_DISPATCH_FAILURE_BACKOFF_SECONDS)
-    : 120;
-
-export function dispatchFailureBackoffSeconds(retryCount: number): number {
-  return Math.min(
-    DISPATCH_FAILURE_BACKOFF_SECONDS * Math.max(1, retryCount),
-    MAX_DISPATCH_FAILURE_BACKOFF_SECONDS,
-  );
-}
+// Startup and runtime failures share one capped, never-ending backoff (lib/dispatchBackoff.ts).
+export {
+  DISPATCH_FAILURE_BACKOFF_SECONDS,
+  MAX_DISPATCH_FAILURE_BACKOFF_SECONDS,
+  dispatchFailureBackoffSeconds,
+} from '../lib/dispatchBackoff';
 
 interface DispatchRetryState {
   retry_count: number;
@@ -1616,7 +1607,8 @@ async function fireAgentRun(
       ` — sessionKey=${sessionKey} model=${model ?? 'gateway-default'}${runId ? ` runId=${runId}` : ''}`
     );
 
-    // A successful startup ends the failure streak. Only touch the task while
+    // A successful startup ends a startup-failure streak. If this run then dies at runtime,
+    // recordRuntimeFailureBackoff recounts the streak from run history. Only touch the task while
     // this instance still owns it; a later run must retain its own retry state.
     await db.run(`UPDATE tasks SET retry_count = 0 WHERE active_instance_id = ? AND retry_count > 0`, instanceId);
     // Store run handle for audit / future abort

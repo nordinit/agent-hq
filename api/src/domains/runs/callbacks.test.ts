@@ -1,4 +1,5 @@
 import { completeRunInstance, startRunInstance } from './callbacks';
+import { dispatchFailureBackoffSeconds, MAX_DISPATCH_FAILURE_BACKOFF_SECONDS } from '../../lib/dispatchBackoff';
 import { setupTestDb, teardownTestDb } from '../../db/testDb';
 import { type Db } from "../../db/adapter/types";
 
@@ -210,5 +211,93 @@ describe('completeRunInstance runtime failure', () => {
     expect(await db.get(`SELECT new_value FROM task_history
       WHERE task_id = ? AND field = 'runtime_failed_unrouted'`, TASK_ID))
       .toEqual({ new_value: expect.stringContaining('Cannot apply outcome "runtime_failed" from "in_progress"') });
+  });
+
+  async function seedEarlierRuns(statuses: string[]): Promise<void> {
+    // Oldest first, all with ids below INSTANCE_ID, so they are the runs before the failing one.
+    // The task row must exist first (job_instances.task_id is a foreign key).
+    for (const [index, status] of statuses.entries()) {
+      await db.run(`
+        INSERT INTO job_instances (id, tenant_id, agent_id, task_id, status, dispatched_at)
+        VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      `, INSTANCE_ID - statuses.length + index, TENANT_ID, AGENT_ID, TASK_ID, status);
+    }
+  }
+
+  async function failRun(): Promise<void> {
+    await expect(completeRunInstance(db, INSTANCE_ID, {
+      status: 'failed',
+      summary: 'OpenClaw runtime failed (error)',
+    })).resolves.toEqual({ ok: true, id: INSTANCE_ID, status: 'failed' });
+  }
+
+  it('makes an unrouted runtime failure wait out the dispatch backoff, anchored at the failure', async () => {
+    await seedInProgressRun();
+    await db.run(`UPDATE tasks SET dispatched_at = '2020-01-01 00:00:00', retry_count = 0 WHERE id = ?`, TASK_ID);
+
+    await failRun();
+
+    const task = await db.get(`SELECT retry_count, dispatched_at, failure_detail FROM tasks WHERE id = ?`, TASK_ID) as {
+      retry_count: number; dispatched_at: string; failure_detail: string;
+    };
+    expect(task.retry_count).toBe(1);
+    // Moved off the stale launch time, so a run that failed late still waits before the next one.
+    expect(task.dispatched_at > '2020-01-01 00:00:00').toBe(true);
+    expect(task.failure_detail).toContain(
+      `will be dispatched again after ${dispatchFailureBackoffSeconds(1)} seconds (failed runs in a row: 1)`,
+    );
+    expect(await db.value(`SELECT new_value FROM task_history
+      WHERE task_id = ? AND field = 'runtime_failed_retry_backoff_seconds'`, TASK_ID))
+      .toBe(String(dispatchFailureBackoffSeconds(1)));
+  });
+
+  it('grows the backoff with failed runs in a row, counting only back to the last run that did not fail', async () => {
+    await seedInProgressRun();
+    await seedEarlierRuns(['failed', 'done', 'failed', 'failed']);
+
+    await failRun();
+
+    expect(await db.value('SELECT retry_count FROM tasks WHERE id = ?', TASK_ID)).toBe(3);
+    expect(await db.value('SELECT failure_detail FROM tasks WHERE id = ?', TASK_ID)).toContain(
+      `after ${dispatchFailureBackoffSeconds(3)} seconds (failed runs in a row: 3)`,
+    );
+  });
+
+  it('keeps backing off at the cap and never stops retrying', async () => {
+    await seedInProgressRun();
+    await seedEarlierRuns(Array.from({ length: 40 }, () => 'failed'));
+
+    await failRun();
+
+    const task = await db.get(`SELECT status, paused_at, retry_count FROM tasks WHERE id = ?`, TASK_ID) as {
+      status: string; paused_at: string | null; retry_count: number;
+    };
+    expect(task).toEqual({ status: 'in_progress', paused_at: null, retry_count: 41 });
+    expect(dispatchFailureBackoffSeconds(task.retry_count)).toBe(MAX_DISPATCH_FAILURE_BACKOFF_SECONDS);
+  });
+
+  it('applies the backoff when a transition routes runtime_failed too', async () => {
+    await seedInProgressRun();
+    await seedEarlierRuns(['failed']);
+    await addTransition('runtime_failed', 'ready');
+
+    await failRun();
+
+    expect(await db.get('SELECT status, retry_count FROM tasks WHERE id = ?', TASK_ID))
+      .toEqual({ status: 'ready', retry_count: 2 });
+  });
+
+  it('leaves the retry state alone when a later run has already started on the task', async () => {
+    await seedInProgressRun();
+    await db.run(`UPDATE tasks SET dispatched_at = '2020-01-01 00:00:00', retry_count = 0 WHERE id = ?`, TASK_ID);
+    await db.run(`
+      INSERT INTO job_instances (id, tenant_id, agent_id, task_id, status, dispatched_at)
+      VALUES (?, ?, ?, ?, 'running', CURRENT_TIMESTAMP)
+    `, INSTANCE_ID + 1, TENANT_ID, AGENT_ID, TASK_ID);
+
+    await failRun();
+
+    expect(await db.get('SELECT retry_count, dispatched_at FROM tasks WHERE id = ?', TASK_ID))
+      .toEqual({ retry_count: 0, dispatched_at: '2020-01-01 00:00:00' });
   });
 });

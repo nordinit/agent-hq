@@ -5,6 +5,7 @@ import { writeTaskHistory } from '../tasks/history';
 import { resolveRuntimeTenantId, tenantInsertColumns } from '../../lib/runtimeTenantScope';
 import { type Db } from "../../db/adapter/types";
 import { WorkflowAllowedValuesError } from '../../lib/taskStatusValidation';
+import { recordRuntimeFailureBackoff } from '../../lib/dispatchBackoff';
 
 export interface RuntimeFailureParams {
   taskId: number;
@@ -21,6 +22,10 @@ export interface RuntimeFailureParams {
  * outcome for it, and that outcome routes like any other: a configured runtime_failed transition
  * from the task's status moves the task. Without one the outcome is refused, exactly as any outcome
  * with no route is, and the task stays where it is to be dispatched again.
+ *
+ * Either way the task's next dispatch waits out the same increasing, capped cooldown as a startup
+ * failure, so a runtime that fails every run cannot redispatch a task every couple of minutes.
+ * It is retried indefinitely; the cooldown only stops growing at the cap.
  */
 export async function applyRuntimeFailedOutcome(
   db: Db,
@@ -39,6 +44,13 @@ export async function applyRuntimeFailedOutcome(
 
   await writeTaskHistory(db, params.taskId, changedBy, 'runtime_failed_instance_id', null, params.instanceId, false);
   await writeTaskHistory(db, params.taskId, changedBy, 'runtime_failed_end_source', null, params.runtimeEndSource, false);
+
+  // Set the cooldown before routing the outcome, so no dispatch that the outcome triggers can
+  // run ahead of it.
+  const backoff = await recordRuntimeFailureBackoff(db, { taskId: params.taskId, instanceId: params.instanceId });
+  if (backoff) {
+    await writeTaskHistory(db, params.taskId, changedBy, 'runtime_failed_retry_backoff_seconds', null, backoff.backoffSeconds, false);
+  }
 
   try {
     const tenantId = await resolveRuntimeTenantId(db, { taskId: params.taskId });
@@ -69,7 +81,10 @@ export async function applyRuntimeFailedOutcome(
     const refused = error instanceof RefusedTaskOutcomeError
       || (error instanceof WorkflowAllowedValuesError && error.code === 'task_outcome_not_allowed_for_workflow');
     if (!refused) throw error;
-    const reason = `${error.message}. The task stays in "${params.priorTaskStatus}" and will be dispatched again.`;
+    const retry = backoff
+      ? ` after ${backoff.backoffSeconds} seconds (failed runs in a row: ${backoff.retryCount})`
+      : '';
+    const reason = `${error.message}. The task stays in "${params.priorTaskStatus}" and will be dispatched again${retry}.`;
     await writeTaskHistory(db, params.taskId, changedBy, 'runtime_failed_unrouted', null, reason, false);
     await db.run('UPDATE tasks SET failure_detail = ? WHERE id = ?', `${failureDetail}\n${reason}`, params.taskId);
     console.warn(`[runtime-failure] Task #${params.taskId}: ${reason}`);
