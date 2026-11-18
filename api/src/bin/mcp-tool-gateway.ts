@@ -28,8 +28,18 @@ async function main() {
   await upstream.connect(new StdioClientTransport({ command: config.command, args: config.args, cwd: config.cwd, env:env as Record<string,string>, stderr: 'inherit' }));
   const server = createToolGateway(upstream, config.allowedTools,toolName=>authorize('call',toolName));
   await server.connect(new StdioServerTransport());
-  const close = async () => { await upstream.close(); process.exit(0); };
+  let closing = false;
+  const close = async () => {
+    if (closing) return;
+    closing = true;
+    try { await upstream.close(); } finally { process.exit(0); }
+  };
   server.onclose = () => void close();
+  // StdioServerTransport never reports stdin EOF, and the upstream child keeps
+  // the event loop alive. Without this, a client that exits without signalling
+  // leaves this gateway and its upstream server running forever.
+  process.stdin.once('end', () => void close());
+  process.stdin.once('close', () => void close());
   process.on('SIGTERM', () => void close());
   process.on('SIGINT', () => void close());
 }
