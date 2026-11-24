@@ -740,4 +740,6 @@ Task types, fields, statuses, outcomes, assignment rules, transitions, gates, an
 - CLI: [`cli/README.md`](cli/README.md)
 - Security: [`SECURITY.md`](SECURITY.md)
 - Contributing: [`CONTRIBUTING.md`](CONTRIBUTING.md)
+- Code of conduct: [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md)
+- Changelog: [`CHANGELOG.md`](CHANGELOG.md)
 - License: [`LICENSE`](LICENSE)
