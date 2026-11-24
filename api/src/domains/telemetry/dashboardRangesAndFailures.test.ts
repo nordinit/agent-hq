@@ -40,6 +40,10 @@ test('task list blocks need at least one status and stay within bounds', async (
   expect(dashboardSchema.safeParse(page({}, [list])).success).toBe(true);
   expect(dashboardSchema.safeParse(page({}, [{ ...list, statuses: [] }])).success).toBe(false);
   expect(dashboardSchema.safeParse(page({}, [{ ...list, limit: 51 }])).success).toBe(false);
+  expect(dashboardSchema.safeParse(page({}, [{ ...list, detail: { kind: 'outcome' } }])).success).toBe(true);
+  expect(dashboardSchema.safeParse(page({}, [{ ...list, detail: { kind: 'field', key: 'verdict_summary' } }])).success).toBe(true);
+  expect(dashboardSchema.safeParse(page({}, [{ ...list, detail: { kind: 'field' } }])).success).toBe(false);
+  expect(dashboardSchema.safeParse(page({}, [{ ...list, detail: { kind: 'description' } }])).success).toBe(false);
   // Unlike operational blocks, a task list may sit on a workflow-scoped page.
   const saved = await createDefinition(db, access, 'dashboard', { key: 'needs', name: 'Needs attention', scope: { project_id: 11 },
     definition: page({ scope: { project_id: 11, workflow_id: 111 } }, [list]) });

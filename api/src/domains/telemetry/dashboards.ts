@@ -22,7 +22,9 @@ export const dashboardBlockSchema = z.discriminatedUnion('type', [
   z.object({ ...common, type: z.literal('operation'), operation: dashboardOperationSchema }).strict(),
   // A live list of matching tasks, newest first. It narrows the page scope; it does not widen it.
   z.object({ ...common, type: z.literal('task_list'), workflow_id: z.number().int().positive().optional(), task_types: z.array(statusKey).max(20).optional(),
-    statuses: z.array(statusKey).min(1).max(20), limit: z.number().int().min(1).max(50).optional() }).strict(),
+    statuses: z.array(statusKey).min(1).max(20), limit: z.number().int().min(1).max(50).optional(),
+    // What each row shows under the title: by default the blocker or latest outcome; or only the latest outcome; or one task field (e.g. a verdict).
+    detail: z.discriminatedUnion('kind', [z.object({ kind: z.literal('outcome') }).strict(), z.object({ kind: z.literal('field'), key: statusKey }).strict()]).optional() }).strict(),
   z.object({ ...common, type: z.enum(['heading', 'note', 'callout']), text: z.string().max(12000) }).strict(),
   z.object({ ...common, type: z.literal('divider') }).strict(),
   z.object({ ...common, type: z.literal('link'), url: z.string().max(2000).refine(value => /^https?:\/\//i.test(value) || /^\/(?!\/)/.test(value), 'Use an http(s) URL or a local /path.').refine(value => !/[\\\u0000-\u0020]/.test(value), 'Links cannot contain backslashes or control characters.') }).strict(),

@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { Activity, Bot, Search, Users, Target, CheckCircle2, Coins, FileText, Layers, Clock, X, ArrowUpRight } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { timeAgo } from '@/lib/date';
-import { dashboardComparisonIssue, formatDashboardValue, operationLabels } from '@/lib/dashboardLayout';
+import { dashboardComparisonIssue, formatDashboardValue, operationLabels, taskListDetail } from '@/lib/dashboardLayout';
 import { sortedTelemetryGroups, telemetryGroupLabel } from '@/lib/telemetryViews';
 import { telemetryExactValue } from '@/lib/telemetryPresentation';
 import type { DashboardBlock, DashboardDocument, DashboardIcon } from '@/lib/dashboardTypes';
@@ -89,8 +89,9 @@ function TaskListBlock({ block, operations }: Props & { block: Extract<Dashboard
   return <div className={wrap}><h3 className={styles.blockTitle}>{title}{list?.total != null && <span className={styles.muted}> · {list.total}</span>}</h3>
     {!list || (list.busy && !list.tasks) ? <p className={styles.loading}>Loading tasks…</p> : list.error ? <p className={styles.error} role="alert">{list.error}</p> : !tasks.length ? <p className={styles.muted}>No matching tasks.</p> : <>
       {tasks.map(task => {
-        const detail = task.blocker_reason || task.latest_task_outcome;
-        return <div key={task.id} className={styles.row}><div className={styles.rowTitle}>#{task.id} {task.title}<p className={styles.muted}>{[task.status, task.task_type, task.assigned_agent_name || task.agent_name || 'Unassigned', `updated ${timeAgo(task.updated_at)}`].filter(Boolean).join(' · ')}</p>{detail && <p className={styles.muted}>{detail.length > 160 ? `${detail.slice(0, 160)}…` : detail}</p>}</div><Link href={`/tasks?id=${task.id}`}>View task</Link></div>;
+        // A chosen field (a research verdict, say) is the point of the row, so it gets more room.
+        const detail = taskListDetail(task, block.detail), room = block.detail?.kind === 'field' ? 600 : 160;
+        return <div key={task.id} className={styles.row}><div className={styles.rowTitle}>#{task.id} {task.title}<p className={styles.muted}>{[task.status, task.task_type, task.assigned_agent_name || task.agent_name || 'Unassigned', `updated ${timeAgo(task.updated_at)}`].filter(Boolean).join(' · ')}</p>{detail && <p className={block.detail?.kind === 'field' ? undefined : styles.muted} title={detail.length > room ? detail : undefined}>{block.detail?.kind === 'outcome' ? 'Outcome: ' : ''}{detail.length > room ? `${detail.slice(0, room)}…` : detail}</p>}</div><Link href={`/tasks?id=${task.id}`}>View task</Link></div>;
       })}
       {(list.total ?? 0) > tasks.length && <p className={styles.muted}>Showing the newest {tasks.length} of {list.total}.</p>}
     </>}

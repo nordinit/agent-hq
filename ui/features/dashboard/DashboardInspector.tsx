@@ -30,6 +30,10 @@ export default function DashboardInspector({ draft, block, data, catalog, change
         <Field label="Task types · comma separated, empty for all"><input className={styles.input} value={(block.task_types ?? []).join(', ')} onChange={event => patch({ task_types: splitKeys(event.target.value) })}/></Field>
         <Field label="Workflow"><select className={styles.input} value={block.workflow_id ?? ''} onChange={event => patch({ workflow_id: event.target.value ? Number(event.target.value) : undefined })}><option value="">Follow dashboard scope</option>{catalog?.workflows.map(workflow => <option key={workflow.id} value={workflow.id}>{workflow.name}</option>)}</select></Field>
         <Field label="Rows"><input type="number" className={styles.input} min={1} max={50} value={block.limit ?? 10} onChange={event => patch({ limit: Math.max(1, Math.min(50, Number(event.target.value) || 10)) })}/></Field>
+        <Field label="Show under each task"><select className={styles.input} value={block.detail?.kind === 'field' ? `field:${block.detail.key}` : block.detail?.kind ?? ''} onChange={event => { const value = event.target.value; patch({ detail: !value ? undefined : value === 'outcome' ? { kind: 'outcome' } : { kind: 'field', key: value.slice(6) } }); }}>
+          <option value="">Blocker or latest outcome</option><option value="outcome">Latest outcome</option>
+          {[...new Set([...(catalog?.fields ?? []).filter(field => field.id.startsWith('field_')).map(field => field.key), ...(block.detail?.kind === 'field' ? [block.detail.key] : [])])].sort().map(key => <option key={key} value={`field:${key}`}>Field · {key}</option>)}
+        </select></Field>
         <p className={styles.muted}>Newest matching tasks first, within the dashboard project.</p>
       </>}
       {block.type === 'operation' && <Field label="Operational data"><select className={styles.input} value={block.operation} onChange={event => patch({ operation: event.target.value as DashboardOperation })}>{Object.entries(operationLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></Field>}

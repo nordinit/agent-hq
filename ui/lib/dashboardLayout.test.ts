@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { blankDashboard, dashboardBlocks, dashboardSection, formatDashboardValue, resolveDashboardRange, taskListRequest, moveDashboardBlock, removeDashboardBlock, resizeDashboardColumns, setDashboardColumns } from './dashboardLayout.ts';
+import { blankDashboard, dashboardBlocks, dashboardSection, formatDashboardValue, resolveDashboardRange, taskListDetail, taskListRequest, moveDashboardBlock, removeDashboardBlock, resizeDashboardColumns, setDashboardColumns } from './dashboardLayout.ts';
 import type { DashboardBlock } from './dashboardTypes.ts';
 
 test('presentation rounds exact decimals without float conversion, including carry, zero places and percentages', () => {
@@ -42,4 +42,15 @@ test('relative ranges resolve against the load time and task lists stay inside t
   const block = { id: 'b', type: 'task_list' as const, statuses: ['blocked'] };
   assert.deepEqual(taskListRequest(block, { project_id: 99, workflow_id: 114, task_type: 'proposal' }), { projectId: 99, workflowId: 114, statuses: ['blocked'], taskTypes: ['proposal'], limit: 10 });
   assert.deepEqual(taskListRequest({ ...block, workflow_id: 115, task_types: ['lead', 'proposal'], limit: 5 }, { project_id: 99 }), { projectId: 99, workflowId: 115, statuses: ['blocked'], taskTypes: ['lead', 'proposal'], limit: 5 });
+});
+
+test('task-list rows show the blocker or outcome by default, or the chosen outcome or field', () => {
+  const task = { blocker_reason: '', latest_task_outcome: 'reject', custom_fields: { verdict_summary: 'Rejected: -2.28c/contract', score: 7, empty: '' } };
+  assert.equal(taskListDetail(task), 'reject');
+  assert.equal(taskListDetail({ ...task, blocker_reason: 'Waiting on NDA' }), 'Waiting on NDA');
+  assert.equal(taskListDetail({ ...task, blocker_reason: 'Waiting on NDA' }, { kind: 'outcome' }), 'reject');
+  assert.equal(taskListDetail(task, { kind: 'field', key: 'verdict_summary' }), 'Rejected: -2.28c/contract');
+  assert.equal(taskListDetail(task, { kind: 'field', key: 'score' }), '7');
+  assert.equal(taskListDetail(task, { kind: 'field', key: 'empty' }), null);
+  assert.equal(taskListDetail({ ...task, custom_fields: null }, { kind: 'field', key: 'verdict_summary' }), null);
 });

@@ -1,4 +1,4 @@
-import type { DashboardBlock, DashboardColumn, DashboardDocument, DashboardDraft, DashboardOperation, DashboardRange, DashboardSection } from './dashboardTypes.ts';
+import type { DashboardBlock, DashboardColumn, DashboardDocument, DashboardDraft, DashboardOperation, DashboardRange, DashboardSection, DashboardTaskDetail } from './dashboardTypes.ts';
 import type { Scalar, TelemetryResult, TelemetryScope } from './telemetryTypes.ts';
 import { createClientId } from './clientId.ts';
 
@@ -21,6 +21,13 @@ export function resolveDashboardRange(range: DashboardRange, now = Date.now()): 
 export function taskListRequest(block: Extract<DashboardBlock, { type: 'task_list' }>, scope: TelemetryScope) {
   return { projectId: scope.project_id, workflowId: block.workflow_id ?? scope.workflow_id, statuses: block.statuses,
     taskTypes: block.task_types?.length ? block.task_types : scope.task_type ? [scope.task_type] : undefined, limit: block.limit ?? 10 };
+}
+/** The line a task-list row shows under its title, or null when the chosen source is empty. */
+export function taskListDetail(task: { blocker_reason?: string | null; latest_task_outcome?: string | null; custom_fields?: Record<string, unknown> | null }, detail?: DashboardTaskDetail): string | null {
+  const text = (value: unknown) => value == null || value === '' ? null : typeof value === 'object' ? JSON.stringify(value) : String(value);
+  if (detail?.kind === 'outcome') return text(task.latest_task_outcome);
+  if (detail?.kind === 'field') return text(task.custom_fields?.[detail.key]);
+  return text(task.blocker_reason) ?? text(task.latest_task_outcome);
 }
 export function dashboardSection(title: string, blocks: DashboardBlock[] = [], count = 1): DashboardSection {
   const columns: DashboardColumn[] = Array.from({ length: count }, () => ({ id: dashboardId(), width: 12 / count, blocks: [] }));
