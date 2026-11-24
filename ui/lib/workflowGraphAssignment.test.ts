@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { assignmentDraft, type GraphAssignment } from './workflowGraphAssignment.ts';
+import { assignmentDraft, orderForChips, type GraphAssignment } from './workflowGraphAssignment.ts';
 import type { WorkflowGraph } from '@/lib/api';
 
 function assignment(over: Partial<GraphAssignment>): GraphAssignment {
@@ -85,4 +85,14 @@ test('another agent on the same status does not match', () => {
   const draft = assignmentDraft({ agentId: 7, agentName: 'Talon (QA)', status: 'review' }, graph);
   assert.equal(draft.rule_id, null);
   assert.equal(draft.agent_id, 7);
+});
+
+test('node chips show live rules before disabled or superseded ones', () => {
+  const disabled = assignment({ rule_id: 1, enabled: false });
+  const superseded = assignment({ rule_id: 2, effective_for_workflow: false });
+  const liveA = assignment({ rule_id: 3 });
+  const liveB = assignment({ rule_id: 4 });
+  const ordered = orderForChips([disabled, superseded, liveA, liveB]);
+  // Both live rules land in the two visible slots, in their original order.
+  assert.deepEqual(ordered.map(a => a.rule_id), [3, 4, 1, 2]);
 });

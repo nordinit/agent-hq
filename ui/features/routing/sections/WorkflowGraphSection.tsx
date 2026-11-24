@@ -20,7 +20,7 @@ import type { GuardContext } from '@/lib/workflowGraphGuards';
 import TransitionComposer, { draftFromEdge, emptyDraft, type TransitionDraft } from './TransitionComposer';
 import { AgentChip, CanvasDndProvider, ConnectHandle, StatusDropTarget } from './CanvasDrag';
 import AssignmentComposer from './AssignmentComposer';
-import { assignmentDraft, type GraphAssignment } from '@/lib/workflowGraphAssignment';
+import { assignmentDraft, orderForChips, type GraphAssignment } from '@/lib/workflowGraphAssignment';
 import GateComposer from './GateComposer';
 import {
   gateDraftFrom,
@@ -41,6 +41,7 @@ import {
   Zap,
   History,
   Play,
+  PowerOff,
   X,
 } from 'lucide-react';
 
@@ -782,28 +783,38 @@ export default function WorkflowGraphSection({
                           {node.inbound_events.length > 0 ? '' : node.terminal ? '—' : 'no agent'}
                         </span>
                       ) : (
-                        node.assignments.slice(0, 2).map(assignment => {
+                        orderForChips(node.assignments).slice(0, 2).map(assignment => {
                           const presentation = scopePresentation(assignment, scopeAware);
                           const ruleSuperseded = presentation === 'superseded';
+                          // A disabled rule never assigns anyone, so it reads as switched off
+                          // rather than as an error: a disabled agent behind it is moot.
+                          const ruleDisabled = !assignment.enabled;
                           // A ring on every chip when they all share a scope is noise; the
                           // summary above says it once. Mark only a genuine mix.
                           const markScope = markAssignmentScope && presentation === 'override';
                           return (
                             <span key={assignment.rule_id} className="group/chip relative inline-flex min-w-0 shrink">
                               <span
-                                title={ruleSuperseded
-                                  ? 'Workflow-type default, superseded by an override on this workflow'
-                                  : assignment.is_override ? 'Defined on this workflow' : undefined}
+                                title={ruleDisabled
+                                  ? `Rule #${assignment.rule_id} is disabled, so it assigns no one`
+                                  : ruleSuperseded
+                                    ? 'Workflow-type default, superseded by an override on this workflow'
+                                    : assignment.is_override ? 'Defined on this workflow' : undefined}
                                 className={`inline-flex items-center gap-1 truncate rounded px-1.5 py-0.5 text-[11px] ${
-                                  assignment.agent_enabled
-                                    ? 'bg-slate-800 text-slate-300'
-                                    : 'bg-red-950/60 text-red-300'
+                                  ruleDisabled
+                                    ? 'border border-dashed border-slate-600 bg-transparent text-slate-500'
+                                    : assignment.agent_enabled
+                                      ? 'bg-slate-800 text-slate-300'
+                                      : 'bg-red-950/60 text-red-300'
                                 } ${ruleSuperseded ? 'opacity-40 line-through decoration-slate-500' : ''} ${
                                   markScope ? 'ring-1 ring-purple-400' : ''
                                 }`}
                               >
-                                {assignment.agent_enabled ? <Bot className="h-3 w-3" /> : <Ban className="h-3 w-3" />}
-                                {assignment.agent_name ?? `agent ${assignment.agent_id ?? '?'}`}
+                                {ruleDisabled
+                                  ? <PowerOff className="h-3 w-3 shrink-0" />
+                                  : assignment.agent_enabled ? <Bot className="h-3 w-3" /> : <Ban className="h-3 w-3" />}
+                                <span className="min-w-0 truncate">{assignment.agent_name ?? `agent ${assignment.agent_id ?? '?'}`}</span>
+                                {ruleDisabled && <span className="shrink-0 uppercase tracking-wide text-[9px] text-slate-500">off</span>}
                               </span>
                               <RemoveAssignmentButton
                                 assignment={assignment}
@@ -1121,15 +1132,23 @@ function NodeInspector({
             {node.assignments.map(assignment => (
               <li
                 key={assignment.rule_id}
-                className="group/chip relative flex items-center justify-between rounded-lg border border-slate-800 bg-slate-900/60 px-2.5 py-1.5 text-xs"
+                className={`group/chip relative flex items-center justify-between rounded-lg border px-2.5 py-1.5 text-xs ${
+                  assignment.enabled
+                    ? 'border-slate-800 bg-slate-900/60'
+                    : 'border-dashed border-slate-700 bg-transparent'
+                }`}
               >
                 <button
                   onClick={() => onEditAssignment?.(assignment)}
                   disabled={!onEditAssignment}
-                  className={`text-left ${assignment.agent_enabled ? 'text-slate-300' : 'text-red-300 line-through'} ${
-                    onEditAssignment ? 'hover:text-amber-300' : ''
-                  }`}
+                  title={assignment.enabled ? undefined : `Rule #${assignment.rule_id} is disabled, so it assigns no one`}
+                  className={`inline-flex items-center gap-1 text-left ${
+                    !assignment.enabled
+                      ? 'text-slate-500'
+                      : assignment.agent_enabled ? 'text-slate-300' : 'text-red-300 line-through'
+                  } ${onEditAssignment ? 'hover:text-amber-300' : ''}`}
                 >
+                  {!assignment.enabled && <PowerOff className="h-3 w-3 shrink-0" />}
                   {assignment.agent_name ?? `agent ${assignment.agent_id ?? '?'}`}
                 </button>
                 {assignment.agent_id && <Link href={`/agents/${assignment.agent_id}/resolution`} className="text-amber-300 hover:underline ml-2" title="Inspect agent context and capabilities">Capabilities ↗</Link>}
@@ -1142,6 +1161,9 @@ function NodeInspector({
                     : <span className="text-cyan-300">· workflow-type default</span>}
                   {assignment.effective_for_workflow === false && (
                     <span className="text-amber-400">· superseded</span>
+                  )}
+                  {!assignment.enabled && (
+                    <span className="font-medium text-slate-400">· disabled</span>
                   )}
                 </span>
                 {onRemoveAssignment && (

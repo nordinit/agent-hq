@@ -50,3 +50,15 @@ export function assignmentDraft(gesture: AssignmentGesture, graph: WorkflowGraph
     is_override: Boolean(existing?.is_override),
   };
 }
+
+/**
+ * Order a status's assignments for the node chips, which only have room for two.
+ *
+ * Rules that actually assign work come first, so a disabled or superseded rule never takes a
+ * visible slot and pushes the agent who really picks tasks up into the "+N" overflow. The sort
+ * is stable, so the API's order holds within each group.
+ */
+export function orderForChips(assignments: readonly GraphAssignment[]): GraphAssignment[] {
+  const live = (a: GraphAssignment) => a.enabled && a.effective_for_workflow !== false;
+  return [...assignments].sort((a, b) => Number(live(b)) - Number(live(a)));
+}
