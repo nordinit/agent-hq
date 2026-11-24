@@ -32,6 +32,9 @@ export interface InstanceContextRunHeader {
   status: string | null;
   dispatchedAt: string | null;
   completedAt: string | null;
+  token_input: number | null;
+  token_output: number | null;
+  token_total: number | null;
 }
 
 export interface InstanceContextView {
@@ -56,7 +59,7 @@ async function loadRunHeader(
   const row = await db.get<Record<string, unknown>>(`
     SELECT
       ji.id, ji.agent_id, ji.task_id, ji.status, ji.dispatched_at, ji.completed_at,
-      ji.durable_run_id,
+      ji.durable_run_id, ji.token_input, ji.token_output, ji.token_total,
       a.name AS agent_name,
       a.job_title AS job_title,
       t.title AS task_title
@@ -79,6 +82,9 @@ async function loadRunHeader(
     status: (row.status as string | null) ?? null,
     dispatchedAt: (row.dispatched_at as string | null) ?? null,
     completedAt: (row.completed_at as string | null) ?? null,
+    token_input: row.token_input == null ? null : Number(row.token_input),
+    token_output: row.token_output == null ? null : Number(row.token_output),
+    token_total: row.token_total == null ? null : Number(row.token_total),
   };
 }
 

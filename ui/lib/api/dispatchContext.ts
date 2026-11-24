@@ -70,6 +70,9 @@ export interface ContextRunHeader {
   status: string | null;
   dispatchedAt: string | null;
   completedAt: string | null;
+  token_input?: number | null;
+  token_output?: number | null;
+  token_total?: number | null;
 }
 
 export interface ContextBundleSummary {

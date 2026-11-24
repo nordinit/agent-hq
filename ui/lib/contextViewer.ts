@@ -53,24 +53,8 @@ export function splitPromptIntoRegions(
   return regions;
 }
 
-/**
- * Rough token estimate for the size read-out.
- *
- * Four characters per token is the usual English approximation and is honest enough for "is this
- * prompt getting too big" without shipping a tokenizer to the browser. Always shown with a ~.
- */
-export function approximateTokens(chars: number): number {
-  return Math.ceil(chars / 4);
-}
-
 export function formatChars(chars: number): string {
   return chars.toLocaleString('en-US');
-}
-
-export function formatTokens(chars: number): string {
-  const tokens = approximateTokens(chars);
-  if (tokens < 1000) return `~${tokens} tokens`;
-  return `~${(tokens / 1000).toFixed(1)}k tokens`;
 }
 
 export function percentOfPrompt(chars: number, totalChars: number): number {

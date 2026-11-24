@@ -20,6 +20,7 @@ import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ArrowLeft, Eye, Plus, Save, Trash2, Users } from 'lucide-react';
+import { formatEstimatedTokens, TOKEN_ESTIMATE_HINT } from '@/lib/tokenCounts';
 
 type Tab = 'map' | 'overview' | 'members' | 'capabilities' | 'routing' | 'context';
 
@@ -515,10 +516,14 @@ function ContextTab({ teamId, members }: { teamId: number; members: TeamMember[]
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    setPreview(null);
+    setError(null);
     if (!agentId) return;
+    let cancelled = false;
     api.previewTeamContext(teamId, Number(agentId))
-      .then(setPreview)
-      .catch(e => setError(String(e)));
+      .then(result => { if (!cancelled) setPreview(result); })
+      .catch(e => { if (!cancelled) setError(String(e)); });
+    return () => { cancelled = true; };
   }, [teamId, agentId]);
 
   return (
@@ -538,6 +543,7 @@ function ContextTab({ teamId, members }: { teamId: number; members: TeamMember[]
           <Card className="p-4">
             <div className="flex items-center gap-2 mb-3 text-xs text-slate-400">
               <Eye className="w-4 h-4" /> Context version {preview.contextVersion}
+              <span className="ml-auto tabular-nums" title={TOKEN_ESTIMATE_HINT}>{formatEstimatedTokens(preview.section.length)}</span>
             </div>
             <pre className="text-xs text-slate-300 whitespace-pre-wrap font-mono">{preview.section}</pre>
           </Card>

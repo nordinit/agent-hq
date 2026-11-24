@@ -54,6 +54,7 @@ async function seed(): Promise<void> {
       VALUES (?, 1, 9, 900, 'running', ?, '2026-08-09 12:00:00')
     `, id, `run:${id}`);
   }
+  await db.run('UPDATE job_instances SET token_input = ?, token_output = ?, token_total = ? WHERE id = ?', 120, 30, 150, 801);
 
   clearContextBundleStoreAvailabilityCache(db);
 
@@ -131,6 +132,7 @@ describe('GET /api/v1/instances/:id/context', () => {
     expect(body.captured).toBe(true);
     expect(body.run.agentName).toBe('Nova');
     expect(body.run.taskTitle).toBe('Ship the context viewer');
+    expect(body.run).toMatchObject({ token_input: 120, token_output: 30, token_total: 150 });
     expect(body.prompt?.segments.map(s => s.kind)).toEqual(['team', 'job_instructions', 'task_notes']);
 
     const team = body.prompt!.segments[0];
@@ -159,6 +161,7 @@ describe('GET /api/v1/instances/:id/context', () => {
     const res = await fetch(`${baseUrl}/api/v1/instances/800/context`);
     const body = await res.json() as InstanceContextView;
 
+    expect(body.run).toMatchObject({ token_input: null, token_output: null, token_total: null });
     const notes = body.prompt!.segments.find(s => s.kind === 'task_notes')!;
     expect(notes.injected).toBe(false);
     expect(notes.chars).toBe(0);

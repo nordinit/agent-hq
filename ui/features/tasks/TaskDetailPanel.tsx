@@ -422,7 +422,7 @@ export function TaskDetailPanel({ task, statuses, onClose, onSave, onDelete, onC
   // Newest run with a stored context bundle, or null when this task has none captured yet.
   const [latestContextInstanceId, setLatestContextInstanceId] = useState<number | null>(null);
   // Runs with a stored context bundle, from the same single read; the runs list shows Context on them.
-  const [capturedRunIds, setCapturedRunIds] = useState<Set<number> | null>(null);
+  const [runPromptChars, setRunPromptChars] = useState<Map<number, number>>(new Map());
   const [contextInstanceId, setContextInstanceId] = useState<number | null>(null);
   const [projects, setProjects] = useState<ProjOpt[]>([]);
   const [workflows, setWorkflows] = useState<WorkflowOpt[]>([]);
@@ -471,12 +471,12 @@ export function TaskDetailPanel({ task, statuses, onClose, onSave, onDelete, onC
       .then(index => {
         if (cancelled) return;
         setLatestContextInstanceId(index.latestInstanceId);
-        setCapturedRunIds(new Set(index.runs.map(run => run.instanceId)));
+        setRunPromptChars(new Map(index.runs.map(run => [run.instanceId, run.promptChars])));
       })
       .catch(() => {
         if (cancelled) return;
         setLatestContextInstanceId(null);
-        setCapturedRunIds(new Set());
+        setRunPromptChars(new Map());
       });
     return () => { cancelled = true; };
   }, [task.id]);
@@ -975,7 +975,7 @@ export function TaskDetailPanel({ task, statuses, onClose, onSave, onDelete, onC
         </a>
       </>}
     >
-      <RelatedRunsSection taskId={localTask.id} outcomeMap={outcomeMap} nonFailureOutcomes={nonFailureOutcomes} capturedRunIds={capturedRunIds} />
+      <RelatedRunsSection taskId={localTask.id} outcomeMap={outcomeMap} nonFailureOutcomes={nonFailureOutcomes} runPromptChars={runPromptChars} />
     </CollapsibleSection>
   );
 

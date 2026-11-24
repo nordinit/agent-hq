@@ -11,6 +11,7 @@ import { getFailureActor, getFailureRecoveryLabel, getFailureSourceLabel, getFai
 import { formatFailureOutcomeBadgeLabel, getTaskOutcomeBadgeClass, TaskOutcomeMetaMap } from '@/lib/taskOutcomeMeta';
 import { shortModelName } from './modelRouting';
 import { ContextViewer } from './ContextViewer';
+import { RunTokenCount } from '@/components/RunTokenCount';
 
 const { dots: FALLBACK_STATUS_DOT } = getTaskStatusMaps();
 
@@ -453,16 +454,12 @@ export const RelatedRunsSection = memo(function RelatedRunsSection({
   taskId,
   outcomeMap,
   nonFailureOutcomes,
-  capturedRunIds,
+  runPromptChars,
 }: {
   taskId: number;
   outcomeMap: TaskOutcomeMetaMap;
   nonFailureOutcomes: Set<string>;
-  /**
-   * Runs with a stored context bundle, when the parent already read the dispatch-context index
-   * (null while it loads). Omitted, the section reads the index itself.
-   */
-  capturedRunIds?: Set<number> | null;
+  runPromptChars: ReadonlyMap<number, number>;
 }) {
   const [instances, setInstances] = useState<JobInstance[]>([]);
   const [total, setTotal] = useState(0);
@@ -470,12 +467,7 @@ export const RelatedRunsSection = memo(function RelatedRunsSection({
   const [loading, setLoading] = useState(true);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [expanded, setExpanded] = useState<number | null>(null);
-  // Which runs have a stored context bundle. Fetched up front so the Context action only appears
-  // where it will actually resolve — a dead button here reads as a broken feature.
-  const [ownCapturedRuns, setOwnCapturedRuns] = useState<Set<number>>(new Set());
   const [contextInstanceId, setContextInstanceId] = useState<number | null>(null);
-  const readsOwnIndex = capturedRunIds === undefined;
-  const capturedRuns = capturedRunIds ?? ownCapturedRuns;
 
   // The newest runs, without the large per-run payload fields; older runs load on request.
   useEffect(() => {
@@ -491,13 +483,6 @@ export const RelatedRunsSection = memo(function RelatedRunsSection({
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [taskId]);
-
-  useEffect(() => {
-    if (!readsOwnIndex) return;
-    api.getTaskDispatchContext(taskId)
-      .then(index => setOwnCapturedRuns(new Set(index.runs.map(run => run.instanceId))))
-      .catch(() => {});
-  }, [taskId, readsOwnIndex]);
 
   const loadOlder = async () => {
     if (olderBeforeId === null) return;
@@ -530,7 +515,7 @@ export const RelatedRunsSection = memo(function RelatedRunsSection({
         return (
           <div key={inst.id}>
             <div
-              className="flex items-center gap-2 py-2 px-3 rounded-lg bg-slate-800 hover:bg-slate-700/80 cursor-pointer transition-colors"
+              className="flex flex-wrap items-center gap-x-2 gap-y-1 py-2 px-3 rounded-lg bg-slate-800 hover:bg-slate-700/80 cursor-pointer transition-colors"
               onClick={() => setExpanded(isExpanded ? null : inst.id)}
             >
               {/* Exec status */}
@@ -553,7 +538,7 @@ export const RelatedRunsSection = memo(function RelatedRunsSection({
                 {formatDateTime(inst.dispatched_at ?? inst.created_at)}
               </span>
               {/* Everything Agent HQ sent this run, section by section. */}
-              {capturedRuns.has(inst.id) && (
+              {runPromptChars.has(inst.id) && (
                 <button
                   type="button"
                   onClick={e => { e.stopPropagation(); setContextInstanceId(inst.id); }}
@@ -574,6 +559,9 @@ export const RelatedRunsSection = memo(function RelatedRunsSection({
                 View
               </Link>
               <span className="text-xs text-slate-600 shrink-0">{isExpanded ? '▲' : '▼'}</span>
+              <span className="w-full text-xs">
+                <RunTokenCount usage={inst} promptChars={runPromptChars.get(inst.id)} showBreakdown />
+              </span>
             </div>
 
             {/* Expanded detail */}

@@ -1,6 +1,6 @@
 'use client';
 
-import { memo } from 'react';
+import { memo, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Bot, ChevronLeft, Loader2, MessageSquare, Mic, Send, Square } from 'lucide-react';
@@ -11,6 +11,9 @@ import { AgentActivityIndicator, isActivityVisible } from '@/features/chat/Agent
 import { ThoughtBubble, ToolCallBubble, ToolGroupBubble,
   TurnEndLine, ToolResultBubble, TurnStartDivider, ErrorBubble } from '@/components/chat/EventBubbles';
 import { buildTranscriptRows } from '@/lib/chatMessages';
+import { RunTokenCount } from '@/components/RunTokenCount';
+import type { JobInstance } from '@/lib/api';
+import { chatTextSize, formatEstimatedTokens, formatRecordedTokens, TOKEN_ESTIMATE_HINT } from '@/lib/tokenCounts';
 import {
   PendingAttachment,
   AttachmentUploadButton,
@@ -112,6 +115,7 @@ const StreamingBubble = memo(function StreamingBubble({ content }: { content: st
 
 export interface ChatPanelProps {
   messages: ChatMessage[];
+  runUsage?: Pick<JobInstance, 'token_input' | 'token_output' | 'token_total'> | null;
   streamContent: string | null;
   /** Live turn state driving the typing indicator. Null when nothing is running. */
   activity?: RunActivity | null;
@@ -144,6 +148,7 @@ export interface ChatPanelProps {
 
 export function ChatPanel({
   messages,
+  runUsage,
   streamContent,
   activity = null,
   messagesEndRef,
@@ -176,6 +181,8 @@ export function ChatPanel({
   const hasUploading = pendingAttachments.some(a => a.uploading);
   const canSend = (inputText.trim().length > 0 || pendingAttachments.some(a => a.uploadedId))
     && !sending && !hasUploading;
+  const hasRecordedUsage = Boolean(formatRecordedTokens(runUsage));
+  const transcriptChars = useMemo(() => hasRecordedUsage ? 0 : chatTextSize(messages), [hasRecordedUsage, messages]);
 
   return (
     <>
@@ -195,6 +202,13 @@ export function ChatPanel({
             <p className="truncate text-sm font-semibold text-white">{mobileTitle ?? agentName ?? 'Chat'}</p>
             {mobileSubtitle ? <p className="truncate text-xs text-slate-500">{mobileSubtitle}</p> : null}
           </div>
+        </div>
+      )}
+      {hasSession && !transcriptLoading && !transcriptError && (hasRecordedUsage || transcriptChars > 0) && (
+        <div className="shrink-0 border-b border-slate-700/50 px-4 py-2 text-xs text-slate-400 md:px-5">
+          {hasRecordedUsage ? <RunTokenCount usage={runUsage} showBreakdown /> : (
+            <span className="tabular-nums" title={TOKEN_ESTIMATE_HINT}>{formatEstimatedTokens(transcriptChars)} in loaded chat text</span>
+          )}
         </div>
       )}
       <div className="flex-1 overflow-y-auto px-4 py-4 md:px-5">

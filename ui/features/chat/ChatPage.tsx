@@ -206,6 +206,9 @@ function ChatPageInner() {
   const selectedInstance = filteredInstances.find(i => i.id === selectedInstanceId)
     ?? agentInstances.find(i => i.id === selectedInstanceId)
     ?? null;
+  const runUsage = selectedInstance && (
+    selectedInstance.token_total != null || selectedInstance.token_input != null || selectedInstance.token_output != null
+  ) ? selectedInstance : selectedInstanceId !== null && canonicalSession?.instance_id === selectedInstanceId ? canonicalSession : null;
   const activeSessionKey: string | null = overrideSessionKey
     ?? resolvedSessionKey
     ?? selectedInstance?.session_key
@@ -816,9 +819,15 @@ function ChatPageInner() {
       api.getAgentInstances(selectedAgentId!, { projectId: selectedProjectId, limit: CHAT_RUN_INDEX_LIMIT })
         .then(instances => {
           const inst = instances.find(i => i.id === instanceId);
-          if (inst && ['done', 'failed'].includes(inst.status)) {
+          if (inst && !stopped && ['done', 'failed'].includes(inst.status)) {
             setAgentInstances(prev =>
-              prev.map(i => i.id === instanceId ? { ...i, status: inst.status } : i)
+              prev.map(i => i.id === instanceId ? {
+                ...i,
+                status: inst.status,
+                token_input: inst.token_input,
+                token_output: inst.token_output,
+                token_total: inst.token_total,
+              } : i)
             );
           }
         })
@@ -1341,6 +1350,7 @@ function ChatPageInner() {
           </div>
           <ChatPanel
             messages={messages}
+            runUsage={runUsage}
             streamContent={streamContent}
             activity={activity}
             messagesEndRef={messagesEndRef}
@@ -1756,6 +1766,7 @@ function ChatPageInner() {
 
         <ChatPanel
           messages={messages}
+          runUsage={runUsage}
           streamContent={streamContent}
           activity={activity}
           messagesEndRef={messagesEndRef}

@@ -1,5 +1,6 @@
 'use client';
 import { formatDateTime, formatDate, formatTime, timeAgo } from '@/lib/date';
+import { formatEstimatedTokens, TOKEN_ESTIMATE_HINT } from '@/lib/tokenCounts';
 
 import { useEffect, useState, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
@@ -363,9 +364,12 @@ export default function ProjectDetailPage() {
 
           {/* Context Markdown */}
           <div>
-            <div className="flex items-center justify-between mb-2">
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
               <label className="text-slate-400 text-xs">Project Context (prepended to all agent dispatches)</label>
-              <div className="flex gap-1">
+              <div className="flex items-center gap-1">
+                <span className="mr-1 text-xs text-slate-400 tabular-nums" title={TOKEN_ESTIMATE_HINT}>
+                  {formatEstimatedTokens((editing ? editContext : project.context_md)?.length ?? 0)}
+                </span>
                 <button
                   onClick={() => { setContextTab('edit'); startEditing(); }}
                   className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${

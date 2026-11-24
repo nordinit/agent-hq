@@ -16,12 +16,13 @@ import { formatDateTime } from '@/lib/date';
 import {
   describeSource,
   formatChars,
-  formatTokens,
   percentOfPrompt,
   segmentAccent,
   segmentAnchorId,
   splitPromptIntoRegions,
 } from '@/lib/contextViewer';
+import { RunTokenCount } from '@/components/RunTokenCount';
+import { formatEstimatedTokens, TOKEN_ESTIMATE_HINT } from '@/lib/tokenCounts';
 
 type ViewerTab = 'prompt' | 'runtime' | 'diff';
 
@@ -109,7 +110,9 @@ function SegmentOutline({
 
               <div className="mt-1 pl-4">
                 {segment.injected ? (
-                  <p className="text-[10px] text-slate-500">{formatChars(segment.chars)} chars</p>
+                  <p className="text-[10px] text-slate-400" title={TOKEN_ESTIMATE_HINT}>
+                    {formatEstimatedTokens(segment.chars)} · {formatChars(segment.chars)} chars
+                  </p>
                 ) : (
                   <p className="text-[10px] italic text-slate-600">Not injected</p>
                 )}
@@ -177,8 +180,8 @@ function PromptPane({
           >
             <header className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-slate-800 px-2.5 py-1.5 sm:px-3">
               <span className={`text-[11px] font-semibold uppercase tracking-wide ${accent.text}`}>{segment.label}</span>
-              <span className="text-[10px] text-slate-500">
-                {formatChars(segment.chars)} chars · {formatTokens(segment.chars)}
+              <span className="text-[10px] text-slate-400" title={TOKEN_ESTIMATE_HINT}>
+                {formatEstimatedTokens(segment.chars)} · {formatChars(segment.chars)} chars
               </span>
               <span className="sm:ml-auto"><SourceChip source={segment.source} /></span>
             </header>
@@ -498,7 +501,7 @@ export function ContextViewer({
     URL.revokeObjectURL(url);
   }, [view]);
 
-  const prompt = view?.prompt ?? null;
+  const prompt = view?.instanceId === currentInstanceId ? view.prompt : null;
   /**
    * Two indices are in play and they are not the same number: highlight keys are position in the
    * full segment list (so uninjected sections still get a stable key), while anchor ids use the
@@ -534,6 +537,9 @@ export function ContextViewer({
                 {view.run.dispatchedAt ? ` · ${formatDateTime(view.run.dispatchedAt)}` : ''}
               </p>
             )}
+            {view?.instanceId === currentInstanceId && (
+              <p className="mt-0.5 text-xs"><RunTokenCount usage={view.run} showBreakdown /></p>
+            )}
           </div>
 
           <div className="flex shrink-0 items-center gap-1 sm:gap-1.5">
@@ -548,7 +554,7 @@ export function ContextViewer({
               >
                 {view.runs.map((run, i) => (
                   <option key={run.instanceId} value={run.instanceId}>
-                    #{run.instanceId}{i === 0 ? ' (latest)' : ''} · {formatChars(run.promptChars)} chars
+                    #{run.instanceId}{i === 0 ? ' (latest)' : ''} · {formatEstimatedTokens(run.promptChars)} in prompt
                   </option>
                 ))}
               </select>
@@ -629,7 +635,7 @@ export function ContextViewer({
           {prompt && (
             <p className="flex w-full flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-slate-500 sm:ml-auto sm:w-auto">
               <span className="text-slate-300">{formatChars(prompt.promptChars)} chars</span>
-              <span>{formatTokens(prompt.promptChars)}</span>
+              <span className="text-slate-300 tabular-nums" title={TOKEN_ESTIMATE_HINT}>{formatEstimatedTokens(prompt.promptChars)} in prompt</span>
               {/* 71 characters of hex earns its space only on a wide screen. */}
               <span className="hidden max-w-[14rem] truncate font-mono lg:inline" title={prompt.promptFingerprint}>
                 {prompt.promptFingerprint}
@@ -653,7 +659,7 @@ export function ContextViewer({
               >
                 {view.runs.map((run, i) => (
                   <option key={run.instanceId} value={run.instanceId}>
-                    #{run.instanceId}{i === 0 ? ' (latest)' : ''} · {formatChars(run.promptChars)} chars
+                    #{run.instanceId}{i === 0 ? ' (latest)' : ''} · {formatEstimatedTokens(run.promptChars)} in prompt
                   </option>
                 ))}
               </select>

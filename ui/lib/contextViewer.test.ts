@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  approximateTokens,
   describeSource,
   percentOfPrompt,
   splitPromptIntoRegions,
@@ -75,10 +74,7 @@ test('splitPromptIntoRegions handles an empty prompt', () => {
   assert.deepEqual(splitPromptIntoRegions('', []), []);
 });
 
-test('approximateTokens and percentOfPrompt report honest sizes', () => {
-  assert.equal(approximateTokens(0), 0);
-  assert.equal(approximateTokens(4), 1);
-  assert.equal(approximateTokens(5), 2);
+test('percentOfPrompt compares section and prompt sizes', () => {
   assert.equal(percentOfPrompt(50, 200), 25);
   assert.equal(percentOfPrompt(1, 0), 0);
 });
