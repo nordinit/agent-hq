@@ -11,6 +11,7 @@ import { TableEnabledSwitch } from '@/components/TableEnabledSwitch';
 import { SectionHeader, TABLE_DELETE_ACTION_CLASS, TABLE_EDIT_ACTION_CLASS } from '@/components/workflowConfig';
 import { ColumnHeaderLabel } from '@/components/ui/table-column-help';
 import { TableColumnFilter, matchesColumnFilter, uniqueColumnOptions } from '@/components/TableColumnFilter';
+import { usePersistentFilter, stringListFilter } from '@/lib/persistentFilter';
 
 type MappingFormState = {
   project_scope: 'global' | 'project';
@@ -204,16 +205,16 @@ export function ExternalEventsRoutingSection({
   const [newForm, setNewForm] = useState<MappingFormState>(() => emptyForm(projectId));
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editForm, setEditForm] = useState<MappingFormState>(() => emptyForm(projectId));
-  const [filterScopes, setFilterScopes] = useState<string[]>([]);
-  const [filterSources, setFilterSources] = useState<string[]>([]);
-  const [filterEvents, setFilterEvents] = useState<string[]>([]);
-  const [filterTaskTypes, setFilterTaskTypes] = useState<string[]>([]);
-  const [filterIncludes, setFilterIncludes] = useState<string[]>([]);
-  const [filterExcludes, setFilterExcludes] = useState<string[]>([]);
-  const [filterActionKinds, setFilterActionKinds] = useState<string[]>([]);
-  const [filterEvidence, setFilterEvidence] = useState<string[]>([]);
-  const [filterPriorities, setFilterPriorities] = useState<string[]>([]);
-  const [filterEnabled, setFilterEnabled] = useState<string[]>([]);
+  const [filterScopes, setFilterScopes] = usePersistentFilter('events_scope', [], stringListFilter);
+  const [filterSources, setFilterSources] = usePersistentFilter('events_source', [], stringListFilter);
+  const [filterEvents, setFilterEvents] = usePersistentFilter('events_event', [], stringListFilter);
+  const [filterTaskTypes, setFilterTaskTypes] = usePersistentFilter('events_task_type', [], stringListFilter);
+  const [filterIncludes, setFilterIncludes] = usePersistentFilter('events_includes', [], stringListFilter);
+  const [filterExcludes, setFilterExcludes] = usePersistentFilter('events_excludes', [], stringListFilter);
+  const [filterActionKinds, setFilterActionKinds] = usePersistentFilter('events_action', [], stringListFilter);
+  const [filterEvidence, setFilterEvidence] = usePersistentFilter('events_evidence', [], stringListFilter);
+  const [filterPriorities, setFilterPriorities] = usePersistentFilter('events_priority', [], stringListFilter);
+  const [filterEnabled, setFilterEnabled] = usePersistentFilter('events_enabled', [], stringListFilter);
 
   const load = useCallback(async () => {
     setLoading(true);

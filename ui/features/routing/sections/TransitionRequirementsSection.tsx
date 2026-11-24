@@ -14,6 +14,7 @@ import { ColumnHeaderLabel } from '@/components/ui/table-column-help';
 import { TableColumnFilter, matchesColumnFilter, uniqueColumnOptions } from '@/components/TableColumnFilter';
 import { Check, Pencil, Plus, Trash2, X } from 'lucide-react';
 import { REQUIREMENT_COLUMN_HELP, ROUTING_TABLE_HELP } from '../workflowConfigShared';
+import { usePersistentFilter, stringListFilter } from '@/lib/persistentFilter';
 
 export default function TransitionRequirementsSection({
   projectId,
@@ -34,15 +35,15 @@ export default function TransitionRequirementsSection({
   const { options: taskTypeOptions } = useTaskTypes(workflowId, {
     workflowType: workflowId ? null : workflowType,
   });
-  const [filterTypes, setFilterTypes] = useState<string[]>([]);
-  const [filterScopes, setFilterScopes] = useState<string[]>([]);
-  const [filterOutcomes, setFilterOutcomes] = useState<string[]>([]);
-  const [filterFields, setFilterFields] = useState<string[]>([]);
-  const [filterChecks, setFilterChecks] = useState<string[]>([]);
-  const [filterSeverities, setFilterSeverities] = useState<string[]>([]);
-  const [filterMessages, setFilterMessages] = useState<string[]>([]);
-  const [filterPriorities, setFilterPriorities] = useState<string[]>([]);
-  const [filterStates, setFilterStates] = useState<string[]>([]);
+  const [filterTypes, setFilterTypes] = usePersistentFilter('gates_task_type', [], stringListFilter);
+  const [filterScopes, setFilterScopes] = usePersistentFilter('gates_scope', [], stringListFilter);
+  const [filterOutcomes, setFilterOutcomes] = usePersistentFilter('gates_outcome', [], stringListFilter);
+  const [filterFields, setFilterFields] = usePersistentFilter('gates_field', [], stringListFilter);
+  const [filterChecks, setFilterChecks] = usePersistentFilter('gates_check', [], stringListFilter);
+  const [filterSeverities, setFilterSeverities] = usePersistentFilter('gates_severity', [], stringListFilter);
+  const [filterMessages, setFilterMessages] = usePersistentFilter('gates_message', [], stringListFilter);
+  const [filterPriorities, setFilterPriorities] = usePersistentFilter('gates_priority', [], stringListFilter);
+  const [filterStates, setFilterStates] = usePersistentFilter('gates_enabled', [], stringListFilter);
   const [requirementFields, setRequirementFields] = useState<CustomFieldDefinition[]>([]);
   const [requirementFieldsLoading, setRequirementFieldsLoading] = useState(false);
   const [newForm, setNewForm] = useState({

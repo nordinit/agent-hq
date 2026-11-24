@@ -21,6 +21,7 @@ import TransitionComposer, { draftFromEdge, emptyDraft, type TransitionDraft } f
 import { AgentChip, CanvasDndProvider, ConnectHandle, StatusDropTarget } from './CanvasDrag';
 import AssignmentComposer from './AssignmentComposer';
 import { assignmentDraft, orderForChips, type GraphAssignment } from '@/lib/workflowGraphAssignment';
+import { booleanFilter, optionalStringFilter, usePersistentFilter } from '@/lib/persistentFilter';
 import GateComposer from './GateComposer';
 import {
   gateDraftFrom,
@@ -99,9 +100,9 @@ export default function WorkflowGraphSection({
   const [graph, setGraph] = useState<WorkflowGraph | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [taskTypeLens, setTaskTypeLens] = useState<string | null>(null);
+  const [taskTypeLens, setTaskTypeLens] = usePersistentFilter('graph_task_type', null, optionalStringFilter);
   const [selection, setSelection] = useState<Selection>(null);
-  const [showOnlyProblems, setShowOnlyProblems] = useState(false);
+  const [showOnlyProblems, setShowOnlyProblems] = usePersistentFilter('graph_problems', false, booleanFilter);
   const [traceForm, setTraceForm] = useState<{ taskType: string; fromStatus: string; outcome: string }>(
     { taskType: '', fromStatus: '', outcome: '' },
   );
@@ -188,8 +189,11 @@ export default function WorkflowGraphSection({
       for (const assignment of node.assignments) if (assignment.task_type) set.add(assignment.task_type);
       for (const event of node.inbound_events) if (event.task_type) set.add(event.task_type);
     }
+    // A restored lens may name a type this scope does not use. List it anyway, so the bar shows
+    // which lens is on and "All types" stays reachable to clear it.
+    if (taskTypeLens) set.add(taskTypeLens);
     return [...set].sort();
-  }, [graph]);
+  }, [graph, taskTypeLens]);
 
   const arcEdges = useCallback(
     (arc: LayoutArc): WorkflowGraphEdge[] =>

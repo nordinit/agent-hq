@@ -7,6 +7,7 @@ import { api, type HistoricalTrace, type Project, type Workflow, type WorkflowTy
 import { formatWorkflowNumber } from '@/lib/workflowLabel';
 import { useWorkflowOutcomeCatalog } from '@/lib/useWorkflowOutcomeCatalog';
 import { useProjectFilterPreference } from '@/lib/projectFilterPreference';
+import { idFilter, usePersistentFilter, withSearchParam, type FilterCodec } from '@/lib/persistentFilter';
 import { getRoutingWorkflowScope } from '@/lib/routingWorkflowTypes';
 import { Card } from '@/components/ui/card';
 import { SCOPE_CARD_CLASS } from '@/components/workflowConfig';
@@ -19,7 +20,20 @@ import WorkflowGraphSection from '@/features/routing/sections/WorkflowGraphSecti
 import { formatWorkflowTypeLabel } from '@/features/routing/workflowConfigShared';
 import { ChevronDown, GitBranch } from 'lucide-react';
 
-type RoutingTab = 'graph' | 'rules' | 'transitions' | 'transition-reqs' | 'external-events' | 'agent-contract';
+const ROUTING_TABS = ['graph', 'rules', 'transitions', 'transition-reqs', 'external-events', 'agent-contract'] as const;
+type RoutingTab = typeof ROUTING_TABS[number];
+
+const routingTabFilter: FilterCodec<RoutingTab> = {
+  parse: raw => (ROUTING_TABS as readonly string[]).includes(raw) ? raw as RoutingTab : undefined,
+  serialize: tab => tab,
+};
+
+// The selector has three states: null follows the project's first type, '' is an explicit
+// "no type", and anything else is a type key. '-' keeps "no type" apart from "follow".
+const workflowTypeFilter: FilterCodec<string | null> = {
+  parse: raw => (raw === '' ? null : raw === '-' ? '' : raw),
+  serialize: type => (type === null ? '' : type === '' ? '-' : type),
+};
 
 // ─── Main Page ───────────────────────────────────────────────
 export default function RoutingPage() {
@@ -34,13 +48,13 @@ export default function RoutingPage() {
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
   const [workflowTypes, setWorkflowTypes] = useState<WorkflowType[]>([]);
   const validProjectIds = useMemo(() => projects.map(project => project.id), [projects]);
-  const [selectedProjectId, setSelectedProjectId] = useProjectFilterPreference({ validProjectIds });
-  const [selectedWorkflowId, setSelectedWorkflowId] = useState<number | null>(null);
+  const [selectedProjectId, setSelectedProjectId] = useProjectFilterPreference({ validProjectIds, syncUrl: true });
+  const [selectedWorkflowId, setSelectedWorkflowId] = usePersistentFilter('workflow_id', null, idFilter);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<RoutingTab>('graph');
+  const [activeTab, setActiveTab] = usePersistentFilter<RoutingTab>('tab', 'graph', routingTabFilter);
   const workflowScopedTabs: RoutingTab[] = ['graph', 'rules', 'transitions', 'transition-reqs'];
-  const [selectedWorkflowType, setSelectedWorkflowType] = useState<string | null>(null);
+  const [selectedWorkflowType, setSelectedWorkflowType] = usePersistentFilter('workflow_type', null, workflowTypeFilter);
   const selectedProject = projects.find(project => project.id === selectedProjectId) ?? null;
   const { availableTypes: availableWorkflowTypes, workflowType: scopedWorkflowType, workflows: filteredWorkflows } = useMemo(
     () => getRoutingWorkflowScope(workflowTypes, workflows, selectedProjectId, selectedWorkflowType),
@@ -88,12 +102,15 @@ export default function RoutingPage() {
       })
       .catch(e => { if (!cancelled) setError(String(e)); });
     return () => { cancelled = true; };
-  }, [traceTaskId, setSelectedProjectId]);
+  }, [traceTaskId, setSelectedProjectId, setActiveTab, setSelectedWorkflowType, setSelectedWorkflowId]);
 
   useEffect(() => {
     if (!loading) setSelectedWorkflowType(current => current === '' ? current : scopedWorkflowType);
-  }, [loading, scopedWorkflowType]);
+  }, [loading, scopedWorkflowType, setSelectedWorkflowType]);
 
+  // ?workflow_id= aligns project and type with that workflow. The workflow selector writes the
+  // same parameter, so this also runs on an ordinary pick, where it changes nothing; that is why
+  // it leaves the tab alone. A link that wants the graph says tab=graph.
   useEffect(() => {
     if (traceTaskId > 0 || !(linkedWorkflowId > 0) || appliedWorkflowLink === linkedWorkflowId) return;
     const linked = workflows.find(w => w.id === linkedWorkflowId);
@@ -101,9 +118,8 @@ export default function RoutingPage() {
     setSelectedProjectId(linked.project_id);
     setSelectedWorkflowType(linked.workflow_type ?? null);
     setSelectedWorkflowId(linked.id);
-    setActiveTab('graph');
     setAppliedWorkflowLink(linkedWorkflowId);
-  }, [linkedWorkflowId, appliedWorkflowLink, workflows, traceTaskId, setSelectedProjectId]);
+  }, [linkedWorkflowId, appliedWorkflowLink, workflows, traceTaskId, setSelectedProjectId, setSelectedWorkflowType, setSelectedWorkflowId]);
 
   if (loading) return (
     <div className="flex items-center justify-center h-64">
@@ -265,7 +281,8 @@ export default function RoutingPage() {
           historicalTrace={historicalTrace}
           onClearHistoricalTrace={() => {
             setHistoricalTrace(null);
-            window.history.replaceState(null, '', '/routing');
+            // Drop only the replay; the filters in the address must survive.
+            window.history.replaceState(null, '', withSearchParam(window.location.href, 'trace_task', null));
           }}
         />
       )}

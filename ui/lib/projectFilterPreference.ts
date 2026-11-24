@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { withSearchParam } from './persistentFilter.ts';
 
 const PROJECT_FILTER_STORAGE_KEY = 'agent-hq:last-project-filter';
 const ALL_PROJECTS_VALUE = 'all';
@@ -15,6 +16,11 @@ export type ProjectFilterState = {
 export type ProjectFilterPreferenceOptions = {
   fallbackProjectId?: number | null;
   validProjectIds?: number[];
+  /**
+   * Also write the operator's choice to ?project_id= so a refresh keeps this tab's project even
+   * when another tab or page changed the shared stored one since.
+   */
+  syncUrl?: boolean;
 };
 
 function parseProjectIdValue(value: string | null): number | null | undefined {
@@ -56,6 +62,16 @@ function writeStoredProjectFilter(projectId: number | null) {
   }
 }
 
+function writeUrlProjectFilter(projectId: number | null) {
+  if (typeof window === 'undefined') return;
+  // Null history state lets Next.js sync useSearchParams with the new address.
+  window.history.replaceState(null, '', withSearchParam(
+    window.location.href,
+    'project_id',
+    projectId === null ? ALL_PROJECTS_VALUE : String(projectId),
+  ));
+}
+
 export function resolveInitialProjectFilter(fallbackProjectId?: number | null): ProjectFilterState {
   return readExplicitProjectFilter()
     ?? readStoredProjectFilter()
@@ -65,6 +81,7 @@ export function resolveInitialProjectFilter(fallbackProjectId?: number | null): 
 export function useProjectFilterPreference({
   fallbackProjectId,
   validProjectIds,
+  syncUrl = false,
 }: ProjectFilterPreferenceOptions = {}) {
   const initial = useMemo(() => resolveInitialProjectFilter(fallbackProjectId), []); // eslint-disable-line react-hooks/exhaustive-deps
   const [projectId, setProjectIdState] = useState<number | null>(initial.projectId);
@@ -75,7 +92,8 @@ export function useProjectFilterPreference({
     sourceRef.current = 'stored';
     setProjectIdState(nextProjectId);
     writeStoredProjectFilter(nextProjectId);
-  }, []);
+    if (syncUrl) writeUrlProjectFilter(nextProjectId);
+  }, [syncUrl]);
 
   useEffect(() => {
     const explicit = readExplicitProjectFilter();
@@ -100,7 +118,9 @@ export function useProjectFilterPreference({
     sourceRef.current = 'stored';
     setProjectIdState(nextProjectId);
     writeStoredProjectFilter(nextProjectId);
-  }, [fallbackProjectId, projectId, validProjectIdSet]);
+    // An archived project left in the address would be restored and rejected on every refresh.
+    if (syncUrl && readExplicitProjectFilter()) writeUrlProjectFilter(nextProjectId);
+  }, [fallbackProjectId, projectId, syncUrl, validProjectIdSet]);
 
   return [projectId, setProjectId] as const;
 }

@@ -13,6 +13,7 @@ import { ColumnHeaderLabel } from '@/components/ui/table-column-help';
 import { TableColumnFilter, matchesColumnFilter, uniqueColumnOptions } from '@/components/TableColumnFilter';
 import { Check, Pencil, Plus, RefreshCw, Trash2, X } from 'lucide-react';
 import { getRoutingTaskTypeBadgeClass, getRoutingTaskTypeLabel, parseRoutingRulePriority, ROUTING_RULE_COLUMN_HELP, ROUTING_TABLE_HELP } from '../workflowConfigShared';
+import { usePersistentFilter, stringListFilter } from '@/lib/persistentFilter';
 
 export default function RoutingRulesSection({
   projectId,
@@ -29,11 +30,11 @@ export default function RoutingRulesSection({
   const [agentsList, setAgentsList] = useState<{ id: number; name: string }[]>([]);
   const [statusCatalog, setStatusCatalog] = useState<TaskStatusMeta[]>([]);
   const [loading, setLoading] = useState(true);
-  const [filterTaskTypes, setFilterTaskTypes] = useState<string[]>([]);
-  const [filterStatuses, setFilterStatuses] = useState<string[]>([]);
-  const [filterAgentIds, setFilterAgentIds] = useState<string[]>([]);
-  const [filterPriorities, setFilterPriorities] = useState<string[]>([]);
-  const [filterStates, setFilterStates] = useState<string[]>([]);
+  const [filterTaskTypes, setFilterTaskTypes] = usePersistentFilter('rules_task_type', [], stringListFilter);
+  const [filterStatuses, setFilterStatuses] = usePersistentFilter('rules_status', [], stringListFilter);
+  const [filterAgentIds, setFilterAgentIds] = usePersistentFilter('rules_agent', [], stringListFilter);
+  const [filterPriorities, setFilterPriorities] = usePersistentFilter('rules_priority', [], stringListFilter);
+  const [filterStates, setFilterStates] = usePersistentFilter('rules_enabled', [], stringListFilter);
   const [showAdd, setShowAdd] = useState(false);
   const [newForm, setNewForm] = useState({
     task_type: '__all__',

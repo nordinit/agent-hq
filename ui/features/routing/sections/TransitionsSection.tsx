@@ -15,6 +15,7 @@ import { ColumnHeaderLabel } from '@/components/ui/table-column-help';
 import { TableColumnFilter, matchesColumnFilter, uniqueColumnOptions } from '@/components/TableColumnFilter';
 import { Check, Pencil, Plus, Trash2, X } from 'lucide-react';
 import { ROUTING_TABLE_HELP, TRANSITION_COLUMN_HELP } from '../workflowConfigShared';
+import { usePersistentFilter, stringListFilter } from '@/lib/persistentFilter';
 
 export default function TransitionsSection({
   projectId,
@@ -36,12 +37,12 @@ export default function TransitionsSection({
   const { taskTypes } = useTaskTypes(workflowId, {
     workflowType: workflowId ? null : workflowType,
   });
-  const [filterTaskTypes, setFilterTaskTypes] = useState<string[]>([]);
-  const [filterFromStatuses, setFilterFromStatuses] = useState<string[]>([]);
-  const [filterOutcomes, setFilterOutcomes] = useState<string[]>([]);
-  const [filterToStatuses, setFilterToStatuses] = useState<string[]>([]);
-  const [filterPriorities, setFilterPriorities] = useState<string[]>([]);
-  const [filterStates, setFilterStates] = useState<string[]>(['enabled']);
+  const [filterTaskTypes, setFilterTaskTypes] = usePersistentFilter('transitions_task_type', [], stringListFilter);
+  const [filterFromStatuses, setFilterFromStatuses] = usePersistentFilter('transitions_from', [], stringListFilter);
+  const [filterOutcomes, setFilterOutcomes] = usePersistentFilter('transitions_outcome', [], stringListFilter);
+  const [filterToStatuses, setFilterToStatuses] = usePersistentFilter('transitions_to', [], stringListFilter);
+  const [filterPriorities, setFilterPriorities] = usePersistentFilter('transitions_priority', [], stringListFilter);
+  const [filterStates, setFilterStates] = usePersistentFilter('transitions_enabled', ['enabled'], stringListFilter);
   const [newForm, setNewForm] = useState({
     task_type: '' as string,
     from_status: '',

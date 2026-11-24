@@ -9,6 +9,7 @@ import { useTaskStatuses } from '@/lib/useTaskStatuses';
 import { useTaskTypes } from '@/lib/taskTypes';
 import { hasLiveTaskInstance } from '@/lib/liveTaskInstances';
 import { useProjectFilterPreference } from '@/lib/projectFilterPreference';
+import { booleanFilter, idListFilter, stringFilter, usePersistentFilter } from '@/lib/persistentFilter';
 import {
   BOARD_PER_STATUS_LIMIT,
   expandBoardColumn,
@@ -70,6 +71,7 @@ export function useTasksPageState() {
   const [selectedProject, setSelectedProject] = useProjectFilterPreference({
     fallbackProjectId: defaultProjectId,
     validProjectIds,
+    syncUrl: true,
   });
   const [loading, setLoading] = useState(true);
   const [isBackgroundLoading, setIsBackgroundLoading] = useState(false);
@@ -80,12 +82,13 @@ export function useTasksPageState() {
   const [expandedBuckets, setExpandedBuckets] = useState<Record<string, number>>({});
   const [modal, setModal] = useState<TasksPageModalState | null>(null);
   const [viewTask, setViewTask] = useState<Task | null>(null);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [activeInstanceOnly, setActiveInstanceOnly] = useState(false);
-  const [selectedTaskType, setSelectedTaskType] = useState('');
-  const [selectedWorkflowIds, setSelectedWorkflowIds] = useState<number[]>([]);
   // Search runs on the server across every task, not only the loaded columns, once typing pauses.
-  const [debouncedSearch, setDebouncedSearch] = useState('');
+  // Only the settled text is saved, so typing does not rewrite the address on every keystroke.
+  const [debouncedSearch, setDebouncedSearch] = usePersistentFilter('q', '', stringFilter);
+  const [searchQuery, setSearchQuery] = useState(debouncedSearch);
+  const [activeInstanceOnly, setActiveInstanceOnly] = usePersistentFilter('live', false, booleanFilter);
+  const [selectedTaskType, setSelectedTaskType] = usePersistentFilter('task_type', '', stringFilter);
+  const [selectedWorkflowIds, setSelectedWorkflowIds] = usePersistentFilter('workflow', [], idListFilter);
   const selectedSingleWorkflowId = selectedWorkflowIds.length === 1 ? selectedWorkflowIds[0] : null;
   const loadRunIdRef = useRef(0);
   const loadControllerRef = useRef<AbortController | null>(null);
@@ -129,12 +132,14 @@ export function useTasksPageState() {
   );
   const defaultNewTaskStatus = statusOptions[0]?.key ?? '';
 
+  // Outside one workflow the options come from the loaded tasks, so wait for the board: before it
+  // arrives the list is empty and a task type restored on load would be thrown away.
   useEffect(() => {
-    if (!selectedTaskType || taskTypesLoading) return;
+    if (!selectedTaskType || taskTypesLoading || loading) return;
     if (!taskTypeOptions.some(option => option.value === selectedTaskType)) {
       setSelectedTaskType('');
     }
-  }, [selectedTaskType, taskTypeOptions, taskTypesLoading]);
+  }, [loading, selectedTaskType, setSelectedTaskType, taskTypeOptions, taskTypesLoading]);
 
   const base = getApiBase();
 
@@ -158,7 +163,7 @@ export function useTasksPageState() {
   useEffect(() => {
     const handle = window.setTimeout(() => setDebouncedSearch(searchQuery.trim()), BOARD_SEARCH_DEBOUNCE_MS);
     return () => window.clearTimeout(handle);
-  }, [searchQuery]);
+  }, [searchQuery, setDebouncedSearch]);
 
   const tasksRef = useRef<Task[]>([]);
   tasksRef.current = tasks;
@@ -198,7 +203,14 @@ export function useTasksPageState() {
       setTasks(reuseUnchangedTasks(tasksRef.current, board.tasks as Task[]));
       setBuckets(board.buckets);
       setTotalTasks(board.total);
-      if (workflowData) setWorkflows(workflowData.filter(s => s.status === 'active' || s.status === 'planning'));
+      if (workflowData) {
+        const listed = workflowData.filter(s => s.status === 'active' || s.status === 'planning');
+        setWorkflows(listed);
+        // A restored workflow filter can name a workflow that has since finished. It would hide
+        // every task while the picker offers no entry to clear it, so drop it.
+        const listedIds = new Set(listed.map(workflow => workflow.id));
+        setSelectedWorkflowIds(ids => (ids.every(id => listedIds.has(id)) ? ids : ids.filter(id => listedIds.has(id))));
+      }
     } catch (error) {
       if (isCurrent()) console.error(error);
     } finally {
@@ -207,17 +219,21 @@ export function useTasksPageState() {
         setIsBackgroundLoading(false);
       }
     }
-  }, [activeInstanceOnly, base, debouncedSearch, expandedBuckets, selectedProject, selectedTaskType]);
+  }, [activeInstanceOnly, base, debouncedSearch, expandedBuckets, selectedProject, selectedTaskType, setSelectedWorkflowIds]);
 
   // A project switch starts over: a fresh board, no expanded columns, no workflow filter.
+  // Mounting is not a switch: the workflow filter restored on load must survive it.
+  const lastProject = useRef(selectedProject);
   useEffect(() => {
+    if (lastProject.current === selectedProject) return;
+    lastProject.current = selectedProject;
     // Keep the same object when nothing was expanded, so the switch does not reload twice.
     setExpandedBuckets(current => (Object.keys(current).length > 0 ? {} : current));
     setSelectedWorkflowIds([]);
     if (selectedProject === null) {
       setWorkflows([]);
     }
-  }, [selectedProject]);
+  }, [selectedProject, setSelectedWorkflowIds]);
 
   // Initial load, and a reload whenever a server-side filter or an expanded column changes.
   const firstLoadForProject = useRef<number | null | undefined>(undefined);
