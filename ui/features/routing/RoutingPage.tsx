@@ -7,7 +7,7 @@ import { api, type HistoricalTrace, type Project, type Workflow, type WorkflowTy
 import { formatWorkflowNumber } from '@/lib/workflowLabel';
 import { useWorkflowOutcomeCatalog } from '@/lib/useWorkflowOutcomeCatalog';
 import { useProjectFilterPreference } from '@/lib/projectFilterPreference';
-import { getRoutingWorkflowTypeOptions } from '@/lib/routingWorkflowTypes';
+import { getRoutingWorkflowScope } from '@/lib/routingWorkflowTypes';
 import { Card } from '@/components/ui/card';
 import { SCOPE_CARD_CLASS } from '@/components/workflowConfig';
 import ExternalEventsRoutingSection from '@/features/routing/ExternalEventsRoutingSection';
@@ -42,21 +42,13 @@ export default function RoutingPage() {
   const workflowScopedTabs: RoutingTab[] = ['graph', 'rules', 'transitions', 'transition-reqs'];
   const [selectedWorkflowType, setSelectedWorkflowType] = useState<string | null>(null);
   const selectedProject = projects.find(project => project.id === selectedProjectId) ?? null;
-  const selectedWorkflow = workflows.find(workflow => workflow.id === selectedWorkflowId) ?? null;
-  const selectedWorkflowMatchesProject = selectedProjectId !== null
-    && selectedWorkflow !== null
-    && selectedWorkflow.project_id === selectedProjectId;
-  const projectScopedWorkflows = selectedProjectId
-    ? workflows.filter(workflow => workflow.project_id === selectedProjectId)
-    : workflows;
-  const availableWorkflowTypes = useMemo(() => getRoutingWorkflowTypeOptions(workflowTypes), [workflowTypes]);
-  const availableWorkflowTypeKeys = useMemo(() => availableWorkflowTypes.map(type => type.key), [availableWorkflowTypes]);
-  const effectiveWorkflowType = selectedWorkflowMatchesProject
-    ? (selectedWorkflow.workflow_type ?? selectedWorkflowType)
-    : selectedWorkflowType;
-  const scopedWorkflowId = selectedWorkflowMatchesProject ? selectedWorkflowId : null;
-  const scopedWorkflowName = selectedWorkflowMatchesProject ? selectedWorkflow.name : null;
-  const scopedWorkflowType = effectiveWorkflowType ?? null;
+  const { availableTypes: availableWorkflowTypes, workflowType: scopedWorkflowType, workflows: filteredWorkflows } = useMemo(
+    () => getRoutingWorkflowScope(workflowTypes, workflows, selectedProjectId, selectedWorkflowType),
+    [workflowTypes, workflows, selectedProjectId, selectedWorkflowType],
+  );
+  const selectedWorkflow = filteredWorkflows.find(workflow => workflow.id === selectedWorkflowId);
+  const scopedWorkflowId = selectedWorkflow?.id ?? null;
+  const scopedWorkflowName = selectedWorkflow?.name ?? null;
   const outcomeCatalog = useWorkflowOutcomeCatalog(scopedWorkflowType);
 
   const load = useCallback(() => {
@@ -70,10 +62,6 @@ export default function RoutingPage() {
         setProjects(projectList);
         setWorkflows(workflowList);
         setWorkflowTypes(workflowTypeList);
-        setSelectedWorkflowId(current => {
-          if (current && workflowList.some(workflow => workflow.id === current)) return current;
-          return null;
-        });
       })
       .catch(e => setError(String(e)))
       .finally(() => setLoading(false));
@@ -103,11 +91,8 @@ export default function RoutingPage() {
   }, [traceTaskId, setSelectedProjectId]);
 
   useEffect(() => {
-    setSelectedWorkflowType(current => {
-      if (current && availableWorkflowTypeKeys.includes(current)) return current;
-      return availableWorkflowTypeKeys[0] ?? null;
-    });
-  }, [availableWorkflowTypeKeys]);
+    if (!loading) setSelectedWorkflowType(current => current === '' ? current : scopedWorkflowType);
+  }, [loading, scopedWorkflowType]);
 
   useEffect(() => {
     if (traceTaskId > 0 || !(linkedWorkflowId > 0) || appliedWorkflowLink === linkedWorkflowId) return;
@@ -119,20 +104,6 @@ export default function RoutingPage() {
     setActiveTab('graph');
     setAppliedWorkflowLink(linkedWorkflowId);
   }, [linkedWorkflowId, appliedWorkflowLink, workflows, traceTaskId, setSelectedProjectId]);
-
-  useEffect(() => {
-    if (linkedWorkflowId > 0 && appliedWorkflowLink !== linkedWorkflowId && workflows.some(w => w.id === linkedWorkflowId)) return;
-    // A replay pins the scope to the traced task's own workflow. Without this guard
-    // the reset below races the trace load: projectScopedWorkflows is still empty on
-    // mount, so the workflow the trace just selected gets cleared and the graph falls
-    // back to type defaults — which for most projects means no transitions at all.
-    if (historicalTrace?.task.workflow_id) return;
-    setSelectedWorkflowId(current => {
-      if (!selectedWorkflowType) return null;
-      if (current && projectScopedWorkflows.some(workflow => workflow.id === current && workflow.workflow_type === selectedWorkflowType)) return current;
-      return null;
-    });
-  }, [projectScopedWorkflows, selectedWorkflowType, historicalTrace, linkedWorkflowId, appliedWorkflowLink, workflows]);
 
   if (loading) return (
     <div className="flex items-center justify-center h-64">
@@ -156,9 +127,6 @@ export default function RoutingPage() {
   // once per type. Without the dedupe the composer lists every outcome about ten times.
   // runtime_failed is built in, so it is never in the catalog but can always be routed.
   const graphOutcomeKeys = [...new Set([...outcomeCatalog.resolved.map(outcome => outcome.outcome_key), RUNTIME_FAILED_OUTCOME])].sort();
-  const filteredWorkflows = selectedProjectId && scopedWorkflowType
-    ? workflows.filter(workflow => workflow.project_id === selectedProjectId && workflow.workflow_type === scopedWorkflowType)
-    : [];
 
   return (
     <div className="space-y-6">
@@ -198,7 +166,10 @@ export default function RoutingPage() {
                   <select
                     className="appearance-none w-full bg-slate-800 border border-slate-700 rounded-lg pl-3 pr-8 py-2.5 text-sm text-slate-200 focus:outline-none focus:border-amber-500"
                     value={selectedProjectId ?? ''}
-                    onChange={e => setSelectedProjectId(e.target.value ? Number(e.target.value) : null)}
+                    onChange={e => {
+                      setSelectedProjectId(e.target.value ? Number(e.target.value) : null);
+                      setSelectedWorkflowId(null);
+                    }}
                   >
                     <option value="">All Projects</option>
                     {projects.map(project => (
@@ -215,8 +186,11 @@ export default function RoutingPage() {
                 <div className="relative">
                   <select
                     className="appearance-none w-full bg-slate-800 border border-slate-700 rounded-lg pl-3 pr-8 py-2.5 text-sm text-slate-200 focus:outline-none focus:border-amber-500 disabled:opacity-60"
-                    value={selectedWorkflowType ?? ''}
-                    onChange={e => setSelectedWorkflowType(e.target.value || null)}
+                    value={scopedWorkflowType ?? ''}
+                    onChange={e => {
+                      setSelectedWorkflowType(e.target.value);
+                      setSelectedWorkflowId(null);
+                    }}
                     disabled={availableWorkflowTypes.length === 0}
                   >
                     <option value="">Select workflow type…</option>
@@ -238,7 +212,7 @@ export default function RoutingPage() {
                     onChange={e => setSelectedWorkflowId(e.target.value ? Number(e.target.value) : null)}
                     disabled={filteredWorkflows.length === 0}
                   >
-                    <option value="">{selectedWorkflowType ? 'All (default)' : 'Select workflow type first…'}</option>
+                    <option value="">{scopedWorkflowType ? 'All (default)' : 'Select workflow type first…'}</option>
                     {filteredWorkflows.map(workflow => (
                       <option key={workflow.id} value={workflow.id}>
                         {formatWorkflowNumber(workflow.id)} · {workflow.name}
