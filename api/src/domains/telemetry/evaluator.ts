@@ -21,7 +21,7 @@ const builtins: Record<string, string> = {
   project_id: 'number', workflow_id: 'number',  agent_id: 'number', assigned_agent_id: 'number',
   executing_agent_id: 'number', outcome_agent_id: 'number', actor_agent_id: 'number', created_at: 'datetime', updated_at: 'datetime',
   started_at: 'datetime', ended_at: 'datetime', duration_ms: 'number', story_points: 'number', retry_count: 'number',
-  tokens_in: 'number', tokens_out: 'number', tokens_total: 'number', input_tokens: 'number', output_tokens: 'number',
+  tokens_in: 'number', tokens_out: 'number', tokens_total: 'number', tokens_fresh_in: 'number', tokens_cached_in: 'number', token_usage_status: 'text', input_tokens: 'number', output_tokens: 'number',
   runtime_state: 'text', state: 'text', runtime_type: 'text', model: 'text', instruction_version: 'text',
   instruction_fingerprint: 'text', runtime_failed: 'checkbox', missing_handoff: 'checkbox', failure_reason: 'text',
   'event.type': 'text', 'event.from_status': 'text', 'event.to_status': 'text', 'event.outcome': 'text',

@@ -131,14 +131,14 @@ function historicalTaskWhere(access:TelemetryAccess,scope:TelemetryScope,asOf:st
   return {sql:conditions.join(' AND '),params};
 }
 /**
- * The job_instances columns telemetry_run_snapshot reads (migration 56), as a jsonb row. Building it
+ * The job_instances columns telemetry_run_snapshot reads (migrations 56 and 58), as a jsonb row. Building it
  * from these columns instead of to_jsonb(j) keeps large payload, response and transcript text out of
  * every run read; a test checks it yields the same snapshot as the whole row.
  */
 const RUN_SNAPSHOT_COLUMNS = ['id','agent_id','task_id','tenant_id','status','created_at','dispatched_at','completed_at','started_at','task_outcome',
   'token_input','token_output','token_total','effective_model','effective_thinking_level','effective_fast_mode','failure_class','failure_stage',
   'runtime_ended_at','runtime_end_success','runtime_end_source','lifecycle_outcome_posted_at','runtime_completed_at','lifecycle_handoff_status',
-  'semantic_outcome_missing','error','runtime_end_error'] as const;
+  'semantic_outcome_missing','error','runtime_end_error','token_cached_input','token_usage_status'] as const;
 export const RUN_SNAPSHOT_ROW = `jsonb_build_object(${RUN_SNAPSHOT_COLUMNS.map(column => `'${column}',j.${column}`).join(',')})`;
 /**
  * The created_at window a population requires of every entity: bounds reached through `all` only,

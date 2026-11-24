@@ -127,10 +127,26 @@ test('a creation window narrows run reads without changing which runs count', as
 });
 
 test('run reads build the same snapshot from the slim row as from the whole run row', async () => {
-  await db.run(`INSERT INTO job_instances(id,tenant_id,task_id,agent_id,status,error,runtime_end_error,payload_sent,response,token_input,token_output,lifecycle_handoff_status)
-    VALUES (801,1,1001,101,'failed','e','Provider limit reached','prompt text','transcript text',10,5,'missing'),(802,1,1002,101,'done',NULL,NULL,NULL,NULL,NULL,NULL,NULL)`);
+  await db.run(`INSERT INTO job_instances(id,tenant_id,task_id,agent_id,status,error,runtime_end_error,payload_sent,response,token_input,token_output,token_cached_input,token_usage_status,lifecycle_handoff_status)
+    VALUES (801,1,1001,101,'failed','e','Provider limit reached','prompt text','transcript text',10,5,3,'partial','missing'),(802,1,1002,101,'done',NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL)`);
   const rows = await db.all<{ id: number; slim: unknown; whole: unknown }>(`SELECT j.id, telemetry_run_snapshot(${RUN_SNAPSHOT_ROW}) AS slim,
     telemetry_run_snapshot(to_jsonb(j)) AS whole FROM job_instances j WHERE j.tenant_id = 1 ORDER BY j.id`);
   expect(rows.length).toBeGreaterThanOrEqual(3);
   for (const row of rows) expect(row.slim).toEqual(row.whole);
+});
+
+test('run snapshots count fresh and cached input the same way for every runtime', async () => {
+  // Codex counts cache reads inside input; Claude Code reports them separately.
+  await db.run(`INSERT INTO job_instances(id,tenant_id,task_id,agent_id,status,token_input,token_output,token_cached_input,token_usage_status) VALUES
+    (901,1,1001,101,'done',1000,50,800,'recorded'),(902,1,1002,102,'done',200,40,5000,'partial'),(903,1,1003,101,'done',NULL,NULL,NULL,NULL)`);
+  await db.run(`INSERT INTO runtime_executions(tenant_id,instance_id,boundary_json,boundary_fingerprint,runtime_type,driver,backend,execution_target_id,state) VALUES
+    (1,901,'{}','codex-run','codex','codex','local','test','succeeded'),(1,902,'{}','claude-run','claude-code','claude-code','local','test','succeeded')`);
+  const snapshot = async (id: number) => db.value(`SELECT telemetry_run_snapshot(to_jsonb(j)) FROM job_instances j WHERE j.id = ?`, id) as Promise<Record<string, unknown>>;
+  expect(await snapshot(901)).toMatchObject({ tokens_fresh_in: 200, tokens_cached_in: 800, token_output: 50, token_usage_status: 'recorded' });
+  expect(await snapshot(902)).toMatchObject({ tokens_fresh_in: 200, tokens_cached_in: 5000, token_output: 40, token_usage_status: 'partial' });
+  expect(await snapshot(903)).toMatchObject({ tokens_fresh_in: null, tokens_cached_in: null, token_usage_status: null });
+  const fresh = await metric('fresh_tokens', 'run', { measure: { kind: 'aggregate', aggregate: 'sum', value: { field: 'tokens_fresh_in' } }, population: { field: 'tokens_fresh_in', op: 'is_present' } });
+  const cached = await metric('cached_tokens', 'run', { measure: { kind: 'aggregate', aggregate: 'sum', value: { field: 'tokens_cached_in' } }, population: { field: 'tokens_cached_in', op: 'is_present' } });
+  expect((await queryTelemetry(db, access, { metric_revision_id: fresh.latest_revision_id })).value).toBe(400);
+  expect((await queryTelemetry(db, access, { metric_revision_id: cached.latest_revision_id })).value).toBe(5800);
 });

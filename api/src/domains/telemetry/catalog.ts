@@ -17,7 +17,7 @@ const allGrains:Grain[]=[...relatedGrains,'project','workflow','agent'];
 function supportedGrains(id:string):Grain[]{
   if(id.startsWith('event.'))return relatedGrains;
   if(id==='status_identity')return taskGrains;
-  if(['tokens_in','tokens_out','runtime_ended_success','semantic_outcome_missing','instruction_fingerprint','model','failure_reason'].includes(id))return ['run'];
+  if(['tokens_in','tokens_out','tokens_fresh_in','tokens_cached_in','token_usage_status','runtime_ended_success','semantic_outcome_missing','instruction_fingerprint','model','failure_reason'].includes(id))return ['run'];
   if(id==='runtime_state')return ['runtime_execution'];
   if(id==='runtime_duration_ms'||id==='started_at'||id==='ended_at')return ['run','runtime_execution'];
   if(id==='runtime_type')return ['run','runtime_execution','agent'];
@@ -35,6 +35,8 @@ const builtinTypes: Record<string, CatalogDescriptor['type']> = {
   started_at:'datetime',ended_at:'datetime',runtime_state:'select',runtime_ended_success:'checkbox',semantic_outcome_missing:'checkbox',
   runtime_type:'text',model:'text',instruction_fingerprint:'text',tokens_in:'number',tokens_out:'number',runtime_duration_ms:'number',
   unresolved_dependencies:'number',workflow_status:'select',failure_reason:'select',
+  // Comparable across runtimes (migration 58): tokens_in keeps each runtime's own meaning.
+  tokens_fresh_in:'number',tokens_cached_in:'number',token_usage_status:'select',
   'event.type':'text','event.from_status':'text','event.to_status':'text','event.outcome':'text','event.actor':'text',
   'event.from_status_identity':'text','event.to_status_identity':'text','event.outcome_identity':'text',
   'event.event':'text','event.mapping_id':'number','event.processing_state':'text',
@@ -45,6 +47,7 @@ export const BUILTIN_FIELDS: TelemetryField[] = Object.entries(builtinTypes).map
   id, key:id, label:id.replace(/^event\./,'Event ').replace(/_/g,' '), type, scope:{}, bases,
   value_bases:bases,supported_grains:supportedGrains(id), ...(id.endsWith('_ms') ? {unit:'milliseconds'} : {}),
   ...(id==='failure_reason' ? {options:[...RUN_FAILURE_REASONS]} : {}),
+  ...(id==='token_usage_status' ? {options:['recorded','partial','unavailable']} : {}),
 }));
 export const parseObject = (value: unknown): Record<string, any> => {
   if (typeof value === 'string') { try { const parsed = JSON.parse(value); return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}; } catch { return {}; } }
