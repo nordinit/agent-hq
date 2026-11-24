@@ -1,6 +1,6 @@
 # Telemetry observation producers and retention
 
-Implementation: [migration 26](../db/pg-migrations/26-telemetry-capture.sql) and [capture service](../api/src/domains/telemetry/capture.ts). This inventory describes the new measurement evidence, not the legacy quality summaries. No production migration or production backfill was run during implementation.
+Implementation: the `telemetry` schema in [`00-schema.sql`](../db/pg-migrations/00-schema.sql) and [capture service](../api/src/domains/telemetry/capture.ts). This inventory describes the new measurement evidence, not the legacy quality summaries. No production migration or production backfill was run during implementation.
 
 ## Transaction boundary and identity
 
