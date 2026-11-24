@@ -130,6 +130,35 @@ function historicalTaskWhere(access:TelemetryAccess,scope:TelemetryScope,asOf:st
   if(scope.include_archived===false)conditions.push("s.status <> 'closed'");
   return {sql:conditions.join(' AND '),params};
 }
+/**
+ * The created_at window a population requires of every entity: bounds reached through `all` only,
+ * where each one limits the whole population. Used to narrow the SQL read before the exact
+ * in-memory evaluation, never to decide membership itself.
+ */
+export function createdAtWindow(population:Predicate|undefined):{from?:number;to?:number} {
+  const window:{from?:number;to?:number}={};
+  const visit=(node:any)=>{
+    if(!node||typeof node!=='object')return;
+    if(Array.isArray(node.all)){node.all.forEach(visit);return;}
+    if(node.field!=='created_at'||(node.basis!==undefined&&node.basis!=='current')||typeof node.value!=='string')return;
+    const time=Date.parse(node.value);if(!Number.isFinite(time))return;
+    if(node.op==='gte'||node.op==='gt')window.from=Math.max(window.from??-Infinity,time);
+    if(node.op==='lt'||node.op==='lte')window.to=Math.min(window.to??Infinity,time);
+  };
+  visit(population);
+  return window;
+}
+/**
+ * SQL bounds for a created_at text column, widened to whole days on each side so a stored format
+ * that differs after the date ("YYYY-MM-DD HH:MM:SS" or ISO) can never exclude a matching row.
+ */
+function createdAtSql(column:string,window:{from?:number;to?:number}):{sql:string[];params:unknown[]} {
+  const day=(time:number)=>new Date(time).toISOString().slice(0,10);
+  const sql:string[]=[],params:unknown[]=[];
+  if(window.from!=null){sql.push(`${column} >= ?`);params.push(day(window.from-86_400_000));}
+  if(window.to!=null){sql.push(`${column} < ?`);params.push(day(window.to+2*86_400_000));}
+  return {sql,params};
+}
 export async function loadMetricData(db:Db,access:TelemetryAccess,scope:TelemetryScope,definition:MetricDefinition,fields:TelemetryField[],asOf:string,entityLimit:number,allowedTaskIds?:number[]) {
   if(access.projectId!=null){
     if(scope.project_id!=null&&scope.project_id!==access.projectId)throw new TelemetryError('forbidden','Telemetry source scope cannot exceed the credential project.',403);
@@ -142,6 +171,10 @@ export async function loadMetricData(db:Db,access:TelemetryAccess,scope:Telemetr
   if(!['task','event','journey'].includes(grain)&&fields.some(field=>field.source&&references.includes(field.id)))throw new TelemetryError('unsupported_operation','Task custom fields require task, event or journey grain. Run/entity allocation of task values is not defined.');
   const where=historical?historicalTaskWhere(access,scope,asOf):taskWhere(access,scope);
   if(allowedTaskIds){where.sql+=' AND t.id=ANY(?::bigint[])';where.params.push(allowedTaskIds);}
+  // A creation-window population (a dashboard time range on a current snapshot) only needs the
+  // tasks or runs created in that window. Run grain still needs every task its runs belong to.
+  const created=definition.time_basis==='current'?createdAtWindow(definition.population):{};
+  if(grain==='task'){const bounds=createdAtSql('t.created_at',created);for(const sql of bounds.sql)where.sql+=` AND ${sql}`;where.params.push(...bounds.params);}
   const taskRows=['task','event','journey','run','runtime_execution'].includes(grain)?await db.all<{id:number;snapshot:Record<string,any>;workflow_status:string}>(`SELECT t.id,telemetry_task_snapshot(to_jsonb(t)) AS snapshot,s.status AS workflow_status
     FROM tasks t JOIN workflows s ON s.id=t.workflow_id AND s.tenant_id=t.tenant_id
     WHERE ${where.sql} ORDER BY t.id LIMIT ?`,...where.params,entityLimit+1):[];
@@ -180,6 +213,7 @@ export async function loadMetricData(db:Db,access:TelemetryAccess,scope:Telemetr
     if(scope.task_type){conditions.push('t.task_type=?');params.push(scope.task_type);}
     if(scope.include_archived===false)conditions.push("(s.id IS NULL OR s.status <> 'closed')");
     if(allowedTaskIds){conditions.push('j.task_id=ANY(?::bigint[])');params.push(allowedTaskIds);}
+    if(grain==='run'){const bounds=createdAtSql('j.created_at',created);conditions.push(...bounds.sql);params.push(...bounds.params);}
     const rows=grain==='run'?await db.all<any>(`SELECT j.id,j.task_id,COALESCE(t.project_id,a.project_id) AS project_id,telemetry_run_snapshot(to_jsonb(j)) AS snapshot FROM job_instances j ${joins} WHERE ${conditions.join(' AND ')} ORDER BY j.id LIMIT ?`,...params,entityLimit+1):
       await db.all<any>(`SELECT r.id,j.task_id,j.agent_id,COALESCE(t.project_id,a.project_id) AS project_id,
         jsonb_build_object('id',r.id,'state',r.state,'runtime_type',r.runtime_type,'started_at',r.started_at,'ended_at',r.ended_at,'created_at',r.created_at,'instance_id',r.instance_id,'boundary_fingerprint',r.boundary_fingerprint) AS snapshot

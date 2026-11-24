@@ -69,7 +69,13 @@ async function planQuery(db:Db,access:TelemetryAccess,input:TelemetryQuery,catal
       definition.population=definition.population?{all:[definition.population,filter.value as Predicate]}:filter.value as Predicate;
       compiled.dependencies.signals=[...new Map([...(compiled.dependencies.signals??[]),...filter.signals].map(signal=>[signal.id,signal])).values()];
     }
-    if(settings.group_by)definition.group_by=settings.group_by as ValueExpression[];
+    if(settings.group_by){
+      // A requested breakdown is compiled like an ad-hoc filter: an outcome or status selector
+      // inside it (an `if` label, say) must match signal identities, as the saved one does.
+      const grouped=compileSignalPredicates(settings.group_by,[...catalog.statuses,...catalog.outcomes],merged,definition.grain);
+      definition.group_by=grouped.value as ValueExpression[];
+      compiled.dependencies.signals=[...new Map([...(compiled.dependencies.signals??[]),...grouped.signals].map(signal=>[signal.id,signal])).values()];
+    }
     if(settings.bucket!==undefined){if(settings.bucket===null)delete definition.bucket;else definition.bucket=settings.bucket;}
     parseMetricDefinition(definition,fields);
     plans.push({definition,scope:merged,dependencies:compiled.dependencies,title:revision?.name??definition.name,metric_revision_id:revision?.id,fields,...extra});

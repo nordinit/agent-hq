@@ -5,6 +5,8 @@ import { createDefinition } from './definitions';
 import { DASHBOARD_METRIC_LIMIT, dashboardSchema } from './dashboards';
 import { reportSchema } from './views';
 import { queryTelemetry } from './queries';
+import { createdAtWindow } from './data';
+import { getTelemetryCatalog } from './catalog';
 import { listTasks } from '../tasks/readModel';
 
 let db: Db;
@@ -86,4 +88,36 @@ test('task lists filter by one or more task types', async () => {
   expect(page.tasks.map(task => task.id).sort()).toEqual([1001, 1002, 1003, 1004]);
   const none = await listTasks(db, { tenant_id: 1, project_id: 11, task_type: 'lead,proposal', limit: 10 }) as { total: number };
   expect(none.total).toBe(0);
+});
+
+test('a breakdown sent with the query matches outcome signals like the saved one', async () => {
+  // Saved metrics usually select an outcome by its catalog signal ID, which only compilation resolves.
+  const signal = (await getTelemetryCatalog(db, access, { project_id: 11 })).outcomes.find(item => item.key === 'changes_requested')!.id;
+  const changed = { left: { event_exists: { field: 'event.outcome', op: 'eq', value: signal } }, op: 'eq', right: { literal: true } };
+  const group_by = [{ if: changed, then: { literal: 'Changed' }, else: { literal: 'Clean' } }];
+  const labelled = await metric('labelled', 'task', { group_by });
+  const groups = (result: any) => Object.fromEntries(result.groups.map((group: { key: unknown[]; value: unknown }) => [String(group.key[0]), group.value]));
+  const saved = await queryTelemetry(db, access, { metric_revision_id: labelled.latest_revision_id });
+  expect(groups(saved)).toEqual({ Changed: 1, Clean: 5 });
+  // The dashboard UI always sends the metric's breakdown back with the query.
+  const requested = await queryTelemetry(db, access, { metric_revision_id: labelled.latest_revision_id, group_by });
+  expect(groups(requested)).toEqual({ Changed: 1, Clean: 5 });
+});
+
+test('a creation window narrows run reads without changing which runs count', async () => {
+  expect(createdAtWindow({ all: [{ field: 'status', op: 'eq', value: 'failed' }, { all: [{ field: 'created_at', op: 'gte', value: '2026-11-22T00:00:00Z' }, { field: 'created_at', op: 'lt', value: '2026-11-24T00:00:00Z' }] }] }))
+    .toEqual({ from: Date.parse('2026-11-22T00:00:00Z'), to: Date.parse('2026-11-24T00:00:00Z') });
+  // Bounds under `any` or `not` do not limit every entity, so they never narrow the read.
+  expect(createdAtWindow({ any: [{ field: 'created_at', op: 'gte', value: '2026-11-22T00:00:00Z' }] })).toEqual({});
+  expect(createdAtWindow({ field: 'created_at', basis: 'at_event', op: 'gte', value: '2026-11-22T00:00:00Z' } as any)).toEqual({});
+  const now = Date.now(), iso = (offset: number) => new Date(now + offset).toISOString();
+  const text = (offset: number) => iso(offset).replace('T', ' ').slice(0, 19);
+  await db.run(`INSERT INTO job_instances(id,tenant_id,task_id,agent_id,status,created_at) VALUES
+    (701,1,1001,101,'done',?),(702,1,1002,101,'done',?),(703,1,1003,101,'done',?),(704,1,1004,101,'done',?)`,
+    text(-30 * 86_400_000), text(-3_600_000), iso(-7_200_000), text(-49 * 3_600_000));
+  const runs = await metric('runs', 'run');
+  const recent = await queryTelemetry(db, access, { metric_revision_id: runs.latest_revision_id,
+    filter: { all: [{ field: 'created_at', op: 'gte', value: iso(-48 * 3_600_000) }, { field: 'created_at', op: 'lt', value: iso(60_000) }] } });
+  // 702 (stored as text), 703 (stored as ISO) and the scenario's run 501 (created now) are inside the window; 701 and 704 are not.
+  expect(recent.value).toBe(3);
 });
