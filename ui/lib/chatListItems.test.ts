@@ -19,7 +19,7 @@ test('buildChatListItems sorts direct and run chats together by recent activity'
     session({ agent_id: 1, instance_id: null, last_activity: '2026-06-01T10:00:00.000Z' }),
     session({ agent_id: 2, instance_id: 42, last_activity: '2026-06-01T12:00:00.000Z' }),
   ], [
-    { id: 1, name: 'Atlas' },
+    { id: 1, name: 'Nova' },
     { id: 2, name: 'Prism' },
   ]);
 
@@ -30,7 +30,7 @@ test('buildChatListItems does not add pinned agent rows when sessions exist', ()
   const items = buildChatListItems([
     session({ agent_id: 1, instance_id: null, last_activity: '2026-06-01T10:00:00.000Z' }),
   ], [
-    { id: 1, name: 'Atlas' },
+    { id: 1, name: 'Nova' },
     { id: 2, name: 'Prism' },
   ]);
 
@@ -40,7 +40,7 @@ test('buildChatListItems does not add pinned agent rows when sessions exist', ()
 
 test('buildChatListItems falls back to agents only when no chat sessions are available', () => {
   const items = buildChatListItems([], [
-    { id: 1, name: 'Atlas' },
+    { id: 1, name: 'Nova' },
     { id: 2, name: 'Prism' },
   ]);
 

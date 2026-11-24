@@ -186,7 +186,7 @@ export const openApiDocument: OpenApiDocument = {
     '/setup/onboarding/complete': {
       post: {
         tags: ['Setup'],
-        summary: 'Mark onboarding complete after provider and Atlas gates pass.',
+        summary: 'Mark onboarding complete after the provider gate passes.',
         operationId: 'completeOnboarding',
         requestBody: requestBody(ref('EmptyObject'), {}, false),
         responses: {
@@ -199,7 +199,7 @@ export const openApiDocument: OpenApiDocument = {
     '/setup/onboarding/skip': {
       post: {
         tags: ['Setup'],
-        summary: 'Skip the guided wizard for manual setup; creates an unprovisioned Atlas agent and marks onboarding complete without the provider gate.',
+        summary: 'Skip the guided wizard for manual setup and mark onboarding complete without the provider gate.',
         operationId: 'skipOnboarding',
         requestBody: requestBody(ref('EmptyObject'), {}, false),
         responses: {
@@ -1703,11 +1703,10 @@ export const openApiDocument: OpenApiDocument = {
       },
       SetupStatus: {
         type: 'object',
-        required: ['hasProjects', 'hasAgents', 'has_atlas_agent', 'onboarding_completed', 'onboarding_provider_gate_passed', 'connected_provider_count'],
+        required: ['hasProjects', 'hasAgents', 'onboarding_completed', 'onboarding_provider_gate_passed', 'connected_provider_count'],
         properties: {
           hasProjects: { type: 'boolean' },
           hasAgents: { type: 'boolean' },
-          has_atlas_agent: { type: 'boolean' },
           onboarding_completed: { type: 'boolean' },
           onboarding_provider_gate_passed: { type: 'boolean' },
           connected_provider_count: { type: 'integer' },
@@ -1725,11 +1724,10 @@ export const openApiDocument: OpenApiDocument = {
       },
       OnboardingSkipResponse: {
         type: 'object',
-        required: ['ok', 'onboarding_completed', 'atlas_created', 'onboarding_provider_gate_passed', 'connected_provider_count'],
+        required: ['ok', 'onboarding_completed', 'onboarding_provider_gate_passed', 'connected_provider_count'],
         properties: {
           ok: { type: 'boolean' },
           onboarding_completed: { type: 'boolean' },
-          atlas_created: { type: 'boolean' },
           onboarding_provider_gate_passed: { type: 'boolean' },
           connected_provider_count: { type: 'integer' },
         },

@@ -1,17 +1,6 @@
-import { ATLAS_AGENT_NAME, ATLAS_AGENT_SLUG } from '../../lib/atlasAgent';
 const AGENT_TRUST_BEARING_FIELDS = ['system_role', 'tenant_id', 'session_key'] as const;
 export function agentTrustBearingFieldInPatch(body: Record<string, unknown>): string | null {
     return AGENT_TRUST_BEARING_FIELDS.find((field) => Object.prototype.hasOwnProperty.call(body, field)) ?? null;
-}
-/**
- * Kept after the key-role change, though it no longer guards authority: the Atlas name and slug
- * identify the built-in assistant that tenant provisioning looks up, so letting a project-scoped
- * client mint a second one invites a collision rather than an escalation.
- */
-export function agentIdentityNameIsReserved(body: Record<string, unknown>): boolean {
-    const name = typeof body.name === 'string' ? body.name.trim().toLowerCase() : null;
-    const slug = typeof body.slug === 'string' ? body.slug.trim().toLowerCase() : null;
-    return name === ATLAS_AGENT_NAME.toLowerCase() || slug === ATLAS_AGENT_SLUG.toLowerCase();
 }
 /**
  * Agent fields that decide what runs on this host, where it runs, and with which credentials:

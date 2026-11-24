@@ -134,17 +134,19 @@ describe('project archive', () => {
     expect(ids(await listWorkflows(db, { tenant_id: 1 }))).toEqual([30]);
     expect(ids(await listWorkflows(db, { tenant_id: 1, project_id: 2 }))).toEqual([20]);
 
-    // Atlas stays in the all-projects agent list, which the chat surfaces search for it.
-    expect(ids((await api('GET', '', '/api/v1/agents')).body)).toEqual([23, 31]);
+    // A former Atlas row is project content like any other agent: it leaves the all-projects list.
+    expect(ids((await api('GET', '', '/api/v1/agents')).body)).toEqual([31]);
     expect(ids((await api('GET', '?project_id=2', '/api/v1/agents')).body)).toEqual([21, 22, 23]);
   });
 
-  it('keeps Atlas when its project is deleted, moving it out of the project', async () => {
+  it('deletes a former Atlas row with its project like any other agent', async () => {
     const db = getDb();
     await db.run(`INSERT INTO agents (id, tenant_id, project_id, name, session_key, status, system_role)
       VALUES (23, 1, 2, 'Atlas', 'agent:atlas:main', 'idle', 'atlas')`);
     await api('POST', '/2/archive');
-    expect(await api('DELETE', '/2')).toMatchObject({ status: 200, body: { agents_kept: ['Atlas'], agents_deleted: 1, agents_archived: 1 } });
-    expect(await db.get('SELECT project_id, deleted_at FROM agents WHERE id = 23')).toEqual({ project_id: null, deleted_at: null });
+    const deleted = await api('DELETE', '/2');
+    expect(deleted).toMatchObject({ status: 200, body: { agents_deleted: 2, agents_archived: 1 } });
+    expect(deleted.body).not.toHaveProperty('agents_kept');
+    expect(await db.value('SELECT count(*) FROM agents WHERE id = 23 AND deleted_at IS NULL')).toBe(0);
   });
 });

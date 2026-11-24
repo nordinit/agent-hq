@@ -21,11 +21,8 @@ import os from 'os';
 import { Readable } from 'stream';
 import { getDb } from '../db/client';
 import { WORKSPACE_ROOT as DEFAULT_WORKSPACE_ROOT } from '../config';
-import { ATLAS_SYSTEM_ROLE } from './atlasAgent';
-import { resolveAtlasWorkspaceRoot } from './atlasAgent';
 import { isAllowedWorkspacePath } from './hostPathPolicy';
 import { resolveAndValidate, WorkspaceBoundaryError } from './workspaceBoundary';
-import { tableColumns as sharedTableColumns } from "../db/introspection";
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -531,38 +528,16 @@ export async function resolveWorkspaceProvider(agentId?: string | number, option
   const tenantId = options.tenantId ?? null;
   const allowDefaultFallback = options.allowDefaultFallback !== false;
   if (!agentId) {
-    if (tenantId !== null) {
-      const db = getDb();
-      const deletedFilter = await (async () => {
-        try {
-          const columns = (await sharedTableColumns(db, 'agents')).map((name) => ({ name }));
-          return columns.some((column) => column.name === 'deleted_at') ? 'AND deleted_at IS NULL' : '';
-        } catch {
-          return '';
-        }
-      })();
-      const tenantAtlas = await db.get(`
-        SELECT *
-        FROM agents
-        WHERE tenant_id = ?
-          AND system_role = ?
-          ${deletedFilter}
-        ORDER BY id ASC
-        LIMIT 1
-      `, tenantId, ATLAS_SYSTEM_ROLE) as AgentRow | undefined;
-      if (tenantAtlas) {
-        return await resolveWorkspaceProvider(tenantAtlas.id, { tenantId, allowDefaultFallback: false });
-      }
-      return allowDefaultFallback ? confinedLocalProvider(await resolveAtlasWorkspaceRoot() || DEFAULT_WORKSPACE_ROOT) : new EmptyWorkspaceProvider();
-    }
-    return confinedLocalProvider(await resolveAtlasWorkspaceRoot() || DEFAULT_WORKSPACE_ROOT);
+    // No agent named: a tenant-scoped caller gets nothing rather than some other agent's files.
+    if (tenantId !== null && !allowDefaultFallback) return new EmptyWorkspaceProvider();
+    return confinedLocalProvider(DEFAULT_WORKSPACE_ROOT);
   }
 
   try {
     const db = getDb();
     const agent = await db.get('SELECT * FROM agents WHERE id = ?', agentId) as AgentRow | undefined;
     if (!agent) {
-      if (allowDefaultFallback) return confinedLocalProvider(await resolveAtlasWorkspaceRoot() || DEFAULT_WORKSPACE_ROOT);
+      if (allowDefaultFallback) return confinedLocalProvider(DEFAULT_WORKSPACE_ROOT);
       throw new FileNotFoundError(`Agent not found: ${agentId}`);
     }
 
@@ -588,5 +563,5 @@ export async function resolveWorkspaceProvider(agentId?: string | number, option
     // fall through
   }
 
-  return confinedLocalProvider(await resolveAtlasWorkspaceRoot() || DEFAULT_WORKSPACE_ROOT);
+  return confinedLocalProvider(DEFAULT_WORKSPACE_ROOT);
 }

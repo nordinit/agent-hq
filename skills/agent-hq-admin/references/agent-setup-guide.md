@@ -10,7 +10,7 @@ Model the workflow first. Derive agents from durable responsibility boundaries i
 
 Software workflow:
 
-- PM / Atlas helper
+- PM
 - frontend engineer
 - backend engineer
 - fullstack engineer
@@ -113,7 +113,7 @@ Assign skills when the agent repeatedly performs a specialized workflow.
 
 Examples:
 
-- Atlas admin/helper: `atlas-agent-hq-admin`
+- Agent HQ admin (a PM agent that maintains configuration): `agent-hq-admin`
 - project creation: `create-project`
 - task creation: `create-task`
 - agent provisioning: `create-agent`

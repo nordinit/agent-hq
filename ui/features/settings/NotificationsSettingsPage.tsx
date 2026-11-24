@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Bell, BellOff, CheckCircle2, Loader2, RefreshCw, Send, ToggleLeft, ToggleRight } from 'lucide-react';
 import { parseDbDate } from '@/lib/date';
 import { NotificationLinks } from '@/components/NotificationToasts';
+import TelegramSettings from '@/components/TelegramSettings';
 
 interface NotificationPreferences {
   enabled: boolean;
@@ -236,13 +237,15 @@ export default function NotificationsSettingsPage() {
               checked={preferences.outlets.telegram}
               disabled={saving || !outletConfigured}
               label="Telegram"
-              description={outletConfigured ? `Configured${chatId ? ` for chat ${chatId}` : ''}.` : 'Connect Telegram in Settings > Connections before delivery can send.'}
+              description={outletConfigured ? `Configured${chatId ? ` for chat ${chatId}` : ''}.` : 'Connect a Telegram bot below before delivery can send.'}
               onClick={() => savePreferences({
                 ...preferences,
                 outlets: { ...preferences.outlets, telegram: !preferences.outlets.telegram },
               })}
             />
           </div>
+
+          <TelegramSettings onChange={() => fetchSettings()} />
         </section>
 
         <aside className="rounded-lg border border-slate-700 bg-slate-900/60 p-4">

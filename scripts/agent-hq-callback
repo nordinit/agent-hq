@@ -299,7 +299,7 @@ function requireFields(ctx, fields) {
       die(
         `Missing required context: ${f}.\n` +
         `Set via --${f.replace(/([A-Z])/g, '-$1').toLowerCase()}, ` +
-        `ATLAS_${f.replace(/([A-Z])/g, '_$1').toUpperCase()} env var, ` +
+        `AGENT_HQ_${f.replace(/([A-Z])/g, '_$1').toUpperCase()} env var, ` +
         `or .agent-hq-run-context.json`
       );
     }

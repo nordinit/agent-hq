@@ -50,6 +50,7 @@ import { getMcpCatalog } from './mcp/catalog';
 import { mcpAccessRouter } from './mcp/accessRouter';
 import { registerAgentHqMcpCatalog } from './mcp/registerCatalog';
 import { createMcpHttpRouter, resolveMcpHttpConfigFromEnv } from './mcp/httpServer';
+import { AGENT_HQ_MCP_INSTRUCTIONS } from './mcp/serverInstructions';
 import { createMcpOAuthRouter, resolveMcpOAuthConfigFromEnv } from './mcp/oauth/router';
 import { authorizeMcpApiRequestIfPresent } from './lib/mcpApiAuth';
 import { ApiAuthConfigError, authenticateApiRequest, createChatWebSocketVerifier, resolveApiAuthConfigFromEnv } from './lib/apiAuth';
@@ -155,6 +156,7 @@ if (mcpHttpConfig.enabled) {
     rateLimitRpm: mcpHttpConfig.rateLimitRpm,
     allowedHosts: mcpHttpConfig.allowedHosts,
     resourceMetadataUrl: mcpResourceMetadataUrl,
+    instructions: AGENT_HQ_MCP_INSTRUCTIONS,
   }));
   console.log(`[mcp-http] Streamable HTTP MCP transport mounted at /mcp (access: identity permissions)`);
 }

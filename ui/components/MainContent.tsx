@@ -4,7 +4,6 @@ import { useState, useEffect } from 'react';
 import { usePathname } from 'next/navigation';
 import { api } from '@/lib/api';
 import OnboardingWizard, { markOnboarded } from './OnboardingWizard';
-import ChatWidget from '@/features/chat/ChatWidget';
 import GettingStartedGuide from './GettingStartedGuide';
 import { API_DOCS_ROUTE } from '@/lib/docsRoute';
 import NotificationToasts from './NotificationToasts';
@@ -115,7 +114,6 @@ export default function MainContent({ children }: { children: React.ReactNode })
         </div>
       )}
     </main>
-      {!showOnboarding && pathname !== '/chat' && pathname !== API_DOCS_ROUTE && <ChatWidget />}
       {!showOnboarding && <GettingStartedGuide />}
       {!showOnboarding && <NotificationToasts />}
     </>

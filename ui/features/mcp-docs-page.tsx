@@ -12,6 +12,7 @@ import {
   KeyRound,
   Layers3,
   LockKeyhole,
+  MessagesSquare,
   Network,
   RefreshCw,
   Search,
@@ -269,6 +270,29 @@ export default function McpDocsPage() {
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="grid gap-6 p-4 xl:grid-cols-[18rem_1fr] md:p-6">
           <aside className="space-y-4 xl:sticky xl:top-0 xl:self-start">
+            <section className="rounded-lg border border-cyan-500/30 bg-cyan-500/5 p-4" data-tour-target="settings-mcp-connect">
+              <h3 className="flex items-center gap-2 text-sm font-semibold text-white">
+                <MessagesSquare className="h-4 w-4 text-cyan-300" /> Connect Claude or ChatGPT
+              </h3>
+              <p className="mt-2 text-sm leading-6 text-slate-400">
+                Use Claude or ChatGPT as your Agent HQ assistant: connected over MCP, it can answer setup questions and create projects, agents, workflows and assignment rules for you.
+              </p>
+              <ul className="mt-3 space-y-2 text-sm leading-6 text-slate-400">
+                <li>
+                  <span className="font-medium text-slate-200">Remote connector.</span>{' '}
+                  Publish Agent HQ over HTTPS with <code className="font-mono text-xs text-cyan-200">AGENT_HQ_PUBLIC_URL</code> set, then add{' '}
+                  <code className="font-mono text-xs text-cyan-200">https://&lt;your-host&gt;/mcp</code> as a custom connector. On the consent screen, pick a Remote MCP client identity.
+                </li>
+                <li>
+                  <span className="font-medium text-slate-200">Local client.</span>{' '}
+                  Point a local MCP client such as Claude Desktop or Claude Code at <code className="font-mono text-xs text-cyan-200">api/dist/mcp/server.js</code> over stdio with an MCP key.
+                </li>
+              </ul>
+              <p className="mt-3 text-xs leading-5 text-slate-500">
+                Full steps, including creating a scoped identity with <code className="font-mono">provision-remote-mcp-identity.ts</code>, are in <code className="font-mono">docs/agent-hq-mcp.md</code>.
+              </p>
+            </section>
+
             <section className="rounded-lg border border-slate-800 bg-slate-900/80 p-4">
               <h3 className="flex items-center gap-2 text-sm font-semibold text-white">
                 <BookOpen className="h-4 w-4 text-cyan-300" /> Usage Model

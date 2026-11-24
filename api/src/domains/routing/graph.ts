@@ -3,7 +3,7 @@
 // Agent HQ's routing config is a state machine that is currently only ever shown as
 // flat tables: statuses are nodes, transitions are edges, gate requirements are edge
 // conditions, and assignment rules say which agent owns a node. This module derives
-// that machine once, server-side, so the canvas UI and Atlas reason over exactly the
+// that machine once, server-side, so the canvas UI and MCP clients reason over exactly the
 // same representation instead of each re-deriving it (and disagreeing).
 //
 // buildWorkflowGraph is intentionally PURE: every query lives in getWorkflowGraph.

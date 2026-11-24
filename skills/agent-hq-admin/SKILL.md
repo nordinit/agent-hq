@@ -1,13 +1,13 @@
 ---
-name: atlas-agent-hq-admin
-description: Model, configure, redesign, or audit Agent HQ for a user's operating process. Use when Atlas must turn plain-English work into projects, workflow definitions, task boundaries and types, statuses and outcomes, evidence gates, assignment or model-routing rules, and durable agents that can execute the modeled work.
+name: agent-hq-admin
+description: Model, configure, redesign, or audit Agent HQ for a user's operating process. Use when an assistant connected to Agent HQ over MCP (Claude, ChatGPT, Claude Code) must turn plain-English work into projects, workflow definitions, task boundaries and types, statuses and outcomes, evidence gates, assignment or model-routing rules, and durable agents that can execute the modeled work.
 ---
 
-# Atlas Agent HQ Admin
+# Agent HQ Admin
 
-Use this skill when Atlas is acting as the Agent HQ admin/helper agent.
+Use this skill when you are helping a user set up or change Agent HQ through its MCP tools or API.
 
-Atlas's job is to turn a user's workflow into a working Agent HQ configuration:
+Your job is to turn the user's workflow into a working Agent HQ configuration:
 - choose the right unit-of-work boundaries
 - understand how the user's work moves
 - distinguish task identity, workflow state, outcomes, and execution attempts
@@ -15,18 +15,18 @@ Atlas's job is to turn a user's workflow into a working Agent HQ configuration:
 - apply configuration through supported Agent HQ APIs or MCP tools
 - verify that a sample task would route, transition, and collect evidence correctly
 
-Do not make the user learn every admin screen manually. The product experience should be:
-"Tell Atlas how your team works, and Atlas configures Agent HQ for you."
+Do not make the user learn every admin screen manually. The experience should be:
+"Tell your assistant how your team works, and it configures Agent HQ for you."
 
 ## Operating Mode
 
-Atlas should act like an implementation-minded workflow consultant.
+Act like an implementation-minded workflow consultant.
 
 1. Interview the user only for details that materially change configuration.
 2. Model the work before selecting statuses, routes, or agents.
 3. Map the user's language into precise Agent HQ concepts.
 4. Present a short proposed configuration.
-5. Apply it only after the user approves, unless the user explicitly asked Atlas to proceed.
+5. Apply it only after the user approves, unless the user explicitly asked you to proceed.
 6. Verify the setup with concrete checks and sample happy, rework, and failure paths.
 7. Leave a concise summary of what changed and how to adjust it later.
 
@@ -123,7 +123,7 @@ Load only the references needed for the current setup:
 
 ## Completion Standard
 
-A good Atlas setup leaves the user with:
+A good setup leaves the user with:
 
 - a project and active workflow if they need one
 - a workflow type that matches their work

@@ -2,7 +2,7 @@ import { apiFetch } from './http';
 import type { HypotheticalTrace, RoutingPreview, RoutingPreviewOperation, ReconcilerConfig, RoutingConfig, RoutingScopeInfo, RoutingTransition, TaskRoutingRule, TaskStatusMeta, TransitionRequirement, TransitionRequirementFieldsResponse, WorkflowEventMapping, WorkflowGraph } from './types';
 
 export const routingClient = {
-// The workflow state machine, derived server-side so the canvas and Atlas share one
+// The workflow state machine, derived server-side so the canvas and MCP clients share one
 // representation. workflowType is required — a graph is always scoped to one type.
 getRoutingGraph: (projectId?: number | null, workflowType?: string | null, workflowId?: number | null, taskType?: string | null) => {
   const params = new URLSearchParams();

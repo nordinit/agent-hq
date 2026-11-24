@@ -6,7 +6,7 @@ Use these as starter patterns. Adjust them to the user's workflow before applyin
 
 Roles:
 
-- PM/Atlas
+- PM
 - frontend engineer
 - backend engineer
 - fullstack engineer if needed
@@ -176,7 +176,7 @@ Routing:
 
 Roles:
 
-- Atlas/helper
+- PM
 - optional specialist agents
 
 Task types:
@@ -200,7 +200,7 @@ Fields:
 
 Routing:
 
-- `pm + ready` -> Atlas/helper
+- `pm + ready` -> PM
 - `adhoc + ready` -> generalist agent
 
 Keep this workflow simple. Do not add QA/release gates unless the user explicitly needs them.

@@ -1,4 +1,4 @@
-import {AGENT_HOST_EXECUTION_FIELDS,agentTrustBearingFieldInPatch,agentIdentityNameIsReserved,agentHostExecutionFieldChange} from '../domains/access/agentFields';
+import {AGENT_HOST_EXECUTION_FIELDS,agentTrustBearingFieldInPatch,agentHostExecutionFieldChange} from '../domains/access/agentFields';
 import {AGENT_MCP_CAPABILITY_CATALOG,type AgentMcpDefaultPolicy,type AgentMcpCapabilityDefinition,type AgentMcpCapabilityKey,type AgentMcpCapabilityState,type AgentMcpPermissionPolicySnapshot} from '../domains/access/catalog';
 export {AGENT_MCP_CAPABILITY_CATALOG,type AgentMcpDefaultPolicy,type AgentMcpCapabilityDefinition,type AgentMcpCapabilityKey,type AgentMcpCapabilityState,type AgentMcpPermissionPolicySnapshot} from '../domains/access/catalog';
 import {delegationTarget} from '../domains/access/delegationScope';
@@ -6,13 +6,7 @@ import { delegatedExecution, knownOperation, isProjectRead, sensitiveOperation, 
 import crypto from 'crypto';
 import type { NextFunction, Request, Response } from 'express';
 import { getDb } from '../db/client';
-import {
-  ATLAS_AGENT_NAME,
-  ATLAS_AGENT_SLUG,
-  ATLAS_SESSION_KEY,
-  ATLAS_SYSTEM_ROLE,
-  LEGACY_ATLAS_SESSION_KEY,
-} from './atlasAgent';
+import { OPERATOR_ACTOR } from './operatorActor';
 import { resolveRuntimeAgentSlug } from './sessionKeys';
 import { ensureTenantSchema, resolveTenantIdFromRequest, verifyTenantSchemaForStartup } from './tenantContext';
 import { resolveRuntimeTenantId, tenantInsertColumns } from './runtimeTenantScope';
@@ -138,8 +132,7 @@ const SCOPED_MCP_POLICY_MUTABLE_CAPABILITIES = new Set<AgentMcpCapabilityKey>([
 /**
  * Descriptive identity only. isTrusted and isGlobalAdmin used to live here, derived from
  * system_role, slug and name; they now come from the key's role. system_role is still resolved
- * because the rest of the product uses it (Atlas dispatch behaviour, workspace provisioning), but
- * nothing in this file may read it to decide authority.
+ * as a descriptive field, but nothing in this file may read it to decide authority.
  */
 type AgentIdentityFields = {
   agentName: string;
@@ -506,7 +499,7 @@ async function shapeIdentity(db: Db, row: Record<string, unknown>): Promise<McpA
     keyRole,
     globalAdminAccess: isGlobalAdmin || await hasExplicitAgentMcpCapability(db, Number(row.agent_id), 'admin.cross_tenant'),
     auditActor: agentSlug,
-    authorityActor: roleIsTrusted(keyRole) ? ATLAS_AGENT_NAME : agentSlug,
+    authorityActor: roleIsTrusted(keyRole) ? OPERATOR_ACTOR : agentSlug,
   };
 }
 
@@ -639,7 +632,6 @@ async function findAgentIdForConfiguredRuntimeKey(
   const hasAgentSlug = await hasColumn(db, 'agents', 'slug');
   const hasOpenClawAgentId = await hasColumn(db, 'agents', 'openclaw_agent_id');
   const hasSessionKey = await hasColumn(db, 'agents', 'session_key');
-  const hasSystemRole = await hasColumn(db, 'agents', 'system_role');
 
   const configuredSlug = env.AGENT_HQ_MCP_API_KEY_AGENT_SLUG?.trim();
   if (hasAgentSlug && configuredSlug) {
@@ -657,29 +649,6 @@ async function findAgentIdForConfiguredRuntimeKey(
   if (hasSessionKey && configuredSessionKey) {
     const row = await db.get(`SELECT id FROM agents WHERE session_key = ? LIMIT 1`, configuredSessionKey) as { id: number } | undefined;
     if (row?.id) return Number(row.id);
-  }
-
-  if (hasSystemRole) {
-    const atlasBySystemRole = await db.get(`SELECT id FROM agents WHERE system_role = ? ORDER BY id ASC LIMIT 1`, ATLAS_SYSTEM_ROLE) as { id: number } | undefined;
-    if (atlasBySystemRole?.id) return Number(atlasBySystemRole.id);
-  }
-
-  if (hasOpenClawAgentId) {
-    const atlasByOpenClawId = await db.get(`SELECT id FROM agents WHERE openclaw_agent_id = ? ORDER BY id ASC LIMIT 1`, ATLAS_AGENT_SLUG) as { id: number } | undefined;
-    if (atlasByOpenClawId?.id) return Number(atlasByOpenClawId.id);
-  }
-
-  if (hasSessionKey) {
-    const atlasBySessionKey = await db.get(`SELECT id FROM agents WHERE session_key = ? ORDER BY id ASC LIMIT 1`, ATLAS_SESSION_KEY) as { id: number } | undefined;
-    if (atlasBySessionKey?.id) return Number(atlasBySessionKey.id);
-  }
-
-  const atlasByName = await db.get(`SELECT id FROM agents WHERE name = ? ORDER BY id ASC LIMIT 1`, ATLAS_AGENT_NAME) as { id: number } | undefined;
-  if (atlasByName?.id) return Number(atlasByName.id);
-
-  if (hasSessionKey) {
-    const legacyAtlas = await db.get(`SELECT id FROM agents WHERE session_key = ? ORDER BY id ASC LIMIT 1`, LEGACY_ATLAS_SESSION_KEY) as { id: number } | undefined;
-    if (legacyAtlas?.id) return Number(legacyAtlas.id);
   }
 
   return null;
@@ -715,7 +684,7 @@ export async function ensureConfiguredRuntimeMcpApiKey(
 
   const agentId = await findAgentIdForConfiguredRuntimeKey(db, env);
   if (!agentId) {
-    throw new Error('Configured AGENT_HQ_MCP_API_KEY could not be materialized because no bootstrap agent was found in the current database');
+    throw new Error('Configured AGENT_HQ_MCP_API_KEY could not be materialized: name the agent it belongs to with AGENT_HQ_MCP_API_KEY_AGENT_ID or AGENT_HQ_MCP_API_KEY_AGENT_SLUG (for an MCP client, provision one with src/bin/provision-remote-mcp-identity.ts)');
   }
 
   const keyPrefix = configuredApiKey.slice(0, 16);
@@ -792,7 +761,7 @@ type ScopedInstanceContext = {
   activeForTask: boolean;
 };
 
-function isTrustedMcpIdentity(identity: McpApiIdentity): boolean {
+export function isTrustedMcpIdentity(identity: McpApiIdentity): boolean {
   return roleIsTrusted(identity.keyRole);
 }
 
@@ -926,9 +895,9 @@ async function relationshipBelongsToProject(
  *
  * These no longer confer MCP authority — that comes from the presented key's role, which is not
  * a column on agents and cannot be written through this API at all. This list is now defence in
- * depth over fields that still bind identity: `system_role` drives Atlas behaviour elsewhere in
- * the product, `session_key` is how a runtime identity is matched to a row, and `tenant_id` moves
- * an agent between tenants.
+ * depth over fields that still bind identity: `system_role` is how starter provisioning recognises
+ * the agents it owns, `session_key` is how a runtime identity is matched to a row, and
+ * `tenant_id` moves an agent between tenants.
  *
  * Before the key-role model these WERE the escalation surface: renaming an agent to 'Atlas' or
  * setting system_role 'admin' made it trusted, so a connector could promote its own row. Trust
@@ -1732,12 +1701,6 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
       if (trustField) {
         return deny({
           reason: `Normal Agent HQ MCP keys cannot set "${trustField}" on an agent: trust is derived from it, so writing it would grant administrative access rather than manage a project agent.`,
-          requiredCapability,
-        });
-      }
-      if (agentIdentityNameIsReserved(body)) {
-        return deny({
-          reason: `Normal Agent HQ MCP keys cannot name an agent after the Atlas identity: an agent carrying that name or slug resolves as trusted.`,
           requiredCapability,
         });
       }

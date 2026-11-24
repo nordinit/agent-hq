@@ -1,7 +1,6 @@
 import '../config/loadRootEnv';
 import { closeDb, getDb } from './client';
 import { ensureConfiguredRuntimeMcpApiKey } from '../lib/mcpApiAuth';
-import { ensureCanonicalAtlasSessionKey } from '../lib/atlasAgent';
 import { repairTenantOwnershipForMigration } from '../lib/tenantContext';
 import { bootstrapRoutingAndWorkflowDefaults } from './bootstrapDefaults';
 import { migrationStatus, runMigrations } from './pg/migrationRunner';
@@ -26,7 +25,6 @@ async function hasAnyTenant(db: Db): Promise<boolean> {
 export async function installInitialConfiguration(db: Db): Promise<{
   installed: boolean;
   runtimeMcpKey?: string;
-  atlasIdentity?: unknown;
 }> {
   return await db.withTransaction(async (tx) => {
     // Serialize installers so two first boots cannot each create a default tenant.
@@ -39,11 +37,9 @@ export async function installInitialConfiguration(db: Db): Promise<{
     await repairTenantOwnershipForMigration(tx);
     await bootstrapRoutingAndWorkflowDefaults(tx);
     const runtimeMcpKey = await ensureConfiguredRuntimeMcpApiKey(tx);
-    const atlasIdentity = await ensureCanonicalAtlasSessionKey(tx);
     return {
       installed: true,
       runtimeMcpKey: runtimeMcpKey.status,
-      atlasIdentity,
     };
   });
 }
@@ -83,7 +79,6 @@ async function main(): Promise<void> {
     already_applied: before.applied.length,
     initial_configuration: initialConfiguration.installed ? 'installed' : 'unchanged',
     runtime_mcp_api_key: initialConfiguration.runtimeMcpKey,
-    atlas_identity: initialConfiguration.atlasIdentity,
   }));
 }
 

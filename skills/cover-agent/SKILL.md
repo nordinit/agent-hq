@@ -1,11 +1,11 @@
 ---
 name: cover-agent
-description: Temporarily act as a Cover Agent for Agent HQ tasks by spawning a subagent in the current thread that impersonates the assigned Agent HQ role, validates or finishes review-stage work, and prepares truthful review evidence for the ticket. Use when you need Atlas to stand in for an Agent HQ agent in-chat, especially to review implementation work, gather evidence, or post review-ready findings into the task without pretending QA passed.
+description: Temporarily act as a Cover Agent for Agent HQ tasks by spawning a subagent in the current thread that impersonates the assigned Agent HQ role, validates or finishes review-stage work, and prepares truthful review evidence for the ticket. Use when the operator's assistant (for example Claude connected to Agent HQ over MCP) needs to stand in for an Agent HQ agent in-chat, especially to review implementation work, gather evidence, or post review-ready findings into the task without pretending QA passed.
 ---
 
 # Cover Agent
 
-Use this skill when the operator wants Atlas to temporarily stand in for an Agent HQ agent inside the current thread.
+Use this skill when the operator wants you to temporarily stand in for an Agent HQ agent inside the current thread.
 
 ## Core rules
 
@@ -57,7 +57,7 @@ If one of those is missing, call it out instead of smoothing over it.
 
 - Fabricating review evidence for work that was never run
 - Marking QA passed without real verification
-- Pretending an Agent HQ agent completed work when Atlas or an ad hoc subagent actually did it
+- Pretending an Agent HQ agent completed work when you or an ad hoc subagent actually did it
 - Advancing a task when the required branch, commit, or test proof is missing
 
 ## Output shape

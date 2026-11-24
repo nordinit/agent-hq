@@ -1,3 +1,4 @@
+import { isOperatorActor } from '../../lib/operatorActor';
 import { resolveRuntimeTenantId, tenantInsertColumns } from '../../lib/runtimeTenantScope';
 import { recordLiveRunStatusOwner } from './statusOwners';
 import { type Db } from "../../db/adapter/types";
@@ -26,7 +27,7 @@ export function classifyMoveType(changedBy: string): MoveType {
   if (AUTOMATIC_ACTORS.has(changedBy)) return 'automatic';
   if (OUTCOME_ACTORS.has(changedBy)) return 'outcome';
   if (DISPATCH_ACTORS.has(changedBy)) return 'dispatch';
-  if (changedBy && changedBy !== 'system' && changedBy !== 'Atlas') return 'outcome';
+  if (changedBy && changedBy !== 'system' && !isOperatorActor(changedBy)) return 'outcome';
   return 'manual';
 }
 

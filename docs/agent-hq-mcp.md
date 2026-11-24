@@ -799,11 +799,11 @@ It used to be derived from the agent record — `system_role` of `admin` or `atl
 Consequences worth knowing:
 
 - **Editing an agent can no longer promote it.** `agents.manage_project_agents` writes the agent record freely, and the record is exactly what authority is not read from.
-- **`system_role` still matters elsewhere** — Atlas dispatch behaviour, workspace provisioning, tenant bootstrap — it just confers nothing over MCP.
+- **`system_role` still matters elsewhere** — starter provisioning recognises its own agents by it — it just confers nothing over MCP.
 - **An agent can hold keys of different roles.** Request-time authorization always reads the presented key. The permissions UI, which describes an agent rather than a call, reports the strongest role among that agent's live keys.
 - **Anything unrecognised reads as `scoped`.** An unknown role value, a missing column, or a build running one migration behind all resolve to least authority rather than failing open.
 
-Issue an administrative key deliberately: `issueMcpApiKeyForAgent(db, agentId, name, 'admin')`. The default is `scoped`, so no path mints authority by omission. The one environment-driven exception is the configured bootstrap key, which becomes `super_admin` only when `AGENT_HQ_MCP_API_KEY_GLOBAL_ADMIN` is set.
+Issue an administrative key deliberately: `issueMcpApiKeyForAgent(db, agentId, name, 'admin')`. The default is `scoped`, so no path mints authority by omission. The one environment-driven exception is the configured bootstrap key, which becomes `super_admin` only when `AGENT_HQ_MCP_API_KEY_GLOBAL_ADMIN` is set. It is bound to the agent that `AGENT_HQ_MCP_API_KEY_AGENT_ID` or `AGENT_HQ_MCP_API_KEY_AGENT_SLUG` names; install refuses to guess one.
 
 Migration 24 backfills existing keys from the old rules, so identities that were administrative before the change stay administrative after it. Migration 25 then drops the columns it read from — `mcp_api_keys.global_admin` and `agents.global_mcp_admin` — because a privilege column that still exists is one someone will eventually write to and expect to work. That also removes the rollback path: the pre-24 build selects `global_admin` unconditionally, so restoring it means restoring the columns first. **Run `npm run db:migrate` before restarting the API** — the new code probes for the column and treats every key as `scoped` when it is missing, so restarting first would strip administrative access until the migration lands.
 
@@ -811,9 +811,9 @@ Migration 24 backfills existing keys from the old rules, so identities that were
 
 `agents.manage_project_agents` covers the roster and each agent's record — job instructions, role, model, skills and routing configuration — plus its docs bundle, for agents in the assigned project.
 
-The write guard is the whole design. `resolveAgentIdentityFields` derives trust from the agent row itself: a `system_role` of `admin` or `atlas`, a `global_mcp_admin` flag, or a name or slug matching the Atlas identity all make an agent trusted, and a trusted agent resolves to the `trusted_admin` default policy under which nearly every capability — `admin.full_access` included — is enabled. A grant that let a connector write those fields would not be project-scoped at all; it would let the connector promote its own row and come back as an administrator.
+The write guard is defence in depth. Before the key-role model, `resolveAgentIdentityFields` derived trust from the agent row itself — a `system_role` of `admin` or `atlas`, a `global_mcp_admin` flag, or a name or slug matching the old built-in Atlas assistant — so a grant that let a connector write those fields would have let it promote its own row and come back as an administrator. Authority now comes only from the key, but the fields that still bind identity stay unwritable.
 
-So any create or update carrying `system_role`, `global_mcp_admin`, `key_global_admin`, `tenant_id` or `session_key` is refused outright, as is one naming the agent `Atlas` or slugging it `atlas`. `project_id` must name the assigned project, and a create must name it explicitly. **If a new input to `resolveAgentIdentityFields` is ever added, it has to be added to `AGENT_TRUST_BEARING_FIELDS` in the same change.**
+So any create or update carrying `system_role`, `global_mcp_admin`, `key_global_admin`, `tenant_id` or `session_key` is refused outright. Names are ordinary: Atlas is gone, and no name or slug confers anything. `project_id` must name the assigned project, and a create must name it explicitly. **If a new input to `resolveAgentIdentityFields` is ever added, it has to be added to `AGENT_TRUST_BEARING_FIELDS` in the same change.**
 
 Fields that decide what runs on the host, where, or with which credentials can only be sent unchanged: `workspace_path`, `runtime_type` (chosen at creation, never switched), `hooks_url` and `hooks_auth_header`, `os_user`, `github_identity_id`, `provision_openclaw`, and every `runtime_config` key except `model`, `effort`, `reasoningEffort`, `fastMode`, `provider`, `systemPromptSuffix`, `maxTurns` and `maxBudgetUsd`. That keeps executables, config homes, working directories, permission and sandbox modes, extra CLI arguments, environment and webhook URLs with administrative keys. The runtime_config list is an allowlist, so a new runtime option is protected until someone decides otherwise. A consequence: a scoped key cannot create a Hermes or webhook agent, both of which need such a key to exist.
 
@@ -924,8 +924,15 @@ provisioned as a remote MCP client (`role = 'Remote MCP client'`) is offered on 
 with its project and capability list, so Claude and ChatGPT can hit the same `/mcp` and act as
 different identities with different audit actors. A returning client pre-selects whatever it
 connected as last. The posted agent id is always validated against that eligibility list — an id
-outside it is refused rather than defaulted, because an agent like Atlas resolves to trusted-admin
-defaults and would bypass the capability policy entirely.
+outside it is refused rather than defaulted, because an agent holding an admin key resolves to
+trusted-admin defaults and would bypass the capability policy entirely.
+
+**Setup help comes from the connected client.** Agent HQ has no built-in assistant. `/mcp` returns
+server instructions at initialize (`api/src/mcp/serverInstructions.ts`): the core concepts and a
+read, propose, apply, verify routine, so Claude or ChatGPT can configure Agent HQ for the operator.
+They are the condensed form of `skills/agent-hq-admin`, which Claude Code users can install for the
+full guidance. The stdio server sends none, because worker agents use it and would pay for the
+guidance on every run.
 
 **The operator password is not user auth.** One password, scrypt-hashed in `app_settings`, with an
 in-process lockout after five failures. Agent HQ has no user accounts: the UI and `/api/v1`
@@ -1023,11 +1030,11 @@ The runtime trust boundary is:
 AGENT_HQ_MCP_API_KEY
   -> mcp_api_keys.key_hash
   -> agents.id
-  -> resolved agent slug / Atlas authority
+  -> resolved agent slug / key role (admin keys act with operator authority)
   -> task history, audit actor, and protected write checks
 ```
 
-Missing, invalid, disabled, revoked, unmapped, or disabled-agent keys are rejected with a clear authorization error. For Atlas, the resolved key grants Atlas authority for protected task status writes while the audit actor remains the resolved agent slug (`atlas`).
+Missing, invalid, disabled, revoked, unmapped, or disabled-agent keys are rejected with a clear authorization error. An `admin` or `super_admin` key grants operator authority for protected task status writes, while the audit actor remains the resolved agent slug.
 
 ### Legacy compatibility
 

@@ -11,7 +11,7 @@ getSetupStatus: () => apiFetch<SetupStatus>('/api/v1/setup/status'),
 completeOnboarding: () =>
   apiFetch<{ ok: boolean; onboarding_completed: boolean; onboarding_provider_gate_passed: boolean }>('/api/v1/setup/onboarding/complete', { method: 'POST' }),
 skipOnboarding: () =>
-  apiFetch<{ ok: boolean; onboarding_completed: boolean; atlas_created: boolean }>('/api/v1/setup/onboarding/skip', { method: 'POST' }),
+  apiFetch<{ ok: boolean; onboarding_completed: boolean }>('/api/v1/setup/onboarding/skip', { method: 'POST' }),
 getStarterTemplates: () => apiFetch<StarterTemplateCatalogResponse>('/api/v1/setup/templates'),
 previewStarterPlan: (data: StarterPlanInput) =>
   apiFetch<StarterPlanPreviewResponse>('/api/v1/setup/starter-plan/preview', { method: 'POST', body: JSON.stringify(data) }),

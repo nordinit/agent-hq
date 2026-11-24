@@ -179,7 +179,8 @@ export function createConsentHandlers(options: {
    * Resolves which identity a submitted form refers to.
    *
    * The eligibility list is the authority, never the posted value. An agent id that is not in the
-   * list — Atlas's, say, whose trusted-admin defaults would make a connector token unrestricted —
+   * list — an agent holding an admin key, say, whose trusted-admin defaults would make a connector
+   * token unrestricted —
    * resolves to nothing and the request is refused rather than falling back to a default.
    */
   function identityFromSubmission(identities: ConsentIdentity[], raw: unknown): ConsentIdentity | null {

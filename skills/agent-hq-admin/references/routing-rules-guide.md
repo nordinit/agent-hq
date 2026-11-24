@@ -76,7 +76,7 @@ For each workflow:
 
 Do not rely on legacy per-agent config or "last assigned agent" fallback behavior.
 
-If Atlas cannot point to an explicit assignment rule for a task type and status, say that the task may not dispatch.
+If you cannot point to an explicit assignment rule for a task type and status, say that the task may not dispatch.
 
 ## Common Missing Routes
 

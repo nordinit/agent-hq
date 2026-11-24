@@ -8,6 +8,7 @@ import {
   resolveWorkflowTaskTransition,
 } from '../domains/routing/policy/statuses';
 import { type Db } from "../db/adapter/types";
+import { isOperatorActor } from './operatorActor';
 
 export type IntegrityState =
   | 'clean'
@@ -320,7 +321,7 @@ function validateEvidenceField(fieldName: string, value: unknown, errors: string
 
 /**
  * Actors considered human/user-originated. These are allowed to change task
- * status directly via the generic PUT endpoint (same as Atlas), while other
+ * status directly via the generic PUT endpoint (same as the operator), while other
  * automated actors must route through POST /outcome.
  */
 export const HUMAN_ACTORS = new Set(['User', 'user', 'Human', 'human']);
@@ -331,10 +332,10 @@ export function assertTaskStatusUpdateAllowed(
   changedBy: string,
 ): void {
   if (!nextStatus || nextStatus === existingTask.status) return;
-  // Atlas (agent) and human users may change task status directly.
+  // The operator and human users may change task status directly.
   // All other automated actors must use the /outcome endpoint.
-  if (changedBy !== 'Atlas' && !HUMAN_ACTORS.has(changedBy)) {
-    throw new Error('Only Atlas or a human user may change task status through the generic update endpoint');
+  if (!isOperatorActor(changedBy) && !HUMAN_ACTORS.has(changedBy)) {
+    throw new Error('Only the operator or a human user may change task status through the generic update endpoint');
   }
 }
 
@@ -441,7 +442,7 @@ async function resolveConfiguredOutcomeForDirectStatus(
   };
 }
 
-export async function assertAtlasDirectStatusGate(
+export async function assertOperatorDirectStatusGate(
   db: Db,
   task: TaskReleaseRecord & { task_type?: string | null; workflow_id?: number | null },
   nextStatus: string | null | undefined,

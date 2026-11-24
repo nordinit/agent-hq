@@ -370,7 +370,7 @@ export default function SettingsGitHubPage() {
               type="text"
               value={gitAuthorName}
               onChange={e => setGitAuthorName(e.target.value)}
-              placeholder="Atlas Agents"
+              placeholder="Agent HQ Agents"
               className="w-full px-3 py-2 rounded-lg bg-zinc-900 border border-zinc-700 text-white text-sm
                          placeholder:text-zinc-600 focus:outline-none focus:border-amber-500/60"
             />

@@ -28,7 +28,6 @@ export function runningAfterArchiveNotice(runningInstances: number): string | nu
 export interface ProjectDeletionSummary {
   agents_deleted?: number;
   agents_archived?: number;
-  agents_kept?: string[];
 }
 
 /** One line on what happened to the project's agents, for the notice after a permanent delete. */
@@ -36,6 +35,5 @@ export function projectDeletionNotice(projectName: string, summary: ProjectDelet
   const parts: string[] = [];
   const removed = (summary.agents_deleted ?? 0) + (summary.agents_archived ?? 0);
   if (removed > 0) parts.push(`${removed} agent${removed === 1 ? '' : 's'} removed`);
-  if (summary.agents_kept?.length) parts.push(`${summary.agents_kept.join(', ')} kept`);
   return `Deleted ${projectName}${parts.length ? ` (${parts.join('; ')})` : ''}.`;
 }

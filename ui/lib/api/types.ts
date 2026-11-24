@@ -1672,7 +1672,6 @@ export interface TransitionRequirementFieldsResponse {
 export interface SetupStatus {
   hasProjects: boolean;
   hasAgents: boolean;
-  has_atlas_agent?: boolean;
   onboarding_completed?: boolean;
   onboarding_provider_gate_passed?: boolean;
   connected_provider_count?: number;
@@ -1742,7 +1741,7 @@ export interface ProviderGateResponse {
 
 // ── Workflow routing graph ────────────────────────────────────────────────────
 // Mirrors api/src/domains/routing/graph.ts. The server derives the state machine
-// once so the canvas and Atlas cannot drift apart; keep these in sync with it.
+// once so the canvas and MCP clients cannot drift apart; keep these in sync with it.
 
 export type WorkflowGraphLintSeverity = 'error' | 'warn' | 'info';
 

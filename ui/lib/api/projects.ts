@@ -49,7 +49,7 @@ deleteProject: (id: number, options?: { force?: boolean; confirm?: boolean }) =>
   if (options?.force) params.set('force', 'true');
   if (options?.confirm) params.set('confirm', 'true');
   const query = params.toString();
-  return apiFetch<{ ok: boolean; agents_deleted?: number; agents_archived?: number; agents_kept?: string[] }>(
+  return apiFetch<{ ok: boolean; agents_deleted?: number; agents_archived?: number }>(
     `/api/v1/projects/${id}${query ? `?${query}` : ''}`,
     { method: 'DELETE' },
   );

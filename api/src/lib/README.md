@@ -11,7 +11,6 @@ Use this directory for:
 | Module | Notes |
 | --- | --- |
 | `agentHqBaseUrl.ts` | Control-plane base URL helper used across runtimes and dispatch. |
-| `atlasAgent.ts` | Workspace and agent identity helper for local runtime wiring. |
 | `chatGatewayErrors.ts` | Chat and gateway error normalization for transport layers. |
 | `chatMessageRoles.ts` | Shared role normalization for transcript persistence. |
 | `defaultProject.ts` | Shared default-project DB helper. |
@@ -28,6 +27,7 @@ Use this directory for:
 | `openclawGatewayWs.ts` | Shared WebSocket connection options for the gateway. |
 | `openclawMessageEvents.ts` | Shared OpenClaw event extraction and parsing. |
 | `openclawOAuthProfiles.ts` | OAuth profile materialization for OpenClaw runtime flows. |
+| `operatorActor.ts` | The actor name recorded for operator actions, and its legacy `Atlas` alias. |
 | `outcomeCatalog.ts` | Shared outcome semantics vocabulary. |
 | `reconcilerConfig.ts` | Shared reconciler and scheduler config lookup. |
 | `repoConfig.ts` | Shared repo and worktree configuration helper. |

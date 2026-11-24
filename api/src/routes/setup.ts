@@ -1,13 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { getDb } from '../db/client';
-import { isProviderGatePassed, countConnectedProviders } from './providers';
-import {
-  getAtlasAgentRecord,
-  ATLAS_AGENT_NAME,
-  ATLAS_SESSION_KEY,
-  ATLAS_SYSTEM_ROLE,
-} from '../lib/atlasAgent';
 import { resolveTenantIdFromRequest } from '../lib/tenantContext';
+import { isProviderGatePassed, countConnectedProviders } from './providers';
 import {
   checkRuntimeConnection,
   detectRuntimeConnectionConfig,
@@ -71,7 +65,6 @@ router.get('/status', async (_req: Request, res: Response) => {
     res.json({
       hasProjects: projectCount > 0,
       hasAgents: agentCount > 0,
-      has_atlas_agent: !!await getAtlasAgentRecord(),
       onboarding_completed: onboardingCompleted,
       onboarding_provider_gate_passed: await isProviderGatePassed(),
       connected_provider_count: await countConnectedProviders(),
@@ -94,15 +87,6 @@ router.post('/onboarding/complete', async (_req: Request, res: Response) => {
       return;
     }
 
-    if (!await getAtlasAgentRecord()) {
-      res.status(422).json({
-        error: 'Atlas must be provisioned before onboarding can be completed.',
-        onboarding_provider_gate_passed: true,
-        connected_provider_count: await countConnectedProviders(),
-      });
-      return;
-    }
-
     await setSetting('onboarding_completed', 'true');
 
     res.json({
@@ -117,29 +101,15 @@ router.post('/onboarding/complete', async (_req: Request, res: Response) => {
 });
 
 // ─── POST /api/v1/setup/onboarding/skip ──────────────────────────────────────
-// Manual-setup path: bypass the guided wizard entirely. Creates the Atlas agent
-// record if missing (DB only — no workspace or OpenClaw provisioning) and marks
-// onboarding complete without requiring a connected provider.
-router.post('/onboarding/skip', async (req: Request, res: Response) => {
+// Manual-setup path: bypass the guided wizard entirely and mark onboarding
+// complete without requiring a connected provider.
+router.post('/onboarding/skip', async (_req: Request, res: Response) => {
   try {
-    const db = getDb();
-    const tenantId = await resolveTenantIdFromRequest(db, req);
-
-    let atlasCreated = false;
-    if (!await getAtlasAgentRecord()) {
-      await db.run(`
-        INSERT INTO agents (tenant_id, name, role, session_key, system_role)
-        VALUES (?, ?, ?, ?, ?)
-      `, tenantId, ATLAS_AGENT_NAME, 'Built-in assistant for chat, task routing, and coordination.', ATLAS_SESSION_KEY, ATLAS_SYSTEM_ROLE);
-      atlasCreated = true;
-    }
-
     await setSetting('onboarding_completed', 'true');
 
     res.json({
       ok: true,
       onboarding_completed: true,
-      atlas_created: atlasCreated,
       onboarding_provider_gate_passed: await isProviderGatePassed(),
       connected_provider_count: await countConnectedProviders(),
     });

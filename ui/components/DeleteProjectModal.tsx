@@ -104,8 +104,7 @@ export function DeleteProjectModal({
               recurring tasks and files, and its {cascade?.dependent_agents ?? 0} agent{(cascade?.dependent_agents ?? 0) !== 1 ? 's' : ''}.
             </p>
             <p className="text-slate-400 text-xs">
-              Agents with run or chat history are kept as deleted records so that history stays readable. Atlas is never
-              deleted: it is moved out of the project.
+              Agents with run or chat history are kept as deleted records so that history stays readable.
             </p>
           </div>
         )}

@@ -25,7 +25,7 @@ Suggested fields:
 - `priority`
 - `request_summary`
 - `task_type`
-- `creator` (`atlas`, user, automation)
+- `creator` (operator, user, automation)
 - `confidence` (high/medium/low)
 - `assumptions[]`
 - `open_questions[]`

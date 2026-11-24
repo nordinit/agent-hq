@@ -5,6 +5,7 @@ import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
 import { evaluateTaskIntegrity } from '../lib/taskRelease';
+import { OPERATOR_ACTOR } from '../lib/operatorActor';
 import { stopTaskActiveInstance } from '../lib/taskStop';
 import {
   postTaskOutcome,
@@ -613,7 +614,7 @@ router.post('/:id/cancel', async (req: Request, res: Response) => {
     const db = getDb();
     const tenantId = await resolveTenantIdFromRequest(db, req);
     if (!await requireTaskVisibleForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Task not found' });
-    const changedBy = resolveRequestActor(req, (req.body?.changed_by as string | undefined) ?? 'Atlas').changedBy;
+    const changedBy = resolveRequestActor(req, (req.body?.changed_by as string | undefined) ?? OPERATOR_ACTOR).changedBy;
     res.json(await cancelTaskRecord(db, Number(req.params.id), changedBy));
   } catch (err) {
     const status = (err as Error & { status?: number }).status ?? 500;
@@ -663,7 +664,7 @@ router.post('/:id/reopen', async (req: Request, res: Response) => {
     const db = getDb();
     const tenantId = await resolveTenantIdFromRequest(db, req);
     if (!await requireTaskVisibleForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Task not found' });
-    const changedBy = resolveRequestActor(req, (req.body?.changed_by as string | undefined) ?? 'Atlas').changedBy;
+    const changedBy = resolveRequestActor(req, (req.body?.changed_by as string | undefined) ?? OPERATOR_ACTOR).changedBy;
     res.json(await reopenTaskRecord(db, Number(req.params.id), changedBy));
   } catch (err) {
     const status = (err as Error & { status?: number }).status ?? 500;
@@ -765,7 +766,7 @@ router.post('/:id/admin-outcome', async (req: Request, res: Response) => {
     const tenantId = await resolveTenantIdFromRequest(db, req);
     const id = Number(req.params.id);
     if (!await requireTaskVisibleForTenant(db, id, tenantId)) return res.status(404).json({ error: 'Task not found' });
-    const changedBy = resolveRequestActor(req, (req.body?.changed_by as string | undefined) ?? 'Atlas').changedBy;
+    const changedBy = resolveRequestActor(req, (req.body?.changed_by as string | undefined) ?? OPERATOR_ACTOR).changedBy;
     res.json(await postTaskOutcome(db, id, (req.body ?? {}) as Record<string, unknown>, changedBy));
   } catch (err) {
     if (sendWorkflowAllowedValuesError(res, err)) return;

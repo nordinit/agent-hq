@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useState, useRef, useCallback, Suspense, type ReactNode } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { timeAgo } from '@/lib/date';
-import { findAtlasAgent } from '@/lib/atlas';
 import { parseCanonicalMessages, parseGatewayHistoryMessages, reconcileChatMessageSnapshot } from '@/lib/chatMessages';
 import { abortRuntimeChatTurn, loadRuntimeChatTranscript, resolveChatTransport, rotateRuntimeChatSession, sendRuntimeChatMessage } from '@/lib/runtimeChat';
 import { buildChatListItems, type ChatListItem } from '@/lib/chatListItems';
@@ -239,7 +238,7 @@ function ChatPageInner() {
     clearResponseWatchdog();
     responseTimeoutRef.current = setTimeout(() => {
       if (!pendingResponseRef.current) return;
-      clearPendingResponse('Atlas did not return a response. Check the OpenClaw/provider logs, then retry.');
+      clearPendingResponse('The agent did not return a response. Check the runtime/provider logs, then retry.');
     }, CHAT_RESPONSE_STALL_MS);
   }, [clearPendingResponse, clearResponseWatchdog]);
 
@@ -408,10 +407,8 @@ function ChatPageInner() {
         setAgents(agentData);
         setProjects(projectData);
         // If a deep-link already set the agent, don't override it
-        if (!deepLinkAgentIdRef.current) {
-          const atlas = findAtlasAgent(agentData);
-          if (atlas) setSelectedAgentId(atlas.id);
-          else if (agentData.length > 0) setSelectedAgentId(agentData[0].id);
+        if (!deepLinkAgentIdRef.current && agentData.length > 0) {
+          setSelectedAgentId(agentData[0].id);
         }
       })
       .catch(console.error)
@@ -537,7 +534,7 @@ function ChatPageInner() {
               ))
             )
           ) {
-            // Atlas-style direct chat sessions have no job_instances row.
+            // Direct chat sessions have no job_instances row.
             setResolvedSessionKey(
               resolveInitialDirectSessionKey(
                 currentAgent.session_key,
@@ -890,7 +887,7 @@ function ChatPageInner() {
 
     ws.onclose = () => {
       if (pendingResponseRef.current) {
-        clearPendingResponse('Connection to Atlas was interrupted before a response completed. Retry.');
+        clearPendingResponse('Connection to the agent was interrupted before a response completed. Retry.');
       }
       console.log('[chat] WebSocket closed');
     };

@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useState, useCallback } from 'react';
 import { api, getApiBase, ArtifactTreeNode, ArtifactFile, Agent, Project } from '@/lib/api';
-import { findAtlasAgent, isAtlasAgent } from '@/lib/atlas';
 import { getFileTypeStyle } from '@/lib/file-type-colors';
 import { useProjectFilterPreference } from '@/lib/projectFilterPreference';
 import { Button } from '@/components/ui/button';
@@ -310,9 +309,8 @@ function AgentSelector({
   onSelect: (id: number | null) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const atlasAgent = findAtlasAgent(agents);
-  const selected = selectedAgentId ? agents.find(a => a.id === selectedAgentId) : atlasAgent;
-  const label = selected ? selected.name : 'Atlas';
+  const selected = selectedAgentId ? agents.find(a => a.id === selectedAgentId) : undefined;
+  const label = selected ? selected.name : (agents.length > 0 ? 'Choose an agent' : 'No agents');
 
   return (
     <div className="relative">
@@ -326,14 +324,10 @@ function AgentSelector({
       </button>
       {open && (
         <div className="absolute left-0 top-full mt-1 bg-slate-800 border border-slate-700 rounded-xl shadow-xl z-20 min-w-[200px] py-1">
-          <button
-            onClick={() => { onSelect(null); setOpen(false); }}
-            className={`w-full text-left px-3 py-2 text-sm hover:bg-slate-700/60 transition-colors flex items-center gap-2 ${!selectedAgentId ? 'text-amber-300' : 'text-slate-300'}`}
-          >
-            <Bot className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-            Atlas
-          </button>
-          {agents.filter(agent => !isAtlasAgent(agent)).map(agent => (
+          {agents.length === 0 && (
+            <div className="px-3 py-2 text-sm text-slate-500">No agents in this project</div>
+          )}
+          {agents.map(agent => (
             <button
               key={agent.id}
               onClick={() => { onSelect(agent.id); setOpen(false); }}
@@ -358,6 +352,7 @@ export default function WorkspacesPage() {
   const validProjectIds = useMemo(() => projects.map(project => project.id), [projects]);
   const [selectedProjectId, setSelectedProjectId] = useProjectFilterPreference({ validProjectIds });
   const [agents, setAgents] = useState<Agent[]>([]);
+  const [agentsLoaded, setAgentsLoaded] = useState(false);
   const [selectedAgentId, setSelectedAgentId] = useState<number | null>(null);
 
   const [tree, setTree] = useState<ArtifactTreeNode[]>([]);
@@ -393,8 +388,20 @@ export default function WorkspacesPage() {
 
   // Load agents (filtered by project when selected)
   useEffect(() => {
-    api.getAgents(selectedProjectId).then(setAgents).catch(console.error);
+    setAgentsLoaded(false);
+    api.getAgents(selectedProjectId)
+      .then(setAgents)
+      .catch(console.error)
+      .finally(() => setAgentsLoaded(true));
   }, [selectedProjectId]);
+
+  // Every workspace belongs to an agent: default to the first one in the list,
+  // and re-pick when the selected agent leaves the list (project filter change).
+  useEffect(() => {
+    if (!agentsLoaded) return;
+    if (selectedAgentId && agents.some(agent => agent.id === selectedAgentId)) return;
+    setSelectedAgentId(agents[0]?.id ?? null);
+  }, [agents, agentsLoaded, selectedAgentId]);
 
   const loadTree = useCallback(() => {
     setTreeLoading(true);
@@ -402,7 +409,14 @@ export default function WorkspacesPage() {
     setSelectedPath(null);
     setFileData(null);
     setExpandedDirs(new Set());
-    api.getArtifactTree(selectedAgentId ?? undefined)
+    if (!selectedAgentId) {
+      // No agent to browse yet: keep the spinner until agents load, then show the empty state.
+      setTree([]);
+      setWorkspaceRoot('');
+      setTreeLoading(!agentsLoaded);
+      return;
+    }
+    api.getArtifactTree(selectedAgentId)
       .then(data => {
         const normalized = normalizeArtifactTreePayload(data);
         setTree(normalized.children);
@@ -414,7 +428,7 @@ export default function WorkspacesPage() {
         setTreeError(e instanceof Error ? e.message : String(e));
       })
       .finally(() => setTreeLoading(false));
-  }, [selectedAgentId]);
+  }, [agentsLoaded, selectedAgentId]);
 
   useEffect(() => { loadTree(); }, [loadTree]);
 
@@ -502,7 +516,9 @@ export default function WorkspacesPage() {
   const handleProjectSelect = (id: number | null) => {
     setSelectedProjectId(id);
     // Reset agent selection when project filter changes — the previously
-    // selected agent may not belong to the new project.
+    // selected agent may not belong to the new project. The first agent of the
+    // new list is picked once it loads.
+    setAgentsLoaded(false);
     setSelectedAgentId(null);
   };
 
@@ -642,6 +658,8 @@ export default function WorkspacesPage() {
               </div>
             ) : treeError ? (
               <div className="px-3 py-2 text-red-400 text-xs">{treeError}</div>
+            ) : !selectedAgentId ? (
+              <div className="px-3 py-2 text-slate-500 text-xs">{agents.length > 0 ? 'Choose an agent to browse its workspace' : 'No agents to browse'}</div>
             ) : tree.length === 0 ? (
               <div className="px-3 py-2 text-slate-500 text-xs">Empty workspace</div>
             ) : (

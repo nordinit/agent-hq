@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { McpDomainContext } from '../registrar';
 
 /**
- * Team management over MCP, so Atlas can build and maintain teams rather than an operator
+ * Team management over MCP, so an MCP client can build and maintain teams rather than an operator
  * having to assemble every one by hand in the UI.
  *
  * The two tools worth knowing about:

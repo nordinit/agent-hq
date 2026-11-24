@@ -125,7 +125,6 @@ test('init can skip provider setup and still complete minimal install', async ()
       return jsonResponse(200, {
         ok: true,
         onboarding_completed: true,
-        atlas_created: true,
         onboarding_provider_gate_passed: false,
         connected_provider_count: 0,
       });

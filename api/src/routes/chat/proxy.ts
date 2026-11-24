@@ -344,7 +344,7 @@ export function setupChatProxy(wss: WebSocketServer): void {
       }
       if (clientWs.readyState === WsClient.OPEN) {
         const message = pendingAssistantResponse
-          ? 'Connection to Atlas was interrupted before a response completed. Retry.'
+          ? 'Connection to the agent was interrupted before a response completed. Retry.'
           : 'Gateway connection failed';
         pendingAssistantResponse = false;
         streamText = '';
@@ -367,7 +367,7 @@ export function setupChatProxy(wss: WebSocketServer): void {
         streamText = '';
         clientWs.send(JSON.stringify({
           type: 'error',
-          message: 'Connection to Atlas was interrupted before a response completed. Retry.',
+          message: 'Connection to the agent was interrupted before a response completed. Retry.',
         }));
       }
       clientWs.close();

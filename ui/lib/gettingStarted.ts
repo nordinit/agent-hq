@@ -1,5 +1,3 @@
-import type { AtlasWidgetCommand } from './atlasWidget';
-
 export type GettingStartedStatus = 'not_started' | 'choosing' | 'active' | 'dismissed' | 'completed';
 
 export type GettingStartedPartId = 'essentials' | 'advanced';
@@ -15,7 +13,6 @@ export interface GettingStartedStep {
   title: string;
   description: string;
   continueLabel?: string;
-  enterCommand?: AtlasWidgetCommand;
   preferredCardSide?: 'left' | 'right';
 }
 
@@ -43,34 +40,6 @@ export const GETTING_STARTED_CHANGED_EVENT = 'agent-hq:getting-started:changed';
 
 const target = (name: string) => `[data-tour-target="${name}"]`;
 
-const ESSENTIALS_ATLAS_PROMPT = `Help me set up Agent HQ to run my first real task.
-
-My project: <what the project is and what the agents should produce>
-My team workflow: <the steps work goes through today, e.g. plan → build → review>
-
-Please help me:
-- confirm the project and its Project Context
-- choose the first agents and their roles (I plan to use the Claude Code runtime unless you see a reason to use another runtime)
-- pick a workflow type and write a Workflow Goal
-- set the assignment rules so each status reaches the right agent
-- create a first task and check that it dispatches
-
-Separate what base defaults or guided setup already created from optional manual configuration, and keep the starting setup simple.`;
-
-const ADVANCED_ATLAS_PROMPT = `Help me tune my Agent HQ setup now that the basics work.
-
-My project: <what the project is>
-What I want to improve: <e.g. fewer manual status changes, a review gate, cheaper models for small tasks>
-
-Please recommend:
-- workflow definition changes: status labels, task fields, relationships, and run outcomes
-- automatic transitions and gate requirements for my review and QA steps
-- a model routing policy for small, medium, and complex tasks
-- the capabilities each agent needs, and whether a team would help
-- recurring tasks and telemetry metrics worth tracking
-
-Separate base defaults from optional manual configuration and suggest the order to make the changes in.`;
-
 export const GETTING_STARTED_PARTS: GettingStartedPart[] = [
   {
     id: 'essentials',
@@ -78,14 +47,6 @@ export const GETTING_STARTED_PARTS: GettingStartedPart[] = [
     title: 'Essentials',
     summary: 'Projects, agents, providers, workflows, and routing, through to running and following your first task.',
     steps: [
-      {
-        id: 'atlas-bubble',
-        route: '/',
-        pageLabel: 'Dashboard',
-        selectors: [target('atlas-chat-bubble')],
-        title: 'Atlas is here whenever you need help',
-        description: 'Open the Atlas bubble any time for plain-English help. Atlas answers setup questions, explains the page you are on, and turns a description of your workflow into Agent HQ configuration. Part 1 covers what you need to run your first task; Part 2 covers advanced tuning.',
-      },
       {
         id: 'dashboard',
         route: '/',
@@ -160,19 +121,13 @@ export const GETTING_STARTED_PARTS: GettingStartedPart[] = [
         description: 'Each agent has a workspace. Browse and preview the files agents write while they work, and filter by project.',
       },
       {
-        id: 'atlas-customize',
-        route: '/',
-        pageLabel: 'Dashboard',
-        selectors: [target('atlas-widget-composer')],
-        title: 'Ask Atlas to tailor your setup',
-        description: 'Atlas is open with a starter prompt. Replace the placeholders with your real project and team workflow, then send it for help with your first agents, workflow, and assignment rules. When you are ready, Part 2 covers advanced tuning.',
+        id: 'connect-assistant',
+        route: '/settings/mcp',
+        pageLabel: 'MCP',
+        selectors: [target('settings-mcp-connect'), target('settings-mcp-main')],
+        title: 'Get setup help from Claude or ChatGPT',
+        description: 'Agent HQ has no built-in assistant. For plain-English help, connect Claude or ChatGPT to the Agent HQ MCP server; this page shows how. Once connected, describe your project and team workflow and ask it to set up your first agents, workflow, and assignment rules, separating what base defaults already created from optional manual configuration. When you are ready, Part 2 covers advanced tuning.',
         continueLabel: 'Finish',
-        preferredCardSide: 'left',
-        enterCommand: {
-          type: 'open-chat-with-draft',
-          text: ESSENTIALS_ATLAS_PROMPT,
-          focus: true,
-        },
       },
     ],
   },
@@ -260,7 +215,7 @@ export const GETTING_STARTED_PARTS: GettingStartedPart[] = [
         pageLabel: 'MCP',
         selectors: [target('settings-mcp-main')],
         title: 'Connect external clients',
-        description: 'The MCP tab documents the Agent HQ MCP server, so other agents and tools can manage tasks, routing, and telemetry. The API tab is an interactive console for the REST API when you integrate scripts or services.',
+        description: 'The MCP tab documents the Agent HQ MCP server, so Claude, ChatGPT, and other clients can manage tasks, routing, and telemetry. A connected assistant can also recommend what to tune next: definitions, gates, model policy, and metrics. The API tab is an interactive console for the REST API when you integrate scripts or services.',
       },
       {
         id: 'tenants',
@@ -269,21 +224,7 @@ export const GETTING_STARTED_PARTS: GettingStartedPart[] = [
         selectors: [target('settings-tenants-main')],
         title: 'Tenants keep workspaces separate',
         description: 'Each tenant is an isolated Agent HQ workspace. Create a tenant to keep a client or team separate, and choose which tenant is active here.',
-      },
-      {
-        id: 'atlas-advanced',
-        route: '/',
-        pageLabel: 'Dashboard',
-        selectors: [target('atlas-widget-composer')],
-        title: 'Ask Atlas what to tune next',
-        description: 'Atlas is open with a tuning prompt. Describe what you want to improve, then send it for recommendations on definitions, gates, model policy, and telemetry.',
         continueLabel: 'Finish',
-        preferredCardSide: 'left',
-        enterCommand: {
-          type: 'open-chat-with-draft',
-          text: ADVANCED_ATLAS_PROMPT,
-          focus: true,
-        },
       },
     ],
   },

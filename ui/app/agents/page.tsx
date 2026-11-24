@@ -689,7 +689,7 @@ export default function AgentsPage() {
                     className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-amber-500"
                     value={form.name}
                     onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
-                    placeholder="Atlas"
+                    placeholder="Nova"
                   />
                 </label>
                 <label className="block md:col-span-2">

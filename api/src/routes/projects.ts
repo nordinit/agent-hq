@@ -1,5 +1,4 @@
 import {projectContext} from '../domains/access/projectContext';
-import { ATLAS_SYSTEM_ROLE } from '../lib/atlasAgent';
 import { Router, Request, Response } from 'express';
 import { getDb } from '../db/client';
 import { writeProjectAudit, diffFields, extractActor } from '../lib/projectAudit';
@@ -499,14 +498,7 @@ router.delete('/:id', async (req: Request, res: Response) => {
 
     let agentsDeleted = 0;
     let agentsArchived = 0;
-    const agentsKept: string[] = [];
     for (const agent of agents) {
-      // Atlas is the operator's assistant, not project content: it leaves the project and survives.
-      if (agent.system_role === ATLAS_SYSTEM_ROLE) {
-        await db.run('UPDATE agents SET project_id = NULL WHERE id = ?', agent.id);
-        agentsKept.push(String(agent.name));
-        continue;
-      }
       const result = await deleteAgentWithCleanup(db, agent);
       if (result.archived) agentsArchived++; else agentsDeleted++;
     }
@@ -523,7 +515,6 @@ router.delete('/:id', async (req: Request, res: Response) => {
       project_id: projectId,
       agents_deleted: agentsDeleted,
       agents_archived: agentsArchived,
-      agents_kept: agentsKept,
     });
   } catch (err) {
     return sendRouteError(res, err);

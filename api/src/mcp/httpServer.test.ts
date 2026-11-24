@@ -6,6 +6,9 @@ import { McpApiAuthError, type McpApiIdentity } from '../lib/mcpApiAuth';
 import { createMcpHttpRouter, resolveMcpHttpConfigFromEnv } from './httpServer';
 import { buildEffectiveAccess } from './accessView';
 import { describeToolAccess } from './accessView';
+import { getMcpCatalog } from './catalog';
+import { registerAgentHqMcpCatalog } from './registerCatalog';
+import { AGENT_HQ_MCP_INSTRUCTIONS } from './serverInstructions';
 
 const VALID_KEY = 'ahq_mcp_valid_test_key';
 const DEFAULT_GRANTS = ['tasks.read_project_context', 'workflow_definitions.read_project_scope', 'workflow_definitions.manage_project_scope','runs.dispatch','host.execute'];
@@ -35,7 +38,7 @@ interface Harness {
   close(): Promise<void>;
 }
 
-async function startHarness(options: { capabilities?: string[]; rateLimitRpm?: number; apiBaseUrl?: string } = {}): Promise<Harness> {
+async function startHarness(options: { capabilities?: string[]; rateLimitRpm?: number; apiBaseUrl?: string; instructions?: string } = {}): Promise<Harness> {
   const app = express();
   app.use(express.json());
   app.use('/mcp', createMcpHttpRouter({
@@ -44,6 +47,7 @@ async function startHarness(options: { capabilities?: string[]; rateLimitRpm?: n
     resolveAccess: async identity => buildEffectiveAccess({ identity: { agent_id: identity.agentId, agent_slug: identity.agentSlug, key_id: identity.keyId, key_role: identity.keyRole, tenant_id: identity.tenantId, project_id: 1 }, policy_mode: 'explicit', default_policy: 'scoped_runtime', scopes: [], enabled_capabilities: options.capabilities ?? DEFAULT_GRANTS }),
     rateLimitRpm: options.rateLimitRpm,
     resolveIdentity,
+    instructions: options.instructions,
   }));
 
   const server: Server = await new Promise((resolve) => {
@@ -74,6 +78,24 @@ describe('MCP Streamable HTTP transport', () => {
 
   beforeEach(() => {
     log = jest.spyOn(console, 'log').mockImplementation(() => undefined);
+  });
+
+  it('tells a connected client how to configure Agent HQ', async () => {
+    harness = await startHarness({ instructions: AGENT_HQ_MCP_INSTRUCTIONS });
+    const client = await connectClient(harness.baseUrl, VALID_KEY);
+    try {
+      expect(client.getInstructions()).toBe(AGENT_HQ_MCP_INSTRUCTIONS);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('names only tools that exist in its instructions', () => {
+    registerAgentHqMcpCatalog();
+    const named = AGENT_HQ_MCP_INSTRUCTIONS.match(/agent_hq_[a-z_]+/g) ?? [];
+    const known = new Set(getMcpCatalog().tools.map((tool) => tool.canonical_name));
+    expect(named.length).toBeGreaterThan(0);
+    expect(named.filter((name) => !known.has(name))).toEqual([]);
   });
 
   it('forwards the requesting run identity and never inherits the API host run identity', async () => {

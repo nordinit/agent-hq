@@ -480,7 +480,7 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
 
   registerTool(
     ['agent_hq_update_workflow_type_field_schema'],
-    'Update a task field schema for a workflow type. Atlas can send the full schema.fields[] payload used by Workflow Definitions UI.',
+    'Update a task field schema for a workflow type. Send the full schema.fields[] payload used by the Workflow Definitions UI.',
     {
       workflow_type_key: z.string().min(1).describe('Workflow type key'),
       schema_id: z.number().int().positive().describe('Schema ID'),

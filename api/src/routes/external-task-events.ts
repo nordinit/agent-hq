@@ -3,7 +3,7 @@ import { Router, Request, Response } from 'express';
 import { getDb } from '../db/client';
 import { withTelemetryCausation } from '../domains/telemetry/capture';
 import { validateReviewEvidence } from '../lib/evidenceValidation';
-import { getMcpIdentityFromRequest, type McpApiIdentity } from '../lib/mcpApiAuth';
+import { getMcpIdentityFromRequest, isTrustedMcpIdentity, type McpApiIdentity } from '../lib/mcpApiAuth';
 import { notifyTaskStatusChange } from '../lib/taskNotifications';
 import { getCanonicalTaskCustomFields } from '../domains/tasks/evidence';
 import { writeTaskHistory, writeTaskStatusChange } from '../domains/tasks/history';
@@ -197,10 +197,11 @@ function assertTrustedExternalSource(identity: McpApiIdentity | null, source: st
     throw error;
   }
 
+  // Authority comes from the key's role, never from the agent row: an admin key may publish any
+  // source, a scoped key only its own agent's.
   const allowed = source === DEV_ENV_LEASE_MANAGER_SOURCE
     || identity.agentSlug === source
-    || identity.agentSlug === 'atlas'
-    || identity.systemRole === 'atlas';
+    || isTrustedMcpIdentity(identity);
   if (!allowed) {
     const error = new Error(`Authenticated agent "${identity.agentSlug}" is not allowed to publish source "${source}"`);
     (error as Error & { statusCode?: number; code?: string }).statusCode = 403;

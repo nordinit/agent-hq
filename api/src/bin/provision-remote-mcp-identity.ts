@@ -3,7 +3,7 @@
  *
  * A remote connector's key lives outside this machine — in Anthropic's or OpenAI's connector
  * config — which makes it the key most likely to leak and the one least worth granting broadly.
- * So it gets its own agent rather than borrowing Atlas's: a separate identity is separately
+ * So it gets its own agent rather than borrowing an admin's: a separate identity is separately
  * revocable and shows up on its own in the audit trail. Keys are issued with scoped authority.
  *
  * The identity is a permission holder, not a worker, and its capability policy is written

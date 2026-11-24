@@ -16,7 +16,6 @@ import { getDb } from '../db/client';
 import { setupTestDb, teardownTestDb } from '../db/testDb';
 import { installInitialConfiguration } from '../db/migrate';
 import { ensureTenantSchema } from '../lib/tenantContext';
-import { ATLAS_AGENT_NAME, ATLAS_SYSTEM_ROLE } from '../lib/atlasAgent';
 import { DEFAULT_PROJECT_NAME, STARTER_AGENT_DEFINITIONS } from '../lib/starterCatalog';
 import {
   AGENT_HQ_DISPATCHER_SOURCE,
@@ -112,25 +111,13 @@ describe('tenant workspace isolation', () => {
       expect((await db.get(`SELECT COUNT(*) AS n FROM projects WHERE tenant_id = ?`, first.tenant.id) as { n: number }).n).toBe(1);
       expect((await db.get(`SELECT COUNT(*) AS n FROM projects WHERE tenant_id = ? AND name = ?`, first.tenant.id, DEFAULT_PROJECT_NAME) as { n: number }).n).toBe(1);
       expect((await db.get(`SELECT COUNT(*) AS n FROM workflows WHERE tenant_id = ?`, first.tenant.id) as { n: number }).n).toBe(4);
-      expect((await db.get(`SELECT COUNT(*) AS n FROM agents WHERE tenant_id = ? AND system_role = ?`, first.tenant.id, ATLAS_SYSTEM_ROLE) as { n: number }).n).toBe(1);
-      const atlasAgent = await db.get(`
+      // A tenant gets its starter agents and nothing else: there is no built-in assistant.
+      expect((await db.get(`SELECT COUNT(*) AS n FROM agents WHERE tenant_id = ?`, first.tenant.id) as { n: number }).n).toBe(STARTER_AGENT_DEFINITIONS.length);
+      const pmAgent = await db.get(`
         SELECT id, workspace_path
         FROM agents
         WHERE tenant_id = ? AND system_role = ?
-      `, first.tenant.id, ATLAS_SYSTEM_ROLE) as { id: number; workspace_path: string };
-      expect(atlasAgent.workspace_path).toContain(path.join('openclaw', 'workspace-atlas-acme'));
-      expect(fs.existsSync(atlasAgent.workspace_path)).toBe(true);
-      const localServer=await db.get<{id:number}>('SELECT id FROM mcp_servers WHERE tenant_id=? AND slug=?',first.tenant.id,'agent-hq');
-      await approveExecutableFixture(db,first.tenant.id,atlasAgent.id,'mcp_server',localServer!.id);
-      const atlasSync = await materializeAgentMcpConfig({
-              db,
-              agentId: atlasAgent.id,
-              workingDirectory: atlasAgent.workspace_path,
-            });
-      expect(atlasSync.ok).toBe(true);
-      expect(atlasSync.count).toBe(1);
-      const atlasMcpConfig = JSON.parse(fs.readFileSync(path.join(atlasAgent.workspace_path, '.mcp.json'), 'utf8')) as { mcpServers: Record<string, unknown> };
-      expect(Object.keys(atlasMcpConfig.mcpServers).filter((key) => key.startsWith('agent-hq__agent-'))).toEqual([`agent-hq__agent-${atlasAgent.id}`]);
+      `, first.tenant.id, STARTER_AGENT_DEFINITIONS[0].systemRole) as { id: number; workspace_path: string };
       expect((await db.get(`
         SELECT COUNT(*) AS n
         FROM agents
@@ -177,7 +164,7 @@ describe('tenant workspace isolation', () => {
           };
         };
         expect(skillNames).toEqual(definition.skillNames);
-        expect(skillNames).not.toEqual(expect.arrayContaining(['atlas-agent-hq-admin', 'cover-agent']));
+        expect(skillNames).not.toEqual(expect.arrayContaining(['agent-hq-admin', 'atlas-agent-hq-admin', 'cover-agent']));
         expect(agent.enabled).toBe(0);
         expect(agent.workspace_path).toContain(path.join('openclaw', `workspace-acme-${definition.systemRole.split('.').pop()}`));
         expect(fs.existsSync(agent.workspace_path)).toBe(true);
@@ -208,11 +195,6 @@ describe('tenant workspace isolation', () => {
         `, agent.id)).map((row: any) => row.slug);
         expect(assignedToolSlugs).toEqual([...definition.toolSlugs].sort());
       }
-      const pmAgent = await db.get(`
-        SELECT id
-        FROM agents
-        WHERE tenant_id = ? AND system_role = ?
-      `, first.tenant.id, STARTER_AGENT_DEFINITIONS[0].systemRole) as { id: number };
       expect((await db.get(`
         SELECT COUNT(*) AS n
         FROM agent_mcp_capability_policies
@@ -227,7 +209,7 @@ describe('tenant workspace isolation', () => {
           AND s.slug = 'agent-hq'
           AND s.tenant_id = a.tenant_id
           AND ama.enabled = 1
-      `, first.tenant.id) as { n: number }).n).toBe(STARTER_AGENT_DEFINITIONS.length + 1);
+      `, first.tenant.id) as { n: number }).n).toBe(STARTER_AGENT_DEFINITIONS.length);
       expect((await db.get(`
         SELECT COUNT(*) AS n
         FROM agent_mcp_assignments ama
@@ -719,7 +701,7 @@ describe('tenant workspace isolation', () => {
     }
   });
 
-  it('seeds each new tenant with its own project-scoped Atlas agent', async () => {
+  it('seeds no built-in assistant and keeps each tenant\'s starter agents to itself', async () => {
     await resetFullDb();
     const { server, baseUrl } = await startServer();
     try {
@@ -733,58 +715,17 @@ describe('tenant workspace isolation', () => {
       });
 
       const db = getDb();
-      const defaultTenantId = (await db.get(`SELECT id FROM tenants WHERE slug = 'default'`) as { id: number }).id;
-      const acmeAtlas = await db.get(`
-        SELECT id, tenant_id, project_id, name, session_key, openclaw_agent_id, workspace_path, system_role, job_instructions
-        FROM agents
-        WHERE tenant_id = ? AND system_role = ?
-      `, acme.tenant.id, ATLAS_SYSTEM_ROLE) as { id: number; tenant_id: number; project_id: number; name: string; session_key: string; openclaw_agent_id: string; workspace_path: string; system_role: string; job_instructions: string };
-      const betaAtlas = await db.get(`
-        SELECT id, tenant_id, project_id, name, session_key, openclaw_agent_id, workspace_path, system_role
-        FROM agents
-        WHERE tenant_id = ? AND system_role = ?
-      `, beta.tenant.id, ATLAS_SYSTEM_ROLE) as typeof acmeAtlas;
-      const acmeProject = await db.get(`SELECT id FROM projects WHERE tenant_id = ? AND name = ?`, acme.tenant.id, DEFAULT_PROJECT_NAME) as { id: number };
-      const betaProject = await db.get(`SELECT id FROM projects WHERE tenant_id = ? AND name = ?`, beta.tenant.id, DEFAULT_PROJECT_NAME) as { id: number };
-      const defaultAtlas = await db.get(`SELECT id, tenant_id, session_key, openclaw_agent_id FROM agents WHERE tenant_id = ? AND system_role = ?`, defaultTenantId, ATLAS_SYSTEM_ROLE) as { id: number; tenant_id: number; session_key: string; openclaw_agent_id: string };
-
-      expect(acmeAtlas.name).toBe(ATLAS_AGENT_NAME);
-      expect(acmeAtlas.tenant_id).toBe(acme.tenant.id);
-      expect(acmeAtlas.project_id).toBe(acmeProject.id);
-      expect(acmeAtlas.session_key).toMatch(/^agent:acme-default-project:atlas:/);
-      expect(acmeAtlas.openclaw_agent_id).toBe('atlas-acme');
-      expect(acmeAtlas.workspace_path).toContain('workspace-atlas-acme');
-      expect(acmeAtlas.job_instructions).toContain('tenant data isolated');
-      expect(acmeAtlas.job_instructions).not.toMatch(/Dev Environment Lease Manager|agent-hq-dev|workspace-agent-hq-backend/);
-      expect(betaAtlas.name).toBe(ATLAS_AGENT_NAME);
-      expect(betaAtlas.tenant_id).toBe(beta.tenant.id);
-      expect(betaAtlas.project_id).toBe(betaProject.id);
-      expect(betaAtlas.session_key).toMatch(/^agent:beta-default-project:atlas:/);
-      expect(betaAtlas.openclaw_agent_id).toBe('atlas-beta');
-      expect(betaAtlas.id).not.toBe(acmeAtlas.id);
-      expect(betaAtlas.session_key).not.toBe(acmeAtlas.session_key);
-      expect(defaultAtlas.session_key).toBe('agent:atlas:main');
-      expect(defaultAtlas.openclaw_agent_id).toBe('atlas');
+      expect((await db.get(`SELECT COUNT(*) AS n FROM agents WHERE system_role = 'atlas' OR lower(name) = 'atlas'`) as { n: number }).n).toBe(0);
 
       await setActiveTenant(baseUrl, acme.tenant.id);
-      const acmeAgents = await json<Array<{ id: number; tenant_id: number; name: string; system_role: string | null }>>(`${baseUrl}/api/v1/agents`);
+      const acmeAgents = await json<Array<{ id: number; tenant_id: number }>>(`${baseUrl}/api/v1/agents`);
       await setActiveTenant(baseUrl, beta.tenant.id);
-      const betaAgents = await json<Array<{ id: number; tenant_id: number; name: string; system_role: string | null }>>(`${baseUrl}/api/v1/agents`);
-      await setActiveTenant(baseUrl, defaultTenantId);
-      const defaultAgents = await json<Array<{ id: number; tenant_id: number; name: string; system_role: string | null }>>(`${baseUrl}/api/v1/agents`);
+      const betaAgents = await json<Array<{ id: number; tenant_id: number }>>(`${baseUrl}/api/v1/agents`);
 
-      expect(acmeAgents.map((agent) => agent.id)).toContain(acmeAtlas.id);
-      expect(acmeAgents.map((agent) => agent.id)).not.toContain(defaultAtlas.id);
-      expect(betaAgents.map((agent) => agent.id)).toContain(betaAtlas.id);
-      expect(betaAgents.map((agent) => agent.id)).not.toContain(defaultAtlas.id);
-      expect(defaultAgents.map((agent) => agent.id)).toContain(defaultAtlas.id);
-      expect(defaultAgents.map((agent) => agent.id)).not.toContain(acmeAtlas.id);
-
-      for (const doc of ['SOUL.md', 'IDENTITY.md', 'USER.md', 'TOOLS.md', 'MEMORY.md', 'AGENTS.md']) {
-        const docPath = path.join(acmeAtlas.workspace_path, doc);
-        expect(fs.existsSync(docPath)).toBe(true);
-        expect(fs.readFileSync(docPath, 'utf-8')).not.toMatch(/Dev Environment Lease Manager|agent-hq-dev|workspace-agent-hq-backend/);
-      }
+      expect(acmeAgents.length).toBe(STARTER_AGENT_DEFINITIONS.length);
+      expect(betaAgents.length).toBe(STARTER_AGENT_DEFINITIONS.length);
+      expect(acmeAgents.every((agent) => agent.tenant_id === acme.tenant.id)).toBe(true);
+      expect(betaAgents.every((agent) => agent.tenant_id === beta.tenant.id)).toBe(true);
     } finally {
       await stopServer(server);
     }
@@ -886,7 +827,7 @@ describe('tenant workspace isolation', () => {
     }
   });
 
-  it('resolves the default artifact workspace to the active tenant Atlas, not the default tenant Atlas', async () => {
+  it('serves artifacts only from a named agent of the active tenant', async () => {
     await resetFullDb();
     const { server, baseUrl } = await startServer();
     try {
@@ -896,20 +837,30 @@ describe('tenant workspace isolation', () => {
       });
 
       const db = getDb();
-      const defaultAtlas = await db.get(`SELECT id, workspace_path FROM agents WHERE tenant_id = (SELECT id FROM tenants WHERE slug = 'default') AND system_role = ?`, ATLAS_SYSTEM_ROLE) as { id: number; workspace_path: string };
-      const acmeAtlas = await db.get(`SELECT id, workspace_path FROM agents WHERE tenant_id = ? AND system_role = ?`, acme.tenant.id, ATLAS_SYSTEM_ROLE) as { id: number; workspace_path: string };
-      fs.mkdirSync(defaultAtlas.workspace_path, { recursive: true });
-      fs.mkdirSync(acmeAtlas.workspace_path, { recursive: true });
-      fs.writeFileSync(path.join(defaultAtlas.workspace_path, 'default-only.md'), 'default workspace', 'utf-8');
-      fs.writeFileSync(path.join(acmeAtlas.workspace_path, 'acme-only.md'), 'acme workspace', 'utf-8');
+      const defaultTenantId = (await db.get(`SELECT id FROM tenants WHERE slug = 'default'`) as { id: number }).id;
+      const acmeAgent = await db.get(`SELECT id, workspace_path FROM agents WHERE tenant_id = ? AND system_role = ?`, acme.tenant.id, STARTER_AGENT_DEFINITIONS[0].systemRole) as { id: number; workspace_path: string };
+      const defaultWorkspace = path.join(path.dirname(acmeAgent.workspace_path), 'workspace-default-tenant-agent');
+      const defaultAgent = Number((await db.run(`
+        INSERT INTO agents (tenant_id, name, role, session_key, workspace_path)
+        VALUES (?, 'Default Agent', 'Agent', 'agent:default-tenant-agent:main', ?)
+      `, defaultTenantId, defaultWorkspace)).lastInsertId);
+      fs.mkdirSync(defaultWorkspace, { recursive: true });
+      fs.mkdirSync(acmeAgent.workspace_path, { recursive: true });
+      fs.writeFileSync(path.join(defaultWorkspace, 'default-only.md'), 'default workspace', 'utf-8');
+      fs.writeFileSync(path.join(acmeAgent.workspace_path, 'acme-only.md'), 'acme workspace', 'utf-8');
 
       await setActiveTenant(baseUrl, acme.tenant.id);
-      const tree = await json<{ root: string; children: Array<{ name: string }> }>(`${baseUrl}/api/v1/artifacts/tree`);
-      expect(tree.root).toBe(acmeAtlas.workspace_path);
+      // No agent named: nothing, rather than some other agent's files.
+      const unnamed = await json<{ root: string; children: Array<{ name: string }> }>(`${baseUrl}/api/v1/artifacts/tree`);
+      expect(unnamed.root).toBe('');
+      expect(unnamed.children).toEqual([]);
+
+      const tree = await json<{ root: string; children: Array<{ name: string }> }>(`${baseUrl}/api/v1/artifacts/tree?agentId=${acmeAgent.id}`);
+      expect(tree.root).toBe(acmeAgent.workspace_path);
       expect(tree.children.map((child) => child.name)).toContain('acme-only.md');
       expect(tree.children.map((child) => child.name)).not.toContain('default-only.md');
 
-      const crossTenantResponse = await fetch(`${baseUrl}/api/v1/artifacts/tree?agentId=${defaultAtlas.id}`);
+      const crossTenantResponse = await fetch(`${baseUrl}/api/v1/artifacts/tree?agentId=${defaultAgent}`);
       expect(crossTenantResponse.status).toBe(404);
     } finally {
       await stopServer(server);
@@ -925,10 +876,6 @@ describe('tenant workspace isolation', () => {
         INSERT INTO tenants (name, slug, is_default)
         VALUES ('Legacy Empty', 'legacy-empty', 0)
       `)).lastInsertId);
-      const defaultAtlas = await db.get(`SELECT workspace_path FROM agents WHERE tenant_id = (SELECT id FROM tenants WHERE slug = 'default') AND system_role = ?`, ATLAS_SYSTEM_ROLE) as { workspace_path: string };
-      fs.mkdirSync(defaultAtlas.workspace_path, { recursive: true });
-      fs.writeFileSync(path.join(defaultAtlas.workspace_path, 'default-only.md'), 'default workspace', 'utf-8');
-
       await setActiveTenant(baseUrl, tenantId);
       const agents = await json<Array<{ id: number }>>(`${baseUrl}/api/v1/agents`);
       const tree = await json<{ root: string; children: Array<{ name: string }> }>(`${baseUrl}/api/v1/artifacts/tree`);
@@ -1068,9 +1015,9 @@ describe('tenant workspace isolation', () => {
       expect(acmeTasks.map((row) => row.title)).not.toContain('Beta Task');
       expect(betaTasks.map((row) => row.title)).toContain('Beta Task');
       expect(betaTasks.map((row) => row.title)).not.toContain('Acme Task');
-      expect(acmeAgents.map((row) => row.name)).toEqual(expect.arrayContaining([ATLAS_AGENT_NAME, 'Acme Agent']));
+      expect(acmeAgents.map((row) => row.name)).toContain('Acme Agent');
       expect(acmeAgents.map((row) => row.name)).not.toContain('Beta Agent');
-      expect(betaAgents.map((row) => row.name)).toEqual(expect.arrayContaining([ATLAS_AGENT_NAME, 'Beta Agent']));
+      expect(betaAgents.map((row) => row.name)).toContain('Beta Agent');
       expect(betaAgents.map((row) => row.name)).not.toContain('Acme Agent');
       expect(acmeWorkflows.every((row) => row.tenant_id === acme.tenant.id)).toBe(true);
       expect(betaWorkflows.every((row) => row.tenant_id === beta.tenant.id)).toBe(true);

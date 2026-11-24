@@ -32,8 +32,8 @@ test('notices count runs and agents', () => {
   assert.equal(runningAfterArchiveNotice(3), '3 runs are still finishing in the archived project.');
   assert.equal(projectDeletionNotice('Kayode', {}), 'Deleted Kayode.');
   assert.equal(
-    projectDeletionNotice('Default Project', { agents_deleted: 2, agents_archived: 8, agents_kept: ['Atlas'] }),
-    'Deleted Default Project (10 agents removed; Atlas kept).',
+    projectDeletionNotice('Default Project', { agents_deleted: 2, agents_archived: 8 }),
+    'Deleted Default Project (10 agents removed).',
   );
 });
 

@@ -6,10 +6,6 @@ import { NODE_BIN_DIR } from '../config';
 import { buildRuntimeConfigDefaults } from './runtimeOnboarding';
 import { getAgentHqBaseUrl } from './agentHqBaseUrl';
 import {
-  ATLAS_AGENT_NAME,
-  ATLAS_SYSTEM_ROLE,
-} from './atlasAgent';
-import {
   buildCanonicalAgentMainSessionKey,
   slugifySessionKeyPart,
 } from './sessionKeys';
@@ -27,79 +23,6 @@ export const DEFAULT_TENANT_NAME = 'Default Tenant';
 export const DEFAULT_TENANT_SETTING_KEY = 'default_tenant_id';
 export const ACTIVE_TENANT_SETTING_KEY = 'active_tenant_id';
 const AGENT_HQ_MCP_SERVER_SLUG = 'agent-hq';
-
-const TENANT_ATLAS_ROLE = 'Built-in assistant — task routing, coordination, and chat';
-const TENANT_ATLAS_JOB_INSTRUCTIONS = [
-  'You are Atlas, the built-in Agent HQ assistant for this tenant.',
-  '',
-  'Responsibilities:',
-  '- Help operators understand projects, tasks, workflows, agents, and runtime activity in this tenant.',
-  '- Keep tenant data isolated. Do not use or expose another tenant\'s projects, agents, workspaces, chats, or operational records.',
-  '- Prefer concrete evidence from Agent HQ state before changing task or workflow state.',
-  '- When asked to perform implementation, review, QA, or release work, follow the active Agent HQ task contract and record truthful evidence.',
-  '',
-  'Boundaries:',
-  '- Do not assume access to host-specific paths, credentials, private infrastructure, or another tenant\'s defaults.',
-  '- Ask before taking external actions such as sending messages outside the current workspace or publishing changes.',
-].join('\n');
-
-const TENANT_ATLAS_DOCS: Record<string, string> = {
-  'SOUL.md': [
-    '# SOUL.md - Atlas',
-    '',
-    'You are Atlas, the built-in Agent HQ assistant for this tenant.',
-    '',
-    '## Core Principles',
-    '',
-    '- Be direct, useful, and evidence-based.',
-    '- Keep tenant data private and isolated.',
-    '- Prefer explicit task state, logs, and review evidence over assumptions.',
-    '- Leave durable notes when your work affects future operators or agents.',
-    '',
-  ].join('\n'),
-  'IDENTITY.md': [
-    '# IDENTITY.md - Atlas',
-    '',
-    '- **Name:** Atlas',
-    '- **Role:** Built-in Agent HQ assistant',
-    '- **Vibe:** Calm, pragmatic, and careful with evidence',
-    '- **Emoji:**',
-    '',
-  ].join('\n'),
-  'USER.md': [
-    '# USER.md - Tenant Context',
-    '',
-    'Record tenant-specific preferences and operator context here as they are learned.',
-    'Do not copy private context from other Agent HQ tenants.',
-    '',
-  ].join('\n'),
-  'TOOLS.md': [
-    '# TOOLS.md - Tenant Tools',
-    '',
-    'Record tenant-local tool notes, environment details, and operational shortcuts here.',
-    'Do not include host-specific defaults or credentials unless an operator explicitly provides tenant-local information.',
-    '',
-  ].join('\n'),
-  'MEMORY.md': [
-    '# MEMORY.md - Atlas',
-    '',
-    'Curated durable memory for this tenant-local Atlas agent.',
-    '',
-  ].join('\n'),
-  'AGENTS.md': [
-    '# AGENTS.md - Atlas Workspace',
-    '',
-    'This workspace belongs to the tenant-local Atlas agent.',
-    '',
-    '## Operating Rules',
-    '',
-    '- Treat tenant isolation as a hard boundary.',
-    '- Use Agent HQ task contracts and lifecycle tools when assigned workflow work.',
-    '- Record meaningful progress, blockers, verification, and handoff evidence in durable task notes.',
-    '- Do not reuse another tenant\'s workspace files, identity documents, runtime records, or operational notes.',
-    '',
-  ].join('\n'),
-};
 
 const STARTER_TOOL_CATALOG_ROWS: Array<{
   name: string;
@@ -507,25 +430,6 @@ async function uniqueTenantSlug(db: Db, requested: string): Promise<string> {
   return slug;
 }
 
-function buildTenantAtlasSessionKey(tenantSlug: string): string {
-  return buildCanonicalAgentMainSessionKey({
-    projectSlug: `${slugifySessionKeyPart(tenantSlug, 'tenant')}-${slugifySessionKeyPart(DEFAULT_PROJECT_NAME, 'default-project')}`,
-    agentName: ATLAS_AGENT_NAME,
-    role: 'General Assistant',
-  });
-}
-
-function buildTenantAtlasRuntimeSlug(tenantSlug: string): string {
-  const slug = slugifySessionKeyPart(tenantSlug, 'tenant');
-  return slug === DEFAULT_TENANT_SLUG ? 'atlas' : `atlas-${slug}`;
-}
-
-function buildTenantAtlasWorkspacePath(tenantSlug: string): string {
-  const home = process.env.HOME ?? os.homedir();
-  const openclawRoot = process.env.WORKSPACE_PARENT ?? path.join(home, '.openclaw');
-  return path.join(openclawRoot, `workspace-${buildTenantAtlasRuntimeSlug(tenantSlug)}`);
-}
-
 function buildStarterAgentRuntimeSlug(tenantSlug: string, definition: typeof STARTER_AGENT_DEFINITIONS[number]): string {
   const tenantPart = slugifySessionKeyPart(tenantSlug, 'tenant');
   const rolePart = definition.systemRole.split('.').pop() ?? definition.jobTitle;
@@ -536,17 +440,6 @@ function buildStarterAgentWorkspacePath(tenantSlug: string, definition: typeof S
   const home = process.env.HOME ?? os.homedir();
   const openclawRoot = process.env.WORKSPACE_PARENT ?? path.join(home, '.openclaw');
   return path.join(openclawRoot, `workspace-${buildStarterAgentRuntimeSlug(tenantSlug, definition)}`);
-}
-
-function ensureTenantAtlasWorkspaceDocs(workspacePath: string): void {
-  fs.mkdirSync(workspacePath, { recursive: true });
-  fs.mkdirSync(path.join(workspacePath, 'memory'), { recursive: true });
-  for (const [filename, content] of Object.entries(TENANT_ATLAS_DOCS)) {
-    const target = path.join(workspacePath, filename);
-    if (!fs.existsSync(target)) {
-      fs.writeFileSync(target, content, 'utf-8');
-    }
-  }
 }
 
 function ensureStarterAgentWorkspaceDocs(workspacePath: string, definition: typeof STARTER_AGENT_DEFINITIONS[number]): void {
@@ -560,67 +453,6 @@ function ensureStarterAgentWorkspaceDocs(workspacePath: string, definition: type
       .replace('- **Workspace:** Assigned during provisioning', `- **Workspace:** ${workspacePath}`);
     fs.writeFileSync(target, hydrated, 'utf-8');
   }
-}
-
-async function ensureTenantDefaultAtlasAgent(db: Db, tenantId: number, projectId: number): Promise<number> {
-  const tenant = await db.get(`SELECT slug FROM tenants WHERE id = ? LIMIT 1`, tenantId) as { slug: string } | undefined;
-  const tenantSlug = tenant?.slug ?? `tenant-${tenantId}`;
-  const runtimeSlug = buildTenantAtlasRuntimeSlug(tenantSlug);
-  const sessionKey = buildTenantAtlasSessionKey(tenantSlug);
-  const workspacePath = buildTenantAtlasWorkspacePath(tenantSlug);
-  ensureTenantAtlasWorkspaceDocs(workspacePath);
-
-  const existing = await db.get(`
-    SELECT id
-    FROM agents
-    WHERE tenant_id = ?
-      AND deleted_at IS NULL
-      AND (
-        system_role = ?
-        OR session_key = ?
-        OR openclaw_agent_id = ?
-        OR lower(name) = lower(?)
-      )
-    ORDER BY CASE WHEN system_role = ? THEN 0 ELSE 1 END, id ASC
-    LIMIT 1
-  `, tenantId, ATLAS_SYSTEM_ROLE, sessionKey, runtimeSlug, ATLAS_AGENT_NAME, ATLAS_SYSTEM_ROLE) as { id: number } | undefined;
-
-  if (existing) {
-    await db.run(`
-      UPDATE agents
-      SET project_id = COALESCE(project_id, ?),
-          role = CASE WHEN role IS NULL OR trim(role) = '' THEN ? ELSE role END,
-          job_title = CASE WHEN job_title IS NULL OR trim(job_title) = '' THEN ? ELSE job_title END,
-          system_role = COALESCE(system_role, ?),
-          runtime_type = COALESCE(runtime_type, 'openclaw'),
-          openclaw_agent_id = CASE WHEN openclaw_agent_id IS NULL OR trim(openclaw_agent_id) = '' THEN ? ELSE openclaw_agent_id END,
-          workspace_path = CASE WHEN workspace_path IS NULL OR trim(workspace_path) = '' THEN ? ELSE workspace_path END,
-          job_instructions = CASE WHEN job_instructions IS NULL OR trim(job_instructions) = '' THEN ? ELSE job_instructions END,
-          last_active = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
-      WHERE id = ?
-    `, projectId, TENANT_ATLAS_ROLE, TENANT_ATLAS_ROLE, ATLAS_SYSTEM_ROLE, runtimeSlug, workspacePath, TENANT_ATLAS_JOB_INSTRUCTIONS, existing.id);
-    return existing.id;
-  }
-
-  const result = await db.run(`
-    INSERT INTO agents (
-      tenant_id, project_id, name, role, job_title, session_key, workspace_path, status,
-      openclaw_agent_id, runtime_type, runtime_config, preferred_provider, model,
-      system_role, enabled, timeout_seconds, skill_names, sort_rules, job_instructions
-    )
-    VALUES (?, ?, ?, ?, ?, ?, ?, 'idle', ?, 'openclaw', NULL, 'anthropic', NULL, ?, 1, 900, '[]', '[]', ?)
-  `,
-  tenantId,
-  projectId,
-  ATLAS_AGENT_NAME,
-  TENANT_ATLAS_ROLE,
-  TENANT_ATLAS_ROLE,
-  sessionKey,
-  workspacePath,
-  runtimeSlug,
-  ATLAS_SYSTEM_ROLE,
-  TENANT_ATLAS_JOB_INSTRUCTIONS);
-  return Number(result.lastInsertId);
 }
 
 async function buildStarterAgentRuntimeConfig(
@@ -907,8 +739,6 @@ async function provisionTenantDefaultWorkspace(db: Db, tenantId: number): Promis
   }
 
   await ensureProjectBacklogWorkflow(db, projectId);
-  const atlasAgentId = await ensureTenantDefaultAtlasAgent(db, tenantId, projectId);
-  await ensureStarterAgentMcpAssignments(db, tenantId, atlasAgentId, [AGENT_HQ_MCP_SERVER_SLUG]);
   await ensureTenantStarterAgents(db, tenantId, projectId, tenantSlug);
 }
 

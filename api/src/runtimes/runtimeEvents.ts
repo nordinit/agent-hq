@@ -35,7 +35,7 @@ export type RuntimeEndReason = typeof RUNTIME_END_REASONS[number];
  * Canonical fields:
  * - `type`: whether the runtime ended an entire run or a single turn
  * - `source`: which runtime emitted the event
- * - `sessionKey`: canonical Atlas/OpenClaw session key for the run
+ * - `sessionKey`: canonical runtime session key for the run
  * - `success`: whether the runtime itself considers the run complete/successful
  * - `endedAt`: ISO timestamp for the terminal runtime event
  * - `runId`: runtime-native run identifier when available

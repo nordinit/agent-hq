@@ -685,7 +685,7 @@ describe('tasks route write-model handoff', () => {
     });
   });
 
-  it('allows direct API status overrides when the request explicitly marks Atlas authority', async () => {
+  it('allows direct API status overrides when the request marks operator authority with the legacy Atlas alias', async () => {
     const res = await fetch(`${baseUrl}/api/v1/tasks/102`, {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
@@ -806,7 +806,7 @@ describe('tasks route write-model handoff', () => {
     });
   });
 
-  it('allows direct API status overrides when Atlas authority is supplied via header', async () => {
+  it('allows direct API status overrides when the legacy Atlas authority alias is supplied via header', async () => {
     const res = await fetch(`${baseUrl}/api/v1/tasks/102`, {
       method: 'PUT',
       headers: {
@@ -886,7 +886,7 @@ describe('tasks route write-model handoff', () => {
 
     expect(res.status).toBe(403);
     await expect(res.json()).resolves.toMatchObject({
-      error: expect.stringContaining('Only Atlas or a human user may change task status through the generic update endpoint'),
+      error: expect.stringContaining('Only the operator or a human user may change task status through the generic update endpoint'),
     });
   });
 

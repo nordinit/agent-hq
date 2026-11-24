@@ -370,7 +370,7 @@ export default function SettingsGatewayPage() {
               <div>
                 <h3 className="text-sm font-semibold text-white">Connection</h3>
                 <p className="text-xs leading-5 text-zinc-400">
-                  Agent HQ uses this WebSocket URL for Atlas and agent chat once the gateway is reachable.
+                  Agent HQ uses this WebSocket URL for agent chat once the gateway is reachable.
                 </p>
               </div>
               <span className={`rounded-full border px-2.5 py-1 text-xs font-medium ${tone.className}`}>

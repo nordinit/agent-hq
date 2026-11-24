@@ -83,17 +83,31 @@ test('the agents step recommends Claude Code and names every other runtime optio
   }
 });
 
-test('each part ends by opening Atlas with an editable prompt', () => {
+test('each part ends with a Finish step', () => {
   for (const part of GETTING_STARTED_PARTS) {
     const last = part.steps[part.steps.length - 1];
     assert.equal(last.continueLabel, 'Finish');
-    assert.equal(last.enterCommand?.type, 'open-chat-with-draft');
+  }
+});
+
+test('part 1 ends by pointing at connecting Claude or ChatGPT over MCP', () => {
+  const steps = getGettingStartedPart('essentials').steps;
+  const last = steps[steps.length - 1];
+  assert.equal(last.route, '/settings/mcp');
+  assert.match(last.description, /Claude/);
+  assert.match(last.description, /ChatGPT/);
+  assert.match(last.description, /MCP/);
+});
+
+test('no step refers to a built-in assistant bubble', () => {
+  for (const step of allSteps) {
+    assert.doesNotMatch(`${step.id}\n${step.title}\n${step.description}`, /atlas/i, `${step.id} mentions Atlas`);
   }
 });
 
 test('guide copy describes base defaults and manual configuration generically', () => {
   const guideText = allSteps
-    .map(step => `${step.title}\n${step.description}\n${step.enterCommand && 'text' in step.enterCommand ? step.enterCommand.text : ''}`)
+    .map(step => `${step.title}\n${step.description}`)
     .join('\n');
 
   assert.match(guideText, /Base installs/i);

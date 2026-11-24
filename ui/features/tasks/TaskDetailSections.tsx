@@ -257,7 +257,7 @@ export function AttachmentsSection({ taskId }: { taskId: number }) {
     if (!file) return;
     setUploading(true);
     try {
-      await api.uploadTaskAttachment(taskId, file, 'Atlas');
+      await api.uploadTaskAttachment(taskId, file, 'operator');
       await loadAttachments();
     } catch { /* ignore */ }
     setUploading(false);

@@ -816,7 +816,7 @@ export default function AgentDetailPage() {
                 className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-amber-500"
                 value={editForm.name}
                 onChange={e => setF({ name: e.target.value })}
-                placeholder="Atlas"
+                placeholder="Nova"
               />
             </label>
             <label className="block md:col-span-2">

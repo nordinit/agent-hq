@@ -559,7 +559,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     it('refuses every field that still binds an agent identity', async () => {
       // These were the escalation surface before authority moved onto the key: system_role
       // 'admin' made an agent trusted outright. They confer nothing over MCP now, and are
-      // refused because they still bind identity elsewhere — Atlas behaviour, runtime session
+      // refused because they still bind identity elsewhere — starter provisioning, runtime session
       // matching, tenant ownership. Defence in depth rather than the barrier it used to be.
       await replaceDelegatorFixturePolicy(getDb(), 7, [MANAGE]);
 
@@ -576,17 +576,17 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       }
     });
 
-    it('refuses to name an agent after the Atlas identity', async () => {
-      // resolveAgentIdentityFields treats the Atlas name or slug as trusted, so a rename is an
-      // escalation that never mentions a role.
+    it('treats the former Atlas name as an ordinary name', async () => {
+      // There is no built-in assistant any more, and a name never conferred authority after the
+      // key-role change, so naming an agent Atlas is just a rename.
       await replaceDelegatorFixturePolicy(getDb(), 7, [MANAGE]);
 
-      for (const body of [{ name: 'Atlas' }, { name: 'atlas' }, { slug: 'atlas' }]) {
+      for (const body of [{ name: 'Atlas' }, { name: 'Atlas Copco Reviewer' }]) {
         const res = await put(9, body);
-        expect({ body, status: res.status }).toEqual({ body, status: 403 });
+        expect({ body, status: res.status }).toEqual({ body, status: 200 });
       }
-      // A different name is ordinary.
-      await expect(put(9, { name: 'Atlas Copco Reviewer' }).then(r => r.status)).resolves.toBe(200);
+      const identity = await resolveMcpApiIdentityForKey(getDb(), normalKey, { updateLastUsed: false });
+      expect(identity.keyRole).toBe('scoped');
     });
 
     it('cannot reach or move an agent outside the assigned project', async () => {
@@ -2689,7 +2689,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     expect(identity.globalAdminAccess).toBe(true);
   });
 
-  it('preserves admin capability for trusted Atlas-style MCP keys', async () => {
+  it('preserves admin capability for admin MCP keys', async () => {
     await replaceDelegatorFixturePolicy(getDb(),8,['admin.full_access','runs.dispatch','host.execute']);
     const createTaskRes = await fetch(`${baseUrl}/api/v1/tasks`, {
       method: 'POST',
@@ -2893,20 +2893,15 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
   });
 });
 
-/** Establishes the Atlas identity required by these authentication cases. */
-async function ensureAtlasAgent(): Promise<void> {
+/** The agent a configured runtime key is bound to when the environment names it by slug. */
+async function ensureOperatorClientAgent(): Promise<void> {
   const db = getDb();
   const tenantId = await getDefaultTenantId(db);
-  const existing = await db.get(`
-    SELECT id FROM agents
-    WHERE system_role = 'atlas' OR openclaw_agent_id = 'atlas' OR name = 'Atlas'
-    ORDER BY id ASC
-    LIMIT 1
-  `);
+  const existing = await db.get(`SELECT id FROM agents WHERE slug = 'operator-client' LIMIT 1`);
   if (existing) return;
   await db.run(`
-    INSERT INTO agents (name, role, session_key, workspace_path, status, openclaw_agent_id, slug, system_role, tenant_id)
-    VALUES ('Atlas', 'Built-in assistant', 'agent:atlas:main', '', 'idle', 'atlas', 'atlas', 'atlas', ?)
+    INSERT INTO agents (name, role, session_key, workspace_path, status, slug, tenant_id)
+    VALUES ('Operator Client', 'Remote MCP client', 'agent:operator-client:main', '', 'idle', 'operator-client', ?)
   `, tenantId);
 }
 
@@ -2921,7 +2916,7 @@ describe('ensureConfiguredRuntimeMcpApiKey', () => {
     delete process.env.AGENT_HQ_MCP_API_KEY_AGENT_SESSION_KEY;
     delete process.env.AGENT_HQ_MCP_API_KEY_AGENT_SLUG;
     delete process.env.AGENT_HQ_MCP_API_KEY_GLOBAL_ADMIN;
-    await ensureAtlasAgent();
+    await ensureOperatorClientAgent();
   });
 
   afterEach(async () => {
@@ -2944,8 +2939,16 @@ describe('ensureConfiguredRuntimeMcpApiKey', () => {
     expect(await getDb().get(`SELECT COUNT(*) AS count FROM mcp_api_keys`)).toEqual({ count: 0 });
   });
 
-  it('materializes a configured runtime key against Atlas when the key is missing from the current DB', async () => {
+  it('refuses to guess which agent a configured runtime key belongs to', async () => {
     process.env.AGENT_HQ_MCP_API_KEY = 'ahq_mcp_runtime_bootstrap_test';
+
+    await expect(ensureConfiguredRuntimeMcpApiKey()).rejects.toThrow('AGENT_HQ_MCP_API_KEY_AGENT_ID or AGENT_HQ_MCP_API_KEY_AGENT_SLUG');
+    expect(await getDb().get(`SELECT COUNT(*) AS count FROM mcp_api_keys`)).toEqual({ count: 0 });
+  });
+
+  it('materializes a configured runtime key against the named agent when the key is missing from the current DB', async () => {
+    process.env.AGENT_HQ_MCP_API_KEY = 'ahq_mcp_runtime_bootstrap_test';
+    process.env.AGENT_HQ_MCP_API_KEY_AGENT_SLUG = 'operator-client';
 
     const result = await ensureConfiguredRuntimeMcpApiKey();
     const identity = await resolveMcpApiIdentityForKey(getDb(), process.env.AGENT_HQ_MCP_API_KEY!, { updateLastUsed: false });
@@ -2955,20 +2958,21 @@ describe('ensureConfiguredRuntimeMcpApiKey', () => {
       agentId: identity.agentId,
       keyPrefix: 'ahq_mcp_runtime_',
     });
-    expect(identity.agentSlug).toBe('atlas');
+    expect(identity.agentSlug).toBe('operator-client');
     expect(identity.tenantId).toBe(1);
     expect(identity.globalAdminAccess).toBe(false);
   });
 
   it('materializes configured runtime keys as global only when explicitly requested', async () => {
     process.env.AGENT_HQ_MCP_API_KEY = 'ahq_mcp_runtime_global_bootstrap_test';
+    process.env.AGENT_HQ_MCP_API_KEY_AGENT_SLUG = 'operator-client';
     process.env.AGENT_HQ_MCP_API_KEY_GLOBAL_ADMIN = 'true';
 
     const result = await ensureConfiguredRuntimeMcpApiKey();
     const identity = await resolveMcpApiIdentityForKey(getDb(), process.env.AGENT_HQ_MCP_API_KEY!, { updateLastUsed: false });
 
     expect(result).toMatchObject({ status: 'created', agentId: identity.agentId });
-    expect(identity.agentSlug).toBe('atlas');
+    expect(identity.agentSlug).toBe('operator-client');
     expect(identity.tenantId).toBe(1);
     expect(identity.globalAdminAccess).toBe(true);
   });

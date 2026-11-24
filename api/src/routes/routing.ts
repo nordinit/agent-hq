@@ -393,7 +393,7 @@ router.delete('/transitions/:id', async (req: Request, res: Response) => {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // GET /graph?project_id=&workflow_type=&workflow_id=&task_type=
-// Single representation shared by the canvas UI and Atlas, so neither has to
+// Single representation shared by the canvas UI and MCP clients, so neither has to
 // re-derive the machine from the raw tables and reach a different answer.
 router.get('/graph', async (req: Request, res: Response) => {
   try {

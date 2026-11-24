@@ -4,7 +4,6 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { ArrowLeft, ArrowRight, CheckCircle2, Loader2, Sparkles, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { dispatchAtlasWidgetCommand } from '@/lib/atlasWidget';
 import {
   GETTING_STARTED_CHANGED_EVENT,
   GETTING_STARTED_PARTS,
@@ -65,7 +64,6 @@ export default function GettingStartedGuide() {
   const [cardHeight, setCardHeight] = useState(CARD_HEIGHT_ESTIMATE);
   const measureFrameRef = useRef<number | null>(null);
   const retryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const appliedEnterCommandRef = useRef<string | null>(null);
   const scrolledStepRef = useRef<string | null>(null);
   const cardRef = useRef<HTMLDivElement | null>(null);
 
@@ -87,18 +85,6 @@ export default function GettingStartedGuide() {
       router.push(step.route);
     }
   }, [isActive, pathname, router, step]);
-
-  useEffect(() => {
-    appliedEnterCommandRef.current = null;
-  }, [snapshot.partId, snapshot.stepIndex]);
-
-  useEffect(() => {
-    if (!isActive || !step?.enterCommand || pathname !== step.route) return;
-    const commandKey = `${snapshot.partId}:${snapshot.stepIndex}:${pathname}`;
-    if (appliedEnterCommandRef.current === commandKey) return;
-    appliedEnterCommandRef.current = commandKey;
-    dispatchAtlasWidgetCommand(step.enterCommand);
-  }, [isActive, pathname, snapshot.partId, snapshot.stepIndex, step]);
 
   useEffect(() => {
     if (!isChoosing) return;
@@ -269,8 +255,6 @@ export default function GettingStartedGuide() {
   const handleStartNextPart = () => {
     if (!nextPart) return;
     completeGettingStartedPart();
-    // The last step opens Atlas with a draft; close it so it does not cover the next part.
-    dispatchAtlasWidgetCommand({ type: 'close' });
     beginGettingStartedGuide(nextPart.id);
   };
 

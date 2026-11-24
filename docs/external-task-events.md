@@ -32,7 +32,7 @@ Use either:
 For the lease-manager integration, the authenticated MCP identity must be either:
 
 - the `dev_environment_lease_manager` service agent slug, or
-- an Atlas system agent
+- an identity whose key has the `admin` or `super_admin` role
 
 ## Event sources
 

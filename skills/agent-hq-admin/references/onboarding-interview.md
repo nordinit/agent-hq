@@ -1,4 +1,4 @@
-# Atlas Onboarding Interview
+# Agent HQ Onboarding Interview
 
 Use this reference to discover enough workflow structure to configure Agent HQ.
 
@@ -71,7 +71,7 @@ Ask these only when needed:
 - Does every implementation task need QA?
 - Does every QA pass require a release step?
 - Is production deployment part of this workflow?
-- Should Atlas create agents now, or only define the workflow?
+- Should agents be created now, or only the workflow defined?
 - Are there existing providers already configured?
 - Are there existing agents to reuse?
 - Should the workflow be reusable as a workflow type?

@@ -1,6 +1,6 @@
 # Workflow Definition Guide
 
-Workflow definitions are where Atlas turns a repeated operating process into reusable structure.
+Workflow definitions are where a repeated operating process becomes reusable structure.
 
 Use workflow definitions for:
 - allowed task types

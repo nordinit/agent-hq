@@ -1,6 +1,6 @@
 import { configureTestWorkflowStatuses, RELEASE_STATUSES_FOR_TESTS } from '../db/testWorkflowStatuses';
 import { setupTestDb, teardownTestDb } from '../db/testDb';
-import { assertAtlasDirectStatusGate, canonicalOutcomeRoute, evaluateTaskIntegrity, requireReleaseGate } from './taskRelease';
+import { assertOperatorDirectStatusGate, canonicalOutcomeRoute, evaluateTaskIntegrity, requireReleaseGate } from './taskRelease';
 import { type Db } from "../db/adapter/types";
 
 describe('taskRelease configurable outcome routing', () => {
@@ -40,7 +40,7 @@ describe('taskRelease configurable outcome routing', () => {
   });
 
   it('allows a direct status move when a configured custom outcome routes there', async () => {
-    await expect(assertAtlasDirectStatusGate(db, {
+    await expect(assertOperatorDirectStatusGate(db, {
       id: 42,
       title: 'Configurable outcome task',
       status: 'in_progress',
@@ -50,7 +50,7 @@ describe('taskRelease configurable outcome routing', () => {
   });
 
   it('still rejects unknown status keys even when direct overrides are allowed', async () => {
-    await expect(assertAtlasDirectStatusGate(db, {
+    await expect(assertOperatorDirectStatusGate(db, {
       id: 42,
       title: 'Configurable outcome task',
       status: 'in_progress',
@@ -60,7 +60,7 @@ describe('taskRelease configurable outcome routing', () => {
   });
 
   it('documents that direct status overrides are no longer constrained by the routing graph', async () => {
-    await expect(assertAtlasDirectStatusGate(db, {
+    await expect(assertOperatorDirectStatusGate(db, {
       id: 42,
       title: 'Configurable outcome task',
       status: 'in_progress',

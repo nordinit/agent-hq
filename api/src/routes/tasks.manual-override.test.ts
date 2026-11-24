@@ -136,7 +136,7 @@ describe('manual MCP/admin task moves', () => {
 
       expect(response.status).toBe(403);
       await expect(response.json()).resolves.toMatchObject({
-        error: expect.stringContaining('Only Atlas or a human user may change task status through the generic update endpoint'),
+        error: expect.stringContaining('Only the operator or a human user may change task status through the generic update endpoint'),
       });
     });
   });

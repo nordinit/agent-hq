@@ -27,7 +27,7 @@ Use this before telling the user Agent HQ is configured.
 - Every intentionally unassigned nonterminal status has a verified human, event, timer, or manual-resume path.
 - Review/QA statuses route to the correct QA/review agent.
 - Release statuses route to the correct release/devops agent when needed.
-- PM task types route to PM/Atlas when intended.
+- PM task types route to the PM agent when intended.
 - No route points to a disabled or wrong-project agent.
 - No expected route depends on legacy per-agent config fallback.
 
@@ -62,7 +62,7 @@ Use this before telling the user Agent HQ is configured.
 - Agents have appropriate provider/model/runtime.
 - Agents that work on code have a repo/workspace strategy.
 - Agents have only relevant skills/tools.
-- Atlas has admin/helper guidance available when it is expected to configure Agent HQ.
+- Any agent expected to configure Agent HQ has the `agent-hq-admin` skill.
 - Agent instructions define allowed outcomes, evidence, prohibited actions, and escalation conditions.
 
 ## Sample Task Verification

@@ -9,7 +9,7 @@
  * ELIGIBILITY IS A ROLE MARKER, NOT A LIST OF EVERY AGENT. Only agents provisioned as remote MCP
  * clients qualify. That restriction is load-bearing: the consent form posts back an agent id, and
  * without a server-side eligibility check an operator — or anyone who reached the form — could
- * name Atlas's id and mint a connector token with trusted-admin defaults. Selection is always
+ * name an admin-keyed agent's id and mint a connector token with trusted-admin defaults. Selection is always
  * validated against this set, never trusted from the form.
  */
 

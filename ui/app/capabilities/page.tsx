@@ -183,7 +183,8 @@ function SkillsSection() {
                         )}
                         <div className="flex items-center gap-2 mt-1">
                           <Badge variant={skill.source === 'workspace' ? 'workspace' : 'info'}>
-                            {skill.source}
+                            {/* 'atlas' is the stored value for skills managed in Agent HQ. */}
+                            {skill.source === 'atlas' ? 'managed' : skill.source}
                           </Badge>
                           {skill.files.length > 0 && (
                             <span className="text-xs text-slate-500">{skill.files.length} file{skill.files.length !== 1 ? 's' : ''}</span>

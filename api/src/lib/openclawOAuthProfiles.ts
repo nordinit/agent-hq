@@ -3,7 +3,6 @@ import path from 'path';
 import Database from 'better-sqlite3';
 import { getDb } from '../db/client';
 import { OPENCLAW_CONFIG_PATH } from '../config';
-import { ATLAS_AGENT_SLUG } from './atlasAgent';
 import { getActiveTenantId } from './tenantContext';
 
 export type OAuthProviderSlug = 'openai-codex';
@@ -222,8 +221,6 @@ export function upsertOAuthProfile(
 }
 
 async function addKnownAgentIds(agentIds: Set<string>): Promise<void> {
-  agentIds.add(ATLAS_AGENT_SLUG);
-
   try {
     const rows = await getDb().all(`
       SELECT DISTINCT openclaw_agent_id

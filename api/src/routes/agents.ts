@@ -9,7 +9,6 @@ import * as os from 'os';
 import { getDb } from '../db/client';
 import { generateClaudeMd, OPENCLAW_SKILLS_PATH } from '../services/dispatcher';
 import { OPENCLAW_CONFIG_PATH, buildAgentHqWorkspacePath } from '../config';
-import { ATLAS_SYSTEM_ROLE } from '../lib/atlasAgent';
 import {
   normalizeRepoConfig,
   resolveRepoConfig,
@@ -17,7 +16,6 @@ import {
 } from '../lib/repoConfig';
 import {
   buildCanonicalAgentMainSessionKey,
-  buildLegacyAgentMainSessionKey,
   normalizeAgentRoleLabel,
   parseAgentSessionKey,
   resolveRuntimeAgentSlug,
@@ -321,10 +319,6 @@ async function buildDefaultAgentSessionKey(params: {
   projectId?: number | null;
   systemRole?: string | null;
 }): Promise<string> {
-  if (params.systemRole === ATLAS_SYSTEM_ROLE) {
-    return buildLegacyAgentMainSessionKey('atlas');
-  }
-
   const projectName = await getProjectName(params.projectId ?? null);
   const db = getDb();
   let candidate = buildCanonicalAgentMainSessionKey({
@@ -716,10 +710,9 @@ router.get('/', async (req: Request, res: Response) => {
       const whereClause = [hasProjectsTable ? 'a.project_id = ?' : '1 = 0', visibleFilter, 'a.tenant_id = ?'].filter(Boolean).join(' AND ');
       agents = await db.all(`${baseQuery} WHERE ${whereClause} ORDER BY a.created_at ASC`, projectId, tenantId);
     } else {
-      // Agents of archived projects leave the all-projects list. Atlas stays: the chat surfaces
-      // find it in this list, and it is the operator's assistant rather than project content.
+      // Agents of archived projects leave the all-projects list.
       const archivedFilter = hasProjectsTable && req.query.include_archived !== 'true'
-        ? `(a.system_role = '${ATLAS_SYSTEM_ROLE}' OR ${activeProjectPredicate('a.project_id')})`
+        ? activeProjectPredicate('a.project_id')
         : '';
       const whereClause = [visibleFilter, archivedFilter, 'a.tenant_id = ?'].filter(Boolean).join(' AND ');
       agents = await db.all(`${baseQuery} WHERE ${whereClause} ORDER BY a.created_at ASC`, tenantId);
@@ -825,7 +818,8 @@ router.post('/provision-full', async (req: Request, res: Response) => {
       });
     }
 
-    const resolvedSystemRole = body.system_role === ATLAS_SYSTEM_ROLE ? ATLAS_SYSTEM_ROLE : null;
+    // system_role belongs to starter provisioning; the REST API never sets one.
+    const resolvedSystemRole = null;
     const resolvedRole = normalizeAgentRoleLabel(body.role ?? '', 'Agent');
     const runtimeSlug = body.openclaw_agent_id?.trim() || toSlug(body.name);
     const openclawAgentId = runtimeType === 'openclaw' ? runtimeSlug : null;
@@ -1566,7 +1560,8 @@ router.post('/', async (req: Request, res: Response) => {
       return res.status(400).json({ error: connectionValidationError });
     }
 
-    const resolvedSystemRole = system_role === ATLAS_SYSTEM_ROLE ? ATLAS_SYSTEM_ROLE : null;
+    // system_role belongs to starter provisioning; the REST API never sets one.
+    const resolvedSystemRole = null;
 
     // Optionally provision an OpenClaw native agent (only when runtime is openclaw)
     let openclawAgentId: string | null = null;
@@ -1880,9 +1875,10 @@ router.put('/:id', async (req: Request, res: Response) => {
       ? JSON.stringify(Array.isArray(sort_rules) ? sort_rules : [])
       : (agent.sort_rules as string | null) ?? '[]';
 
+    // system_role belongs to starter provisioning: the REST API can keep it or clear it, never set it.
     const resolvedSystemRole = system_role === undefined
       ? (agent.system_role as string | null) ?? null
-      : (system_role === ATLAS_SYSTEM_ROLE ? ATLAS_SYSTEM_ROLE : null);
+      : null;
     const resolvedSessionKey = session_key !== undefined
       ? session_key
       : currentSessionKey;

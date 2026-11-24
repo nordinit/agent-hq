@@ -39,8 +39,8 @@ async function seedIfEmpty(
 }
 
 // ── Agents ────────────────────────────────────────────────────────────────────
-// A small neutral sample: the built-in Atlas plus three claude-code agents and one openclaw
-// agent, enough to exercise both runtimes. Replace them with your own agents in the UI.
+// A small neutral sample: three claude-code agents and one openclaw agent, enough to exercise
+// both runtimes. Replace them with your own agents in the UI.
 const frontendRuntimeConfig = JSON.stringify({
   workingDirectory: `${OPENCLAW_DIR}/workspace-sample-frontend`,
   model: 'claude-sonnet-4-6',
@@ -60,7 +60,6 @@ const backendRuntimeConfig = JSON.stringify({
 });
 
 const devAgents = [
-  { name: 'Atlas',             role: 'Built-in assistant — dev session',       session_key: 'agent:atlas:main',            workspace_path: `${OPENCLAW_DIR}/workspace-atlas`,            openclaw_agent_id: 'atlas',     runtime_type: 'openclaw',    runtime_config: null, system_role: 'atlas' },
   { name: 'Sample Backend',    role: 'Backend Engineer — dev session',         session_key: 'agent:sample-backend:main',   workspace_path: `${OPENCLAW_DIR}/workspace-sample-backend`,   openclaw_agent_id: null,        runtime_type: 'claude-code', runtime_config: backendRuntimeConfig },
   { name: 'Sample Tools',      role: 'Developer Tools Engineer — dev session', session_key: 'agent:sample-tools:main',     workspace_path: `${OPENCLAW_DIR}/workspace-sample-tools`,     openclaw_agent_id: null,        runtime_type: 'claude-code', runtime_config: backendRuntimeConfig },
   { name: 'Sample Frontend',   role: 'Frontend Engineer — dev session',        session_key: 'agent:sample-frontend:main',  workspace_path: `${OPENCLAW_DIR}/workspace-sample-frontend`,  openclaw_agent_id: null,        runtime_type: 'claude-code', runtime_config: frontendRuntimeConfig },
@@ -68,8 +67,8 @@ const devAgents = [
 ];
 
 const INSERT_AGENT_SQL = `
-  INSERT INTO agents (tenant_id, name, role, session_key, workspace_path, openclaw_agent_id, runtime_type, runtime_config, status, system_role)
-  SELECT ?, ?, ?, ?, ?, ?, ?, ?, 'idle', ?
+  INSERT INTO agents (tenant_id, name, role, session_key, workspace_path, openclaw_agent_id, runtime_type, runtime_config, status)
+  SELECT ?, ?, ?, ?, ?, ?, ?, ?, 'idle'
   WHERE NOT EXISTS (SELECT 1 FROM agents WHERE session_key = ?)
 `;
 
@@ -105,7 +104,6 @@ async function main(): Promise<void> {
       agent.openclaw_agent_id,
       agent.runtime_type,
       agent.runtime_config,
-      agent.system_role ?? null,
       agent.session_key,
     );
     await db.run(
@@ -125,7 +123,7 @@ async function main(): Promise<void> {
     async () => {
       // We need a project id — get the sample project
       const sampleProject = await db.get<{ id: number }>(`SELECT id FROM projects WHERE tenant_id = ? AND name = 'Sample Project' LIMIT 1`, defaultTenantId);
-      const atlasProject  = await db.get<{ id: number }>(`SELECT id FROM projects WHERE tenant_id = ? AND name = 'Agent HQ' LIMIT 1`, defaultTenantId);
+      const agentHqProject  = await db.get<{ id: number }>(`SELECT id FROM projects WHERE tenant_id = ? AND name = 'Agent HQ' LIMIT 1`, defaultTenantId);
 
       if (sampleProject) {
         await db.run(`
@@ -133,11 +131,11 @@ async function main(): Promise<void> {
             (?, ?, 'Dev Workflow 1', 'Validate dev environment isolation and seed data', 'dev', 'active', 'time', '2w')
         `, defaultTenantId, sampleProject.id);
       }
-      if (atlasProject) {
+      if (agentHqProject) {
         await db.run(`
           INSERT INTO workflows (tenant_id, project_id, name, goal, workflow_type, status, length_kind, length_value) VALUES
             (?, ?, 'Agent HQ Enhancements (dev)', 'Test Agent HQ feature work in isolation', 'dev', 'active', 'time', '2w')
-        `, defaultTenantId, atlasProject.id);
+        `, defaultTenantId, agentHqProject.id);
       }
     }
   );

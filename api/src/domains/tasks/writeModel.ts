@@ -1,7 +1,8 @@
 import fs from 'fs';
 import { DISPATCH_RETRY_PAUSE_PREFIX } from '../../lib/dispatchRetryPause';
 import { cancelTaskExecution, cleanupTaskExecutionLinkage, cleanupTerminalTaskWorkspaces, taskHasConfiguredTerminalStatus } from '../../lib/taskLifecycle';
-import { assertAtlasDirectStatusGate, assertTaskStatusUpdateAllowed } from '../../lib/taskRelease';
+import { assertOperatorDirectStatusGate, assertTaskStatusUpdateAllowed } from '../../lib/taskRelease';
+import { isOperatorActor } from '../../lib/operatorActor';
 import { notifyTaskStatusChange } from '../../lib/taskNotifications';
 import { createRelationshipFromBlockedBy, createTaskRelationship, deleteTaskRelationshipByTuple } from './relationships';
 import { assertTaskStatusDefinedForWorkflow } from '../../lib/taskStatusValidation';
@@ -485,13 +486,13 @@ export async function updateTaskRecord(
     actor.authorityBy,
   );
 
-  if (status !== undefined && status !== existing.status && actor.authorityBy === 'Atlas' && !actor.isManualOverride) {
+  if (status !== undefined && status !== existing.status && isOperatorActor(actor.authorityBy) && !actor.isManualOverride) {
     const existingFieldValues = {
       ...existing,
       ...parseCustomFields(existing.custom_fields_json),
       ...normalizedCustomFields,
     } as Record<string, unknown>;
-    await assertAtlasDirectStatusGate(db, {
+    await assertOperatorDirectStatusGate(db, {
             id: taskId,
             status: String(existing.status),
             workflow_id: (updated.workflow_id as number | null | undefined) ?? null,

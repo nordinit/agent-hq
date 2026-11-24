@@ -276,8 +276,8 @@ export default function OnboardingWizard({ onClose }: Props) {
   const selectedOwnerRoles = useMemo(() => uniqueOwnerRoles(selectedTemplates), [selectedTemplates]);
 
   // ── Manual setup: skip the guided wizard entirely ───────────────────────────
-  // Creates an unprovisioned Atlas agent server-side and marks onboarding
-  // complete, dropping the user into an empty instance to configure themselves.
+  // Marks onboarding complete server-side, dropping the user into an empty
+  // instance to configure themselves.
   async function handleManualSetup() {
     setManualSetupLoading(true);
     setPersonalizeError(null);
@@ -296,7 +296,7 @@ export default function OnboardingWizard({ onClose }: Props) {
   // ── Step 1: save name to localStorage + create project via API ──────────────
   async function handlePersonalizeNext() {
     if (!userName.trim()) {
-      setPersonalizeError('Please tell me your name.');
+      setPersonalizeError('Please enter your name.');
       return;
     }
     if (!projectName.trim()) {
@@ -587,10 +587,10 @@ export default function OnboardingWizard({ onClose }: Props) {
             <div className="flex items-center justify-between gap-3">
               <div>
                 <h2 className="text-xl font-bold text-white leading-snug">
-                  Hey — I&apos;m Atlas.
+                  Welcome to Agent HQ.
                 </h2>
                 <p className="mt-1 text-sm leading-relaxed text-slate-400">
-                  Set up your workspace and I&apos;ll handle the rest.
+                  Set up your workspace and Agent HQ will handle the rest.
                 </p>
               </div>
               <button
@@ -610,8 +610,8 @@ export default function OnboardingWizard({ onClose }: Props) {
               </div>
               <div>
                 <p className="text-sm leading-relaxed text-slate-400">
-                  I&apos;m your AI-powered headquarters for managing agents, tasks, and projects.
-                  I coordinate the team so nothing falls through the cracks.
+                  Agent HQ is the headquarters for managing your agents, tasks, and projects.
+                  It coordinates the team so nothing falls through the cracks.
                 </p>
               </div>
             </div>
@@ -637,7 +637,7 @@ export default function OnboardingWizard({ onClose }: Props) {
               <div>
                 <label className="flex items-center gap-1.5 text-sm text-slate-300 mb-1.5">
                   <User className="w-3.5 h-3.5 text-slate-500" />
-                  What should I call you?{' '}
+                  What should we call you?{' '}
                   <span className="text-red-400 ml-0.5">*</span>
                 </label>
                 <input
@@ -655,7 +655,7 @@ export default function OnboardingWizard({ onClose }: Props) {
               <div>
                 <label className="flex items-center gap-1.5 text-sm text-slate-300 mb-1.5">
                   <FolderOpen className="w-3.5 h-3.5 text-slate-500" />
-                  What are we building together?{' '}
+                  What are you building?{' '}
                   <span className="text-red-400 ml-0.5">*</span>
                 </label>
                 <input
@@ -706,11 +706,11 @@ export default function OnboardingWizard({ onClose }: Props) {
           <div className="space-y-6">
             <div>
               <h2 className="text-xl font-bold text-white mb-1">
-                Tell me about{' '}
+                Set up{' '}
                 <span className="text-amber-400">{projectName || 'your project'}</span>
               </h2>
               <p className="text-slate-400 text-sm leading-relaxed">
-                Choose one or more starter templates. Atlas will generate the project, workflows, starter agents, routing, and model defaults from the shared setup catalog.
+                Choose one or more starter templates. Agent HQ will generate the project, workflows, starter agents, routing, and model defaults from the shared setup catalog.
               </p>
             </div>
 
@@ -855,7 +855,7 @@ export default function OnboardingWizard({ onClose }: Props) {
                   <div>
                     <p className="text-sm font-semibold text-white">Gateway connection</p>
                     <p className="text-xs text-slate-500 mt-1">
-                      Agent HQ uses this WebSocket URL for Atlas and agent chat once the gateway is reachable.
+                      Agent HQ uses this WebSocket URL for agent chat once the gateway is reachable.
                     </p>
                   </div>
                   <span className={`rounded-full border px-2.5 py-1 text-xs font-medium ${gatewayTone.className}`}>
