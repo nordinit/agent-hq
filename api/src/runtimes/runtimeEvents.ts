@@ -1,3 +1,5 @@
+import type { RuntimeTokenUsage } from './runTokenUsage';
+
 /**
  * runtimeEvents.ts — Shared runtime completion event contract.
  *
@@ -51,6 +53,11 @@ export interface RuntimeEndEvent {
   error?: string;
   reason?: RuntimeEndReason;
   metadata?: Record<string, unknown>;
+  tokenUsage?: RuntimeTokenUsage;
+}
+
+export interface NativeRuntimeEndEvent extends RuntimeEndEvent {
+  tokenUsage: RuntimeTokenUsage;
 }
 
 export interface RuntimeEventCallbacks {

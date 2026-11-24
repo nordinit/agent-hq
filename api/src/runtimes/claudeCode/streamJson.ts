@@ -44,7 +44,7 @@ export interface ClaudeMcpServerStatus {
 export interface ClaudeStreamUsage {
   inputTokens: number;
   outputTokens: number;
-  cachedInputTokens: number;
+  cachedInputTokens: number | null;
 }
 
 export interface ClaudeRateLimitInfo {
@@ -72,6 +72,10 @@ function asNumber(value: unknown, fallback = 0): number {
 
 function asOptionalNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function asTokenCount(value: unknown): number | null {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;
 }
 
 function asOptionalString(value: unknown): string | null {
@@ -188,6 +192,7 @@ export class ClaudeStreamAccumulator {
     if (type === 'result') {
       // Last result wins — see header note 2.
       this.lastResultValue = event;
+      this.partialUsageAtLastResult = this.partialUsageValue;
       this.resultCountValue += 1;
       this.turnsValue += asNumber(event.num_turns, 0);
     }
@@ -217,9 +222,53 @@ export class ClaudeStreamAccumulator {
     }
   }
 
+  private readonly messageUsage = new Map<string, ClaudeStreamUsage>();
+  private partialUsageValue: ClaudeStreamUsage | null = null;
+  private partialUsageAtLastResult: ClaudeStreamUsage | null = null;
+  private cachedInputSum = 0;
+  private cachedInputMessageCount = 0;
+
+  get finalUsage(): ClaudeStreamUsage | null {
+    return this.partialUsageAtLastResult === this.partialUsageValue ? this.usage : null;
+  }
+
+  get partialUsage(): ClaudeStreamUsage | null {
+    return this.partialUsageValue;
+  }
+
   private observeAssistant(event: ClaudeStreamEvent): void {
     const message = isRecord(event.message) ? event.message : null;
-    if (!message || !Array.isArray(message.content)) return;
+    if (!message) return;
+
+    const id = asOptionalString(message.id);
+    const usage = isRecord(message.usage) ? message.usage : null;
+    if (id && usage) {
+      const input = asTokenCount(usage.input_tokens);
+      const output = asTokenCount(usage.output_tokens);
+      if (input !== null && output !== null) {
+        const next = {
+          inputTokens: input + (asTokenCount(usage.cache_creation_input_tokens) ?? 0),
+          outputTokens: output,
+          cachedInputTokens: asTokenCount(usage.cache_read_input_tokens),
+        };
+        const previous = this.messageUsage.get(id);
+        const total = this.partialUsageValue;
+        if (previous?.inputTokens !== next.inputTokens
+          || previous.outputTokens !== next.outputTokens
+          || previous.cachedInputTokens !== next.cachedInputTokens) {
+          this.cachedInputSum += (next.cachedInputTokens ?? 0) - (previous?.cachedInputTokens ?? 0);
+          this.cachedInputMessageCount += Number(next.cachedInputTokens !== null) - Number(previous?.cachedInputTokens != null);
+          this.messageUsage.set(id, next);
+          this.partialUsageValue = {
+            inputTokens: (total?.inputTokens ?? 0) - (previous?.inputTokens ?? 0) + next.inputTokens,
+            outputTokens: (total?.outputTokens ?? 0) - (previous?.outputTokens ?? 0) + next.outputTokens,
+            cachedInputTokens: this.cachedInputMessageCount === this.messageUsage.size ? this.cachedInputSum : null,
+          };
+        }
+      }
+    }
+
+    if (!Array.isArray(message.content)) return;
 
     for (const block of message.content) {
       if (!isRecord(block)) continue;
@@ -350,15 +399,19 @@ export class ClaudeStreamAccumulator {
 
     let inputTokens = 0;
     let outputTokens = 0;
-    let cachedInputTokens = 0;
+    let cachedInputTokens: number | null = 0;
     let sawEntry = false;
 
     for (const entry of Object.values(ledger)) {
       if (!isRecord(entry)) continue;
+      const input = asTokenCount(entry.inputTokens);
+      const output = asTokenCount(entry.outputTokens);
+      if (input === null || output === null) return null;
       sawEntry = true;
-      inputTokens += asNumber(entry.inputTokens) + asNumber(entry.cacheCreationInputTokens);
-      outputTokens += asNumber(entry.outputTokens);
-      cachedInputTokens += asNumber(entry.cacheReadInputTokens);
+      inputTokens += input + (asTokenCount(entry.cacheCreationInputTokens) ?? 0);
+      outputTokens += output;
+      const cached = asTokenCount(entry.cacheReadInputTokens);
+      cachedInputTokens = cached === null || cachedInputTokens === null ? null : cachedInputTokens + cached;
     }
 
     return sawEntry ? { inputTokens, outputTokens, cachedInputTokens } : null;

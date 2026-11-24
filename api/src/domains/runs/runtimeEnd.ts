@@ -5,6 +5,7 @@ import { markTaskNeedsAttentionForMissingSemanticHandoff, taskRequiresSemanticOu
 import { recordRunCheckIn } from './observability';
 import { applyRuntimeFailedOutcome } from './runtimeFailureEvent';
 import { normalizeTokenUsage } from './tokenUsage';
+import type { RuntimeTokenUsage } from '../../runtimes/runTokenUsage';
 import { toCanonicalTimestampOrNow } from '../../lib/timestamps';
 import { tableHasColumn } from '../../lib/durableRunIdentity';
 import { type Db } from "../../db/adapter/types";
@@ -19,6 +20,7 @@ export interface TerminalRuntimeEndEvent {
   reason?: string;
   error?: string;
   metadata?: Record<string, unknown>;
+  tokenUsage?: RuntimeTokenUsage;
 }
 
 export interface RuntimeEndEvidenceFields {
@@ -124,7 +126,11 @@ export async function applyRuntimeEndToJobInstance(
   const runtimeEndError = params.event.error ?? (params.event.success ? null : (params.event.reason ?? 'error'));
   const runtimeEndSource = params.runtimeEndSource ?? params.event.source ?? 'instance_complete';
   const endedAt = toCanonicalTimestampOrNow(params.event.endedAt);
-  const tokenUsage = normalizeTokenUsage(params.event.metadata, params.event);
+  // Native adapters persist their own typed snapshots independently of this lifecycle claim.
+  // Recursive legacy extraction can mistake a per-model ledger for cumulative usage.
+  const tokenUsage = params.event.tokenUsage
+    ? { input: null, output: null, total: null }
+    : normalizeTokenUsage(params.event.metadata, params.event);
   const nextStatus = derivePostRuntimeInstanceStatus(
     existing.status,
     endedAt,

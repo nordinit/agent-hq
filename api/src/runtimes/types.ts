@@ -186,6 +186,10 @@ export interface RuntimeAbortResult {
 }
 
 export interface AgentRuntime {
+  /** Native runtimes must persist a typed usage report for every observed termination.
+   * External runtimes receive usage through their provider callbacks. */
+  readonly tokenUsageReporting: 'native' | 'external' | 'unavailable';
+
   /**
    * prepareAuthProfiles — materialize provider credentials into the files the
    * concrete runtime reads before first dispatch.

@@ -191,6 +191,7 @@ async function waitForOpenClawMcpReadiness(params: {
 // ── OpenClawRuntime ───────────────────────────────────────────────────────────
 
 export class OpenClawRuntime implements AgentRuntime {
+  readonly tokenUsageReporting = 'external' as const;
   async prepareAuthProfiles(params: PrepareAuthProfilesParams): Promise<RuntimeAuthProfileSyncResult> {
     const provider = params.preferredProvider ?? null;
     if (provider !== 'openai-codex') {

@@ -960,7 +960,8 @@ export async function listTaskAttachments(db: ReturnType<typeof getDb>, taskId: 
 const LEAN_TASK_INSTANCE_COLUMNS = `
   ji.id, ji.agent_id, ji.task_id, ji.status, ji.session_key, ji.created_at, ji.dispatched_at,
   ji.started_at, ji.completed_at, ji.error, ji.run_stage, ji.last_heartbeat_at, ji.task_outcome,
-  ji.token_input, ji.token_output, ji.token_total, ji.effective_model, ji.effective_thinking_level,
+  ji.token_input, ji.token_output, ji.token_total, ji.token_usage_status, ji.token_usage_reason, ji.token_cached_input,
+  ji.effective_model, ji.effective_thinking_level,
   ji.effective_fast_mode, ji.run_id, ji.durable_run_id, ji.failure_stage, ji.worktree_path,
   ji.runtime_ended_at, ji.runtime_completed_at, ji.runtime_end_success, ji.runtime_end_error,
   ji.runtime_end_source, ji.lifecycle_handoff_status, ji.semantic_outcome_missing,

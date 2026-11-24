@@ -43,6 +43,27 @@ describe('LocalProcessSupervisor', () => {
     expect(state.child.kill).not.toHaveBeenCalled();
   });
 
+  it('allows a native run to exit without sending a stop signal', async () => {
+    const signalProcess = jest.fn();
+    const supervisor = new LocalProcessSupervisor({ signalProcess });
+    const state = mockRun();
+    supervisor.register({ runId: 'codex:92', runtimeType: 'codex', instanceId: 92, state });
+    const drained = supervisor.waitForExit('codex:92', 'codex', 100);
+    state.child.emit('close', 0, null);
+    await expect(drained).resolves.toBe(true);
+    expect(signalProcess).not.toHaveBeenCalled();
+  });
+
+  it('ends the wait at the deadline so the caller can stop the run', async () => {
+    const supervisor = new LocalProcessSupervisor();
+    const state = mockRun();
+    supervisor.register({ runId: 'codex:92', runtimeType: 'codex', instanceId: 92, state });
+    const drained = supervisor.waitForExit('codex:92', 'codex', 100);
+    jest.advanceTimersByTime(100);
+    await expect(drained).resolves.toBe(false);
+    expect(state.child.kill).not.toHaveBeenCalled();
+  });
+
   it('escalates the complete process group once after the grace period', () => {
     const signalProcess = jest.fn();
     const supervisor = new LocalProcessSupervisor({ platform: 'linux', signalProcess });

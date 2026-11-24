@@ -104,6 +104,26 @@ export class LocalProcessSupervisor {
     return Boolean(entry && !entry.state.exited && (!runtimeType || entry.runtimeType === runtimeType));
   }
 
+  /** Wait for the currently supervised process to close without signalling it. */
+  waitForExit(runId: string, runtimeType: string, timeoutMs: number): Promise<boolean> {
+    const entry = this.runs.get(runId);
+    if (!entry || entry.runtimeType !== runtimeType || timeoutMs <= 0) return Promise.resolve(false);
+    if (entry.state.exited) return Promise.resolve(true);
+    const child = entry.state.child;
+    return new Promise(resolve => {
+      const onClose = () => {
+        clearTimeout(timer);
+        resolve(true);
+      };
+      const timer = setTimeout(() => {
+        child.removeListener('close', onClose);
+        resolve(false);
+      }, timeoutMs);
+      timer.unref?.();
+      child.once('close', onClose);
+    });
+  }
+
   stop(runId: string, runtimeType?: string): LocalProcessSignalResult {
     return this.beginTermination(runId, true, runtimeType);
   }

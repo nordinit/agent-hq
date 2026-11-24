@@ -190,6 +190,7 @@ function hermesOpenAiCodexAuthReady(filePath: string): boolean {
 }
 
 export class HermesRuntime implements AgentRuntime {
+  readonly tokenUsageReporting = 'unavailable' as const;
   private readonly baseConfig: HermesRuntimeConfig;
 
   constructor(config: HermesRuntimeConfig = {}) {

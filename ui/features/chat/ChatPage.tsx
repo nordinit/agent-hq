@@ -207,7 +207,7 @@ function ChatPageInner() {
     ?? agentInstances.find(i => i.id === selectedInstanceId)
     ?? null;
   const runUsage = selectedInstance && (
-    selectedInstance.token_total != null || selectedInstance.token_input != null || selectedInstance.token_output != null
+    selectedInstance.token_usage_status != null || selectedInstance.token_total != null || selectedInstance.token_input != null || selectedInstance.token_output != null
   ) ? selectedInstance : selectedInstanceId !== null && canonicalSession?.instance_id === selectedInstanceId ? canonicalSession : null;
   const activeSessionKey: string | null = overrideSessionKey
     ?? resolvedSessionKey
@@ -827,6 +827,9 @@ function ChatPageInner() {
                 token_input: inst.token_input,
                 token_output: inst.token_output,
                 token_total: inst.token_total,
+                token_usage_status: inst.token_usage_status,
+                token_usage_reason: inst.token_usage_reason,
+                token_cached_input: inst.token_cached_input,
               } : i)
             );
           }

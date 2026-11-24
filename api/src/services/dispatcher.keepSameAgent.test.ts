@@ -68,6 +68,7 @@ const mockedResolveRuntime = resolveRuntime as jest.MockedFunction<typeof resolv
 
 function mockRuntime(dispatch: jest.Mock): AgentRuntime {
   return {
+    tokenUsageReporting: 'unavailable',
     prepareAuthProfiles: jest.fn().mockResolvedValue({
       ok: true, status: 'skipped', providersSynced: [], runtimeAuthProvidersSynced: [], openclawAuthProvidersSynced: [],
     }),

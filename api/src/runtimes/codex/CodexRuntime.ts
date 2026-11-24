@@ -1,3 +1,5 @@
+import type { NativeRuntimeEndEvent } from '../runtimeEvents';
+import { createRunTokenUsageReporter, runtimeTokenUsage, type RuntimeTokenUsage } from '../runTokenUsage';
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
 import fs from 'fs';
 import { hostname } from 'os';
@@ -115,6 +117,7 @@ function emptyMcp(
 }
 
 export class CodexRuntime implements AgentRuntime {
+  readonly tokenUsageReporting = 'native' as const;
   constructor(private readonly baseConfig: CodexRuntimeConfig = {}) {}
 
   async prepareAuthProfiles(
@@ -370,6 +373,9 @@ export class CodexRuntime implements AgentRuntime {
       timedOut: false,
     };
     const accumulator = new CodexStreamAccumulator();
+    const reportUsage = createRunTokenUsageReporter(db, instanceId, error =>
+      console.warn(`[CodexRuntime] failed to persist usage for #${instanceId}:`, safeRuntimeError(error)),
+    );
     const decoder = new CodexJsonlDecoder();
     let stderr = '';
     let persistedThreadId = config.resumeSessionId;
@@ -396,6 +402,9 @@ export class CodexRuntime implements AgentRuntime {
     child.stdout.on('data', (chunk: string) => {
       for (const event of decoder.push(chunk)) {
         accumulator.observe(event);
+        if (event.type === 'turn.completed' && accumulator.usage) {
+          void reportUsage(runtimeTokenUsage(accumulator.usage));
+        }
         transcript?.enqueue(decodeCodexJsonEvent(event));
         const threadId = accumulator.threadId;
         if (
@@ -565,6 +574,7 @@ export class CodexRuntime implements AgentRuntime {
       state,
       exited,
       accumulator,
+      reportUsage,
       decoder,
       transcript,
       mcp,
@@ -644,6 +654,7 @@ export class CodexRuntime implements AgentRuntime {
     state: ActiveCodexRun;
     exited: Promise<ProcessExitResult>;
     accumulator: CodexStreamAccumulator;
+    reportUsage: (usage: RuntimeTokenUsage) => Promise<void>;
     decoder: CodexJsonlDecoder;
     transcript: RuntimeTranscriptWriter | null;
     mcp: CodexMcpMaterialization;
@@ -657,7 +668,7 @@ export class CodexRuntime implements AgentRuntime {
   }): Promise<void> {
     const { params, runId, db, state, accumulator, decoder, transcript, mcp } = args;
     const instanceId = params.instanceId ?? null;
-    let event: RuntimeEndEvent | null = null;
+    let event: NativeRuntimeEndEvent | null = null;
     try {
       const result = await args.exited;
       state.exited = true;
@@ -699,10 +710,10 @@ export class CodexRuntime implements AgentRuntime {
       if ((!transcriptResult || transcriptResult.written <= 1) && accumulator.finalText) {
         await this.persistAssistantMessage(db, instanceId, accumulator.finalText);
       }
-      await this.persistTokenUsage(db, instanceId, accumulator);
 
       const success = classification.family === 'none' && !state.aborted;
       event = {
+        tokenUsage: runtimeTokenUsage(accumulator.usage),
         type: 'runEnded',
         source: 'codex',
         sessionKey: params.sessionKey,
@@ -739,6 +750,7 @@ export class CodexRuntime implements AgentRuntime {
         event = null;
       } else {
         event = {
+          tokenUsage: runtimeTokenUsage(accumulator.usage),
           type: 'runEnded',
           source: 'codex',
           sessionKey: params.sessionKey,
@@ -753,9 +765,10 @@ export class CodexRuntime implements AgentRuntime {
       state.exited = true;
       localProcessSupervisor.unregister(runId, state.child);
       if (args.timeoutTimer) clearTimeout(args.timeoutTimer);
+      if (event) await args.reportUsage(event.tokenUsage);
       if (instanceId != null && args.tenantId != null && event) {
         try {
-          await this.handleRuntimeEnd(db, instanceId, args.tenantId, event, accumulator);
+          await this.handleRuntimeEnd(db, instanceId, args.tenantId, event);
         } catch (error) {
           // Terminal delivery is deliberately best-effort at this boundary. A
           // durable terminal execution is repaired into job_instances by the
@@ -781,8 +794,7 @@ export class CodexRuntime implements AgentRuntime {
     db: Db | null,
     instanceId: number,
     tenantId: number,
-    event: RuntimeEndEvent,
-    accumulator: CodexStreamAccumulator,
+    event: NativeRuntimeEndEvent,
   ): Promise<void> {
     if (!db) return;
     try {
@@ -792,7 +804,7 @@ export class CodexRuntime implements AgentRuntime {
         state: event.reason === 'aborted' ? 'cancelled' : event.success ? 'succeeded' : 'failed',
         reason: event.reason ?? (event.success ? 'completed' : 'error'),
         error: event.error ?? null,
-        metadata: event.metadata ?? {},
+        metadata: { ...event.metadata, token_usage: event.tokenUsage },
         endedAt: event.endedAt,
       });
     } catch (executionStateError) {
@@ -801,21 +813,10 @@ export class CodexRuntime implements AgentRuntime {
         safeRuntimeError(executionStateError),
       );
     }
-    const usage = accumulator.usage;
     try {
       await applyRuntimeEndToJobInstance(db, {
         instanceId,
-        event: usage
-          ? {
-              ...event,
-              metadata: {
-                ...(event.metadata ?? {}),
-                token_input: usage.inputTokens,
-                token_output: usage.outputTokens,
-                token_total: usage.inputTokens + usage.outputTokens,
-              },
-            }
-          : event,
+        event,
         runtimeName: 'Codex',
         runtimeEndSource: event.source,
       });
@@ -882,26 +883,6 @@ export class CodexRuntime implements AgentRuntime {
       );
     } catch (error) {
       console.warn(`[CodexRuntime] failed to persist thread id for #${instanceId}:`, safeRuntimeError(error));
-    }
-  }
-
-  private async persistTokenUsage(
-    db: Db | null,
-    instanceId: number | null,
-    accumulator: CodexStreamAccumulator,
-  ): Promise<void> {
-    const usage = accumulator.usage;
-    if (!db || instanceId == null || !usage) return;
-    try {
-      await db.run(
-        'UPDATE job_instances SET token_input = ?, token_output = ?, token_total = ? WHERE id = ?',
-        usage.inputTokens,
-        usage.outputTokens,
-        usage.inputTokens + usage.outputTokens,
-        instanceId,
-      );
-    } catch (error) {
-      console.warn(`[CodexRuntime] failed to persist token usage for #${instanceId}:`, safeRuntimeError(error));
     }
   }
 

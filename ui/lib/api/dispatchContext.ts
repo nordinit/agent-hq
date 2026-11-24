@@ -1,4 +1,5 @@
 import { apiFetch } from './http';
+import type { JobInstance } from './types';
 
 /**
  * The dispatch context surface: what Agent HQ handed an agent, segment by segment.
@@ -59,7 +60,9 @@ export interface ContextPrompt {
   redacted: boolean;
 }
 
-export interface ContextRunHeader {
+export interface ContextRunHeader extends Pick<JobInstance,
+  'token_input' | 'token_output' | 'token_total' | 'token_usage_status' | 'token_usage_reason' | 'token_cached_input'
+> {
   instanceId: number;
   durableRunId: string | null;
   taskId: number | null;
@@ -70,9 +73,6 @@ export interface ContextRunHeader {
   status: string | null;
   dispatchedAt: string | null;
   completedAt: string | null;
-  token_input?: number | null;
-  token_output?: number | null;
-  token_total?: number | null;
 }
 
 export interface ContextBundleSummary {

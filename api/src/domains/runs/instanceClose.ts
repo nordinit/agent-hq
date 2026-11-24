@@ -1,9 +1,11 @@
 import { abortInstanceExecutionTransport } from './stopInstanceExecution';
 import { recordRunCheckIn } from './observability';
 import { isTerminalInstanceOutcome } from '../../lib/outcomeCatalog';
-import { scheduleEndedActiveInstanceLinkageCleanup } from '../../lib/taskLifecycle';
+import { ACTIVE_INSTANCE_END_GRACE_MS, scheduleEndedActiveInstanceLinkageCleanup } from '../../lib/taskLifecycle';
 import { insertRuntimeLog } from '../../lib/runtimeTenantScope';
 import { isLiveInstanceStatus, isTerminalInstanceStatus } from './executionState';
+import { localProcessSupervisor } from '../../runtimes/localProcessSupervisor';
+import { readLegacyRuntimeRunId, readRuntimeAbortTarget } from '../../runtimes/runtimeAbortTarget';
 import { afterCommit, type Db } from "../../db/adapter/types";
 
 /**
@@ -287,10 +289,21 @@ export async function closeInstance(opts: CloseInstanceOptions): Promise<CloseIn
   if (Number.isInteger(closeTenantId) && closeTenantId > 0) {
     afterCommit(db, poolDb => {
       setImmediate(() => {
-        void abortInstanceExecutionTransport(poolDb, instance, {
-          instanceId, tenantId: closeTenantId, reason: closeReason,
-        }).then(attempt => {
-          if (!attempt.result?.ok) {
+        const stop = async () => {
+          const target = readRuntimeAbortTarget(instance.runtime_abort_target);
+          const runtimeType = target?.runtimeType ?? instance.runtime_type;
+          if (runtimeType === 'claude-code' || runtimeType === 'codex') {
+            const runId = target?.runId || readLegacyRuntimeRunId(instance) || `${runtimeType}:${instanceId}`;
+            // Give the detached runtime time to emit its final usage after the outcome callback returns.
+            const drainMs = Math.min(5_000, Math.max(0, ACTIVE_INSTANCE_END_GRACE_MS - 1_000));
+            if (await localProcessSupervisor.waitForExit(runId, runtimeType, drainMs)) return null;
+          }
+          return abortInstanceExecutionTransport(poolDb, instance, {
+            instanceId, tenantId: closeTenantId, reason: closeReason,
+          });
+        };
+        void stop().then(attempt => {
+          if (attempt && !attempt.result?.ok) {
             console.warn(`[instanceClose] Runtime abort unconfirmed for instance ${instanceId}: ${attempt.result?.error ?? 'unknown'}`);
           }
         }).catch((err: unknown) => {

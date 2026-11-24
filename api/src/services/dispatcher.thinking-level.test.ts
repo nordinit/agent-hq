@@ -82,6 +82,7 @@ const mockedTaskNotifications = jest.requireMock('../lib/taskNotifications') as 
 
 function mockRuntime(dispatch: jest.Mock): AgentRuntime {
   return {
+    tokenUsageReporting: 'unavailable',
     prepareAuthProfiles: jest.fn().mockResolvedValue({
       ok: true,
       status: 'skipped',

@@ -35,6 +35,9 @@ export interface InstanceContextRunHeader {
   token_input: number | null;
   token_output: number | null;
   token_total: number | null;
+  token_usage_status: string | null;
+  token_usage_reason: string | null;
+  token_cached_input: number | null;
 }
 
 export interface InstanceContextView {
@@ -60,6 +63,7 @@ async function loadRunHeader(
     SELECT
       ji.id, ji.agent_id, ji.task_id, ji.status, ji.dispatched_at, ji.completed_at,
       ji.durable_run_id, ji.token_input, ji.token_output, ji.token_total,
+      ji.token_usage_status, ji.token_usage_reason, ji.token_cached_input,
       a.name AS agent_name,
       a.job_title AS job_title,
       t.title AS task_title
@@ -85,6 +89,9 @@ async function loadRunHeader(
     token_input: row.token_input == null ? null : Number(row.token_input),
     token_output: row.token_output == null ? null : Number(row.token_output),
     token_total: row.token_total == null ? null : Number(row.token_total),
+    token_usage_status: (row.token_usage_status as string | null) ?? null,
+    token_usage_reason: (row.token_usage_reason as string | null) ?? null,
+    token_cached_input: row.token_cached_input == null ? null : Number(row.token_cached_input),
   };
 }
 

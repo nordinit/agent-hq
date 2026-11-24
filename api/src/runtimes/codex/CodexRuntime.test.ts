@@ -13,6 +13,7 @@ import {
 } from '../runtimeExecutionStore';
 import { localProcessIdentity } from '../localProcessSupervisor';
 import { CodexRuntime } from './CodexRuntime';
+import type { RuntimeEndEvent } from '../runtimeEvents';
 import { codexProviderHomeReference } from './auth';
 import { DEFAULT_CODEX_STALE_PROFILE_TTL_MS } from './profile';
 import type { CodexMcpMaterialization } from './types';
@@ -376,6 +377,23 @@ describe('CodexRuntime', () => {
 
     expect(mockCleanupOwnedProcessTree).toHaveBeenCalled();
     expect(fs.existsSync(adHocHome)).toBe(false);
+  });
+
+  it('reports unavailable usage when the turn is stopped before a usage event', async () => {
+    let resolveEnd!: (event: RuntimeEndEvent) => void;
+    const ended = new Promise<RuntimeEndEvent>(resolve => { resolveEnd = resolve; });
+    const runtime = new CodexRuntime();
+    const db = createRuntimeDb();
+    const { runId } = await runtime.dispatch(params({ db, durableRunId: 'run-7', onRuntimeEnd: resolveEnd }));
+    await runtime.abort(runId, '');
+    child.emit('close', null, 'SIGTERM');
+    const event = await ended;
+    expect(event).toMatchObject({
+      reason: 'aborted',
+      tokenUsage: { status: 'unavailable', reason: 'runtime_usage_not_reported' },
+    });
+    expect(db.runs.find(entry => entry.sql.includes('SET token_input'))?.values.slice(0, 6))
+      .toEqual([null, null, null, null, 'unavailable', 'runtime_usage_not_reported']);
   });
 
   it('retains an ad-hoc home when descendant process cleanup is not confirmed', async () => {

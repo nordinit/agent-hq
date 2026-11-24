@@ -169,6 +169,19 @@ describe('ClaudeStreamAccumulator terminal classification', () => {
     expect(accumulator.finalText).toBe('partial answer');
   });
 
+  it('keeps partial usage without double counting split assistant messages', () => {
+    const accumulator = new ClaudeStreamAccumulator();
+    const message = (id: string, output: number) => ({
+      type: 'assistant',
+      message: { id, content: [], usage: { input_tokens: 10, output_tokens: output, cache_creation_input_tokens: 2, cache_read_input_tokens: 7 } },
+    });
+    accumulator.observe(message('first', 1));
+    accumulator.observe(message('first', 3));
+    accumulator.observe(message('second', 4));
+    expect(accumulator.usage).toBeNull();
+    expect(accumulator.partialUsage).toEqual({ inputTokens: 24, outputTokens: 7, cachedInputTokens: 14 });
+  });
+
   it('captures the structured rate-limit signal', () => {
     const stream = JSON.stringify({
       type: 'rate_limit_event',

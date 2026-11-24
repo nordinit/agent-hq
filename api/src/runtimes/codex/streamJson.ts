@@ -8,8 +8,8 @@ function stringValue(value: unknown): string | null {
   return typeof value === 'string' && value.length > 0 ? value : null;
 }
 
-function numberValue(value: unknown): number {
-  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+function tokenCount(value: unknown): number | null {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;
 }
 
 export class CodexJsonlDecoder {
@@ -58,7 +58,7 @@ export class CodexJsonlDecoder {
 
 export interface CodexUsage {
   inputTokens: number;
-  cachedInputTokens: number;
+  cachedInputTokens: number | null;
   outputTokens: number;
 }
 
@@ -82,11 +82,14 @@ export class CodexStreamAccumulator {
 
     if (type === 'turn.completed') {
       this.turnCompletedValue = true;
-      const usage = isRecord(event.usage) ? event.usage : {};
+      const usage = isRecord(event.usage) ? event.usage : null;
+      const input = tokenCount(usage?.input_tokens);
+      const output = tokenCount(usage?.output_tokens);
+      if (input === null || output === null) return;
       this.usageValue = {
-        inputTokens: numberValue(usage.input_tokens),
-        cachedInputTokens: numberValue(usage.cached_input_tokens),
-        outputTokens: numberValue(usage.output_tokens),
+        inputTokens: input,
+        cachedInputTokens: tokenCount(usage?.cached_input_tokens),
+        outputTokens: output,
       };
       return;
     }

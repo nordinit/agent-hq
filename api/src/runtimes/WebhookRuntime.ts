@@ -62,6 +62,7 @@ interface DispatchResponse {
 // ── Runtime ──────────────────────────────────────────────────────────────────
 
 export class WebhookRuntime implements AgentRuntime {
+  readonly tokenUsageReporting = 'external' as const;
   private config: WebhookRuntimeConfig;
 
   constructor(config: WebhookRuntimeConfig) {

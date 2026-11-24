@@ -24,6 +24,8 @@
  *    see the comment in mcpPreflight.ts for the measurements that ruled that out.
  */
 
+import type { NativeRuntimeEndEvent } from '../runtimeEvents';
+import { createRunTokenUsageReporter, runtimeTokenUsage, type RuntimeTokenUsage } from '../runTokenUsage';
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
 import { randomUUID } from 'crypto';
 import { hostname } from 'os';
@@ -107,6 +109,7 @@ function safeRuntimeError(error: unknown): string {
 }
 
 export class ClaudeCodeRuntime implements AgentRuntime {
+  readonly tokenUsageReporting = 'native' as const;
   private readonly baseConfig: ClaudeCodeRuntimeConfig;
 
   constructor(config: ClaudeCodeRuntimeConfig = {}) {
@@ -291,6 +294,9 @@ export class ClaudeCodeRuntime implements AgentRuntime {
     };
 
     const accumulator = new ClaudeStreamAccumulator();
+    const reportUsage = createRunTokenUsageReporter(db, instanceId, error =>
+      console.warn(`[ClaudeCodeRuntime] failed to persist usage for #${instanceId}:`, safeRuntimeError(error)),
+    );
     const decoder = new NdjsonDecoder();
     let stderr = '';
 
@@ -313,7 +319,12 @@ export class ClaudeCodeRuntime implements AgentRuntime {
 
     child.stdout.on('data', (chunk: string) => {
       for (const event of decoder.push(chunk)) {
+        const previousPartial = accumulator.partialUsage;
         accumulator.observe(event);
+        if (event.type === 'result' || accumulator.partialUsage !== previousPartial) {
+          const usage = runtimeTokenUsage(null, accumulator.usage ?? accumulator.partialUsage);
+          if (usage.status !== 'unavailable') void reportUsage(usage);
+        }
         transcript?.enqueue(decodeClaudeStreamEvent(event));
       }
     });
@@ -438,6 +449,7 @@ export class ClaudeCodeRuntime implements AgentRuntime {
       state,
       exited,
       accumulator,
+      reportUsage,
       decoder,
       transcript,
       getStderr: () => stderr,
@@ -558,6 +570,7 @@ export class ClaudeCodeRuntime implements AgentRuntime {
     state: ActiveClaudeCodeRun;
     exited: Promise<ProcessExitResult>;
     accumulator: ClaudeStreamAccumulator;
+    reportUsage: (usage: RuntimeTokenUsage) => Promise<void>;
     decoder: NdjsonDecoder;
     transcript: RuntimeTranscriptWriter | null;
     getStderr: () => string;
@@ -568,7 +581,7 @@ export class ClaudeCodeRuntime implements AgentRuntime {
   }): Promise<void> {
     const { params, runId, db, state, exited, accumulator, decoder, transcript, mcp } = args;
     const instanceId = params.instanceId ?? null;
-    let runtimeEndEvent: RuntimeEndEvent | null = null;
+    let runtimeEndEvent: NativeRuntimeEndEvent | null = null;
 
     try {
       const result = await exited;
@@ -618,10 +631,10 @@ export class ClaudeCodeRuntime implements AgentRuntime {
       if (!transcriptResult || transcriptResult.written === 0) {
         await this.persistAssistantMessage(db, instanceId, accumulator.finalText);
       }
-      await this.persistTokenUsageFallback(db, instanceId, accumulator);
 
       const success = classification.family === 'none' && !state.aborted;
       runtimeEndEvent = {
+        tokenUsage: runtimeTokenUsage(accumulator.finalUsage, accumulator.usage ?? accumulator.partialUsage),
         type: 'runEnded',
         source: 'claude-code',
         sessionKey: params.sessionKey,
@@ -677,6 +690,7 @@ export class ClaudeCodeRuntime implements AgentRuntime {
         runtimeEndEvent = null;
       } else {
         runtimeEndEvent = {
+          tokenUsage: runtimeTokenUsage(accumulator.finalUsage, accumulator.usage ?? accumulator.partialUsage),
           type: 'runEnded',
           source: 'claude-code',
           sessionKey: params.sessionKey,
@@ -688,9 +702,10 @@ export class ClaudeCodeRuntime implements AgentRuntime {
         };
       }
     } finally {
+      if (runtimeEndEvent) await args.reportUsage(runtimeEndEvent.tokenUsage);
       if (instanceId != null && args.tenantId != null && runtimeEndEvent) {
         try {
-          await this.handleRuntimeEnd(db, instanceId, args.tenantId, runtimeEndEvent, accumulator);
+          await this.handleRuntimeEnd(db, instanceId, args.tenantId, runtimeEndEvent);
         } catch (error) {
           // Durable terminal state is repaired into job_instances by the runtime
           // reconciler. No persistence failure may reject this detached monitor
@@ -717,8 +732,7 @@ export class ClaudeCodeRuntime implements AgentRuntime {
     db: Db | null,
     instanceId: number,
     tenantId: number,
-    event: RuntimeEndEvent,
-    accumulator: ClaudeStreamAccumulator,
+    event: NativeRuntimeEndEvent,
   ): Promise<void> {
     if (!db) return;
 
@@ -729,7 +743,7 @@ export class ClaudeCodeRuntime implements AgentRuntime {
         state: event.reason === 'aborted' ? 'cancelled' : event.success ? 'succeeded' : 'failed',
         reason: event.reason ?? (event.success ? 'completed' : 'error'),
         error: event.error ?? null,
-        metadata: event.metadata ?? {},
+        metadata: { ...event.metadata, token_usage: event.tokenUsage },
         endedAt: event.endedAt,
       });
     } catch (executionStateError) {
@@ -739,21 +753,10 @@ export class ClaudeCodeRuntime implements AgentRuntime {
       );
     }
 
-    const usage = accumulator.usage;
     try {
       await applyRuntimeEndToJobInstance(db, {
         instanceId,
-        event: usage
-          ? {
-              ...event,
-              metadata: {
-                ...(event.metadata ?? {}),
-                token_input: usage.inputTokens,
-                token_output: usage.outputTokens,
-                token_total: usage.inputTokens + usage.outputTokens,
-              },
-            }
-          : event,
+        event,
         runtimeName: 'Claude Code',
         runtimeEndSource: event.source,
       });
@@ -833,38 +836,6 @@ export class ClaudeCodeRuntime implements AgentRuntime {
     } catch (err) {
       console.warn(
         `[ClaudeCodeRuntime] failed to persist runtime-end records for instance #${instanceId}:`,
-        safeRuntimeError(err),
-      );
-    }
-  }
-
-  /**
-   * Token usage is normally written inside applyRuntimeEndToJobInstance's guarded
-   * claim UPDATE. That claim matches zero rows when the agent already posted its
-   * lifecycle outcome (status left 'queued'/'dispatched'/'running' is a
-   * precondition), which silently drops the tokens. This unguarded follow-up
-   * keeps usage accounting correct in that case.
-   */
-  private async persistTokenUsageFallback(
-    db: Db | null,
-    instanceId: number | null,
-    accumulator: ClaudeStreamAccumulator,
-  ): Promise<void> {
-    if (!db || instanceId == null) return;
-    const usage = accumulator.usage;
-    if (!usage) return;
-
-    try {
-      await db.run(
-        'UPDATE job_instances SET token_input = ?, token_output = ?, token_total = ? WHERE id = ?',
-        usage.inputTokens,
-        usage.outputTokens,
-        usage.inputTokens + usage.outputTokens,
-        instanceId,
-      );
-    } catch (err) {
-      console.warn(
-        `[ClaudeCodeRuntime] failed to persist token usage for instance #${instanceId}:`,
         safeRuntimeError(err),
       );
     }

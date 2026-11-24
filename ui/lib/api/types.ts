@@ -274,6 +274,9 @@ export interface JobInstance {
   token_input?: number | null;
   token_output?: number | null;
   token_total?: number | null;
+  token_usage_status?: 'recorded' | 'partial' | 'unavailable' | null;
+  token_usage_reason?: string | null;
+  token_cached_input?: number | null;
   created_at: string;
   session_key: string | null;
   current_stage?: 'dispatch' | 'start' | 'heartbeat' | 'progress' | 'blocker' | 'completion' | null;

@@ -115,7 +115,7 @@ const StreamingBubble = memo(function StreamingBubble({ content }: { content: st
 
 export interface ChatPanelProps {
   messages: ChatMessage[];
-  runUsage?: Pick<JobInstance, 'token_input' | 'token_output' | 'token_total'> | null;
+  runUsage?: Pick<JobInstance, 'token_input' | 'token_output' | 'token_total' | 'token_usage_status' | 'token_usage_reason' | 'token_cached_input'> | null;
   streamContent: string | null;
   /** Live turn state driving the typing indicator. Null when nothing is running. */
   activity?: RunActivity | null;
@@ -204,10 +204,13 @@ export function ChatPanel({
           </div>
         </div>
       )}
-      {hasSession && !transcriptLoading && !transcriptError && (hasRecordedUsage || transcriptChars > 0) && (
+      {hasSession && !transcriptLoading && !transcriptError && (hasRecordedUsage || runUsage?.token_usage_status === 'unavailable' || transcriptChars > 0) && (
         <div className="shrink-0 border-b border-slate-700/50 px-4 py-2 text-xs text-slate-400 md:px-5">
-          {hasRecordedUsage ? <RunTokenCount usage={runUsage} showBreakdown /> : (
-            <span className="tabular-nums" title={TOKEN_ESTIMATE_HINT}>{formatEstimatedTokens(transcriptChars)} in loaded chat text</span>
+          {(hasRecordedUsage || runUsage?.token_usage_status === 'unavailable') && <RunTokenCount usage={runUsage} showBreakdown />}
+          {transcriptChars > 0 && (
+            <span className="tabular-nums" title={TOKEN_ESTIMATE_HINT}>
+              {runUsage?.token_usage_status === 'unavailable' && ' · '}{formatEstimatedTokens(transcriptChars)} in loaded chat text
+            </span>
           )}
         </div>
       )}

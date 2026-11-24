@@ -2,6 +2,10 @@ import { setupTestDb, teardownTestDb } from '../../db/testDb';
 import { closeActiveInstanceAfterSemanticHandoff } from './instanceClose';
 import { type Db } from "../../db/adapter/types";
 
+import { localProcessSupervisor } from '../../runtimes/localProcessSupervisor';
+import { persistRunTokenUsage } from '../../runtimes/runTokenUsage';
+import { abortInstanceExecutionTransport } from './stopInstanceExecution';
+
 jest.mock('./stopInstanceExecution', () => ({
   abortInstanceExecutionTransport: jest.fn(async () => ({ result: { ok: true, status: 'succeeded' } })),
 }));
@@ -115,6 +119,35 @@ describe('closeActiveInstanceAfterSemanticHandoff', () => {
     const note = await db.get(`SELECT content FROM task_notes WHERE task_id = 731 ORDER BY id DESC LIMIT 1`) as { content: string };
     expect(note.content).toContain('Agent check-in: Run completed');
     expect(note.content).toContain('Outcome: completed_for_review');
+  });
+
+  it('lets a native runtime finish recording usage after the semantic handoff', async () => {
+    await seedTaskAndInstance(db);
+    await db.run("UPDATE agents SET runtime_type = 'claude-code' WHERE id = ?", AGENT_ID);
+    await db.run("UPDATE job_instances SET tenant_id = ? WHERE id = 4702", TENANT_ID);
+
+    let finishDrain!: (completed: boolean) => void;
+    const wait = jest.spyOn(localProcessSupervisor, 'waitForExit')
+      .mockImplementation(() => new Promise(resolve => { finishDrain = resolve; }));
+    try {
+      await closeActiveInstanceAfterSemanticHandoff({ db, taskId: 731, outcome: 'completed_for_review' });
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(wait).toHaveBeenCalledWith('claude-code:4702', 'claude-code', 5000);
+      expect(abortInstanceExecutionTransport).not.toHaveBeenCalled();
+      expect(await db.get('SELECT status FROM job_instances WHERE id = 4702')).toEqual({ status: 'done' });
+      await persistRunTokenUsage(db, 4702, {
+        status: 'recorded',
+        counts: { inputTokens: 120, outputTokens: 30, cachedInputTokens: 10 },
+      });
+      finishDrain(true);
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(abortInstanceExecutionTransport).not.toHaveBeenCalled();
+      expect(await db.get('SELECT token_total, token_usage_status FROM job_instances WHERE id = 4702'))
+        .toEqual({ token_total: 150, token_usage_status: 'recorded' });
+    } finally {
+      finishDrain?.(true);
+      wait.mockRestore();
+    }
   });
 
   it('refuses to close an instance that belongs to a different task', async () => {
