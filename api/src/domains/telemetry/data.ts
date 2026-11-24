@@ -131,6 +131,16 @@ function historicalTaskWhere(access:TelemetryAccess,scope:TelemetryScope,asOf:st
   return {sql:conditions.join(' AND '),params};
 }
 /**
+ * The job_instances columns telemetry_run_snapshot reads (migration 56), as a jsonb row. Building it
+ * from these columns instead of to_jsonb(j) keeps large payload, response and transcript text out of
+ * every run read; a test checks it yields the same snapshot as the whole row.
+ */
+const RUN_SNAPSHOT_COLUMNS = ['id','agent_id','task_id','tenant_id','status','created_at','dispatched_at','completed_at','started_at','task_outcome',
+  'token_input','token_output','token_total','effective_model','effective_thinking_level','effective_fast_mode','failure_class','failure_stage',
+  'runtime_ended_at','runtime_end_success','runtime_end_source','lifecycle_outcome_posted_at','runtime_completed_at','lifecycle_handoff_status',
+  'semantic_outcome_missing','error','runtime_end_error'] as const;
+export const RUN_SNAPSHOT_ROW = `jsonb_build_object(${RUN_SNAPSHOT_COLUMNS.map(column => `'${column}',j.${column}`).join(',')})`;
+/**
  * The created_at window a population requires of every entity: bounds reached through `all` only,
  * where each one limits the whole population. Used to narrow the SQL read before the exact
  * in-memory evaluation, never to decide membership itself.
@@ -172,9 +182,10 @@ export async function loadMetricData(db:Db,access:TelemetryAccess,scope:Telemetr
   const where=historical?historicalTaskWhere(access,scope,asOf):taskWhere(access,scope);
   if(allowedTaskIds){where.sql+=' AND t.id=ANY(?::bigint[])';where.params.push(allowedTaskIds);}
   // A creation-window population (a dashboard time range on a current snapshot) only needs the
-  // tasks or runs created in that window. Run grain still needs every task its runs belong to.
+  // tasks or runs created in that window; run grain reads only the tasks those runs belong to.
   const created=definition.time_basis==='current'?createdAtWindow(definition.population):{};
   if(grain==='task'){const bounds=createdAtSql('t.created_at',created);for(const sql of bounds.sql)where.sql+=` AND ${sql}`;where.params.push(...bounds.params);}
+  if(grain==='run'){const bounds=createdAtSql('rj.created_at',created);if(bounds.sql.length){where.sql+=` AND t.id IN (SELECT rj.task_id FROM job_instances rj WHERE rj.tenant_id=t.tenant_id AND ${bounds.sql.join(' AND ')})`;where.params.push(...bounds.params);}}
   const taskRows=['task','event','journey','run','runtime_execution'].includes(grain)?await db.all<{id:number;snapshot:Record<string,any>;workflow_status:string}>(`SELECT t.id,telemetry_task_snapshot(to_jsonb(t)) AS snapshot,s.status AS workflow_status
     FROM tasks t JOIN workflows s ON s.id=t.workflow_id AND s.tenant_id=t.tenant_id
     WHERE ${where.sql} ORDER BY t.id LIMIT ?`,...where.params,entityLimit+1):[];
@@ -214,7 +225,7 @@ export async function loadMetricData(db:Db,access:TelemetryAccess,scope:Telemetr
     if(scope.include_archived===false)conditions.push("(s.id IS NULL OR s.status <> 'closed')");
     if(allowedTaskIds){conditions.push('j.task_id=ANY(?::bigint[])');params.push(allowedTaskIds);}
     if(grain==='run'){const bounds=createdAtSql('j.created_at',created);conditions.push(...bounds.sql);params.push(...bounds.params);}
-    const rows=grain==='run'?await db.all<any>(`SELECT j.id,j.task_id,COALESCE(t.project_id,a.project_id) AS project_id,telemetry_run_snapshot(to_jsonb(j)) AS snapshot FROM job_instances j ${joins} WHERE ${conditions.join(' AND ')} ORDER BY j.id LIMIT ?`,...params,entityLimit+1):
+    const rows=grain==='run'?await db.all<any>(`SELECT j.id,j.task_id,COALESCE(t.project_id,a.project_id) AS project_id,telemetry_run_snapshot(${RUN_SNAPSHOT_ROW}) AS snapshot FROM job_instances j ${joins} WHERE ${conditions.join(' AND ')} ORDER BY j.id LIMIT ?`,...params,entityLimit+1):
       await db.all<any>(`SELECT r.id,j.task_id,j.agent_id,COALESCE(t.project_id,a.project_id) AS project_id,
         jsonb_build_object('id',r.id,'state',r.state,'runtime_type',r.runtime_type,'started_at',r.started_at,'ended_at',r.ended_at,'created_at',r.created_at,'instance_id',r.instance_id,'boundary_fingerprint',r.boundary_fingerprint) AS snapshot
         FROM runtime_executions r JOIN job_instances j ON j.id=r.instance_id AND j.tenant_id=r.tenant_id ${joins} WHERE ${conditions.join(' AND ')} ORDER BY r.id LIMIT ?`,...params,entityLimit+1);

@@ -5,7 +5,7 @@ import { createDefinition } from './definitions';
 import { DASHBOARD_METRIC_LIMIT, dashboardSchema } from './dashboards';
 import { reportSchema } from './views';
 import { queryTelemetry } from './queries';
-import { createdAtWindow } from './data';
+import { RUN_SNAPSHOT_ROW, createdAtWindow } from './data';
 import { getTelemetryCatalog } from './catalog';
 import { listTasks } from '../tasks/readModel';
 
@@ -124,4 +124,13 @@ test('a creation window narrows run reads without changing which runs count', as
     filter: { all: [{ field: 'created_at', op: 'gte', value: iso(-48 * 3_600_000) }, { field: 'created_at', op: 'lt', value: iso(60_000) }] } });
   // 702 (stored as text), 703 (stored as ISO) and the scenario's run 501 (created now) are inside the window; 701 and 704 are not.
   expect(recent.value).toBe(3);
+});
+
+test('run reads build the same snapshot from the slim row as from the whole run row', async () => {
+  await db.run(`INSERT INTO job_instances(id,tenant_id,task_id,agent_id,status,error,runtime_end_error,payload_sent,response,token_input,token_output,lifecycle_handoff_status)
+    VALUES (801,1,1001,101,'failed','e','Provider limit reached','prompt text','transcript text',10,5,'missing'),(802,1,1002,101,'done',NULL,NULL,NULL,NULL,NULL,NULL,NULL)`);
+  const rows = await db.all<{ id: number; slim: unknown; whole: unknown }>(`SELECT j.id, telemetry_run_snapshot(${RUN_SNAPSHOT_ROW}) AS slim,
+    telemetry_run_snapshot(to_jsonb(j)) AS whole FROM job_instances j WHERE j.tenant_id = 1 ORDER BY j.id`);
+  expect(rows.length).toBeGreaterThanOrEqual(3);
+  for (const row of rows) expect(row.slim).toEqual(row.whole);
 });
