@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { blankDashboard, dashboardBlocks, dashboardSection, formatDashboardValue, moveDashboardBlock, removeDashboardBlock, resizeDashboardColumns, setDashboardColumns } from './dashboardLayout.ts';
+import { blankDashboard, dashboardBlocks, dashboardSection, formatDashboardValue, resolveDashboardRange, taskListRequest, moveDashboardBlock, removeDashboardBlock, resizeDashboardColumns, setDashboardColumns } from './dashboardLayout.ts';
 import type { DashboardBlock } from './dashboardTypes.ts';
 
 test('presentation rounds exact decimals without float conversion, including carry, zero places and percentages', () => {
@@ -33,4 +33,13 @@ test('removing a duplicate retains its shared query until the final reference is
   page.sections = [dashboardSection('', [{ id: 'a', type: 'metric', binding_id: 'source' }, { id: 'b', type: 'comparison', binding_ids: ['source'] }])];
   const first = removeDashboardBlock(page, 'a'); assert.equal(first.metrics.length, 1);
   const second = removeDashboardBlock(first, 'b'); assert.equal(second.metrics.length, 0);
+});
+
+test('relative ranges resolve against the load time and task lists stay inside the page scope', () => {
+  const now = Date.parse('2026-11-24T20:00:00.000Z');
+  assert.deepEqual(resolveDashboardRange('48h', now), { from: '2026-11-22T20:00:00.000Z', to: '2026-11-24T20:00:00.000Z' });
+  assert.equal(resolveDashboardRange('7d', now).from, '2026-11-17T20:00:00.000Z');
+  const block = { id: 'b', type: 'task_list' as const, statuses: ['blocked'] };
+  assert.deepEqual(taskListRequest(block, { project_id: 99, workflow_id: 114, task_type: 'proposal' }), { projectId: 99, workflowId: 114, statuses: ['blocked'], taskTypes: ['proposal'], limit: 10 });
+  assert.deepEqual(taskListRequest({ ...block, workflow_id: 115, task_types: ['lead', 'proposal'], limit: 5 }, { project_id: 99 }), { projectId: 99, workflowId: 115, statuses: ['blocked'], taskTypes: ['lead', 'proposal'], limit: 5 });
 });

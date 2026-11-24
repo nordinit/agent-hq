@@ -4,7 +4,7 @@ The Dashboard route now uses the Operational Overview visual style with configur
 
 ## Editing
 
-Select **Edit layout** to show the page and block settings. Add content with **+ Add block** or `/` outside a text field. Available content includes pinned metrics, saved single-metric views, comparison tables, operational statistics and lists, headings, Markdown notes, callouts, dividers, and links.
+Select **Edit layout** to show the page and block settings. Add content with **+ Add block** or `/` outside a text field. Available content includes pinned metrics, saved single-metric views, comparison tables, operational statistics and lists, task lists, headings, Markdown notes, callouts, dividers, and links. A task list shows the newest tasks in chosen statuses (and optionally task types and a workflow), inside the page's project, workflow and task type, with each task's blocker or latest outcome and a link to it. Unlike operational blocks, task lists work on workflow-scoped pages.
 
 Sections contain one to four independently stacked columns. Drag a block by its handle, use Earlier/Later buttons, or choose Move to column in its settings. Column proportion sliders also support keyboard arrow keys. Page settings control width and density; block settings control titles, card/plain appearance, accents, icons, precision, display type, and source overrides. Comparison settings select metric columns, ordering, and the visible row limit. Undo/redo applies to edits during the current editing session.
 
@@ -16,7 +16,7 @@ Sections contain one to four independently stacked columns. Drag a block by its 
 - Refreshing the same queries keeps existing values visible with a refresh indicator. Refresh failures are displayed alongside the previous value; changing the scope or pinned queries clears it immediately.
 - Metric definitions, scope enforcement, ratios, exact decimal values, and evidence retention remain the existing telemetry engine's responsibility. Rounding affects only dashboard display. Missing and zero-denominator values remain unavailable.
 - Comparison tables align exact group keys and refuse incompatible group, time-basis, attribution, scope, or time-window combinations. Each metric keeps its own population; the UI labels this explicitly. Columns never average ratios together.
-- Snapshot pages omit historical date controls. Historical metrics support saved dates, relative range shortcuts, and explicit UTC boundaries. Viewing filters are temporary; editing changes the page's saved defaults.
+- The **Time range** control offers All time, Last 24 hours, Last 48 hours, Last 7 days, Last 30 days, and custom UTC dates. A page saves a relative choice as `range` (`24h`, `48h`, `7d` or `30d`) and resolves it each time it loads or refreshes, so the window keeps moving; `range` and `from`/`to` are mutually exclusive. Historical metrics receive the window as `from`/`to`. Current snapshots have no occurrence time, so any page range limits them to the records created inside it (a `created_at` population filter added to the query, combined with the binding's own filter). Without a range, snapshots stay unfiltered. Viewing filters are temporary; editing changes the page's saved defaults.
 - Operational blocks use the existing statistics and completed-task endpoints and support project scope. They are unavailable on workflow/task-type-scoped pages. Create a project-scoped page to combine operational blocks with narrower, individually scoped metric bindings.
 - Detail drawers retain the full calculation, coverage, quality warnings, and contributor evidence. Ratio contributors show numerator/denominator components rather than incorrectly formatting numerator counts as percentages. Saved, unchanged sources can open in Analyze; temporary filter overrides stay in the current result drawer.
 
@@ -36,7 +36,7 @@ Dashboard endpoints are under `/api/v1/telemetry/v2/dashboards`: list, create, r
 
 Dashboards exist only as page documents. Reports saved with `presentation: "dashboard"` by the retired widget editor remain stored and valid, but the Dashboard route no longer opens them; recreate one as a page to show it.
 
-Page documents have a schema version, appearance, scope/date defaults, metric bindings, and a section/column/block tree. Limits are 24 sections, 80 blocks total, 40 blocks per column, and 10 metric bindings. Column weights are integers totaling 12 per section. Block/column/section identities must be unique. Link blocks accept HTTP(S) URLs and local paths.
+Page documents have a schema version, appearance, scope/date defaults, metric bindings, and a section/column/block tree. Limits are 24 sections, 80 blocks total, 40 blocks per column, and 30 metric bindings (reports and saved views keep 10). The UI still sends metric queries to `/queries/batch` in groups of ten. Column weights are integers totaling 12 per section. Block/column/section identities must be unique. Link blocks accept HTTP(S) URLs and local paths.
 
 Rolling back the UI does not require deleting new page documents or reversing the additive resource-kind migration. Autosaved drafts, a revision-history/restore UI, reusable sections, richer text/image editing, and simultaneous collaborative editing remain follow-on work.
 

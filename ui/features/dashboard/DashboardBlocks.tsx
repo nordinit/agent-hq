@@ -81,11 +81,27 @@ function OperationBlock({ block, operations, inspect }: Props & { block: Extract
   const caption = block.operation === 'active_runs' ? 'Queued + running' : block.operation === 'tokens' ? 'Tracked run tokens' : ['runs', 'completed_runs', 'failed_runs'].includes(block.operation) ? 'Runs created in the last 24 hours' : 'Current inventory';
   return <DashboardStat title={title} value={formatDashboardValue(values[block.operation], undefined, 0)} caption={caption} icon={block.icon} accent={block.accent} plain={block.surface === 'plain'} onClick={() => inspect({ operation: block.operation, title })}/>;
 }
+function TaskListBlock({ block, operations }: Props & { block: Extract<DashboardBlock, { type: 'task_list' }> }) {
+  const list = operations.taskLists?.[block.id];
+  const title = block.title || `Tasks · ${block.statuses.join(', ')}`;
+  const wrap = `${styles.panel} ${block.surface === 'plain' ? styles.plain : ''}`;
+  const tasks = list?.tasks ?? [];
+  return <div className={wrap}><h3 className={styles.blockTitle}>{title}{list?.total != null && <span className={styles.muted}> · {list.total}</span>}</h3>
+    {!list || (list.busy && !list.tasks) ? <p className={styles.loading}>Loading tasks…</p> : list.error ? <p className={styles.error} role="alert">{list.error}</p> : !tasks.length ? <p className={styles.muted}>No matching tasks.</p> : <>
+      {tasks.map(task => {
+        const detail = task.blocker_reason || task.latest_task_outcome;
+        return <div key={task.id} className={styles.row}><div className={styles.rowTitle}>#{task.id} {task.title}<p className={styles.muted}>{[task.status, task.task_type, task.assigned_agent_name || task.agent_name || 'Unassigned', `updated ${timeAgo(task.updated_at)}`].filter(Boolean).join(' · ')}</p>{detail && <p className={styles.muted}>{detail.length > 160 ? `${detail.slice(0, 160)}…` : detail}</p>}</div><Link href={`/tasks?id=${task.id}`}>View task</Link></div>;
+      })}
+      {(list.total ?? 0) > tasks.length && <p className={styles.muted}>Showing the newest {tasks.length} of {list.total}.</p>}
+    </>}
+  </div>;
+}
 export function DashboardBlockContent(props: Props) {
   const { block } = props;
   if (block.type === 'metric') return <MetricBlock {...props} block={block}/>;
   if (block.type === 'comparison') return <ComparisonBlock {...props} block={block}/>;
   if (block.type === 'operation') return <OperationBlock {...props} block={block}/>;
+  if (block.type === 'task_list') return <TaskListBlock {...props} block={block}/>;
   if (block.type === 'divider') return <hr className={styles.divider}/>;
   if (block.type === 'heading') return <h3 className={styles.sectionTitle}>{block.text || 'Heading'}</h3>;
   if (block.type === 'link') return <a className={`${styles.panel} ${styles.link}`} href={block.url} rel="noopener noreferrer">{block.title || block.url} ↗</a>;

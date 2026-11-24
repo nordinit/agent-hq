@@ -650,6 +650,7 @@ export async function listTasks(
     origin_task_id?: unknown;
     defect_type?: unknown;
     status?: unknown;
+    task_type?: unknown;
     activeInstancesOnly?: unknown;
     active_instances_only?: unknown;
     live_instances_only?: unknown;
@@ -668,6 +669,7 @@ export async function listTasks(
     origin_task_id,
     defect_type,
     status,
+    task_type,
     activeInstancesOnly,
     active_instances_only,
     live_instances_only,
@@ -715,6 +717,13 @@ export async function listTasks(
     } else if (statuses.length > 1) {
       conditions.push(`t.status IN (${statuses.map(() => '?').join(',')})`);
       params.push(...statuses);
+    }
+  }
+  if (task_type) {
+    const taskTypes = String(task_type).split(',').map((entry) => entry.trim()).filter(Boolean);
+    if (taskTypes.length > 0) {
+      conditions.push(`t.task_type IN (${taskTypes.map(() => '?').join(',')})`);
+      params.push(...taskTypes);
     }
   }
   if (

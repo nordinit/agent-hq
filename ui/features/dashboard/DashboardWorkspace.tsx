@@ -2,8 +2,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Plus, Pencil, RefreshCw, Undo2, Redo2, Copy, X, Save, Settings2, Download } from 'lucide-react';
 import { telemetryClient } from '@/lib/api/telemetry';
-import { blankDashboard, dashboardBlocks, dashboardId, dashboardSection, findDashboardBlock, operationsDashboard } from '@/lib/dashboardLayout';
-import type { DashboardBlock, DashboardDocument, DashboardDraft, DashboardOperation, SavedDashboard } from '@/lib/dashboardTypes';
+import { DASHBOARD_METRIC_LIMIT, blankDashboard, dashboardBlocks, dashboardId, dashboardRangeLabels, dashboardSection, findDashboardBlock, operationsDashboard } from '@/lib/dashboardLayout';
+import type { DashboardBlock, DashboardDocument, DashboardDraft, DashboardOperation, DashboardRange, SavedDashboard } from '@/lib/dashboardTypes';
 import { operationLabels } from '@/lib/dashboardLayout';
 import type { TelemetryCatalog, TelemetryMetric, TelemetryReport, TelemetryScope, TelemetryWidget } from '@/lib/telemetryTypes';
 import { telemetryErrorMessage } from '@/lib/telemetryPresentation';
@@ -16,6 +16,8 @@ import { DashboardDetails, type DashboardInspection } from './DashboardBlocks';
 import styles from './dashboard.module.css';
 
 const preference = 'agent-hq-dashboard-page';
+/** The time settings a page opens with: a relative range, explicit dates, or neither. */
+const pageWindow = (page: DashboardDocument): { from?: string; to?: string; range?: DashboardRange; timezone: string } => ({ from: page.from, to: page.to, range: page.range, timezone: page.timezone });
 /** The retired legacy page left 'legacy' in shared links and browser storage; drop it so the overview loads by default again. */
 function forgetRetiredDashboard() {
   const url = new URL(window.location.href);
@@ -37,21 +39,21 @@ export default function DashboardWorkspace() {
   const [undo, setUndo] = useState<DashboardDraft[]>([]), [redo, setRedo] = useState<DashboardDraft[]>([]);
   const [baseline, setBaseline] = useState(() => JSON.stringify(draft));
   const [viewScope, setViewScope] = useState<TelemetryScope>(draft.definition.scope ?? {});
-  const [viewWindow, setViewWindow] = useState({ from: draft.definition.from, to: draft.definition.to, timezone: draft.definition.timezone });
+  const [viewWindow, setViewWindow] = useState(() => pageWindow(draft.definition));
   const [newOpen, setNewOpen] = useState(false), [insertColumn, setInsertColumn] = useState<string | null>(null), [search, setSearch] = useState('');
   const [inspection, setInspection] = useState<DashboardInspection | null>(null);
   const [pendingNavigation, setPendingNavigation] = useState<string | null>(null), [userName, setUserName] = useState<string | null>(null);
   const dirty = editing && JSON.stringify(draft) !== baseline;
   const active = saved.find(item => item.id === selected);
   const page = draft.definition;
-  const { data, operations, recover } = useDashboardData(page, metrics, editing ? page.scope ?? {} : viewScope, editing ? { from: page.from, to: page.to, timezone: page.timezone } : viewWindow, refresh);
-  const historical = page.metrics.some(binding => { const definition = data[binding.id]?.definition ?? metrics.find(metric => metric.latest_revision_id === binding.metric_revision_id)?.definition; return definition && definition.time_basis !== 'current'; });
+  const { data, operations, recover } = useDashboardData(page, metrics, editing ? page.scope ?? {} : viewScope, editing ? pageWindow(page) : viewWindow, refresh);
+  const historicalOnly = page.metrics.length > 0 && !page.metrics.some(binding => (data[binding.id]?.definition ?? metrics.find(metric => metric.latest_revision_id === binding.metric_revision_id)?.definition)?.time_basis === 'current');
   const isSnapshotOnly = page.metrics.length > 0 && page.metrics.every(binding => (data[binding.id]?.definition ?? metrics.find(metric => metric.latest_revision_id === binding.metric_revision_id)?.definition)?.time_basis === 'current');
   const scope = editing ? page.scope ?? {} : viewScope;
-  const windowSettings = editing ? { from: page.from, to: page.to, timezone: page.timezone } : viewWindow;
+  const windowSettings = editing ? pageWindow(page) : viewWindow;
   const applyDraft = useCallback((next: DashboardDraft, id: string, edit = false) => {
     setDraft(next); setBaseline(JSON.stringify(next)); setSelected(id); setEditing(edit); setSelectedBlock(null); setUndo([]); setRedo([]); setInspection(null); setError(null); setNotice(null);
-    setViewScope(next.definition.scope ?? {}); setViewWindow({ from: next.definition.from, to: next.definition.to, timezone: next.definition.timezone });
+    setViewScope(next.definition.scope ?? {}); setViewWindow(pageWindow(next.definition));
   }, []);
   const remember = (id: string) => {
     const url = new URL(window.location.href); url.searchParams.set('dashboard', id); window.history.replaceState(null, '', url);
@@ -100,7 +102,7 @@ export default function DashboardWorkspace() {
   }, [editing, page, selectedBlock]);
   function change(next: DashboardDraft) {
     if (saving) return;
-    if (next.definition.sections.length > 24 || dashboardBlocks(next.definition).length > 80 || next.definition.metrics.length > 10) { setError('A dashboard supports up to 24 sections, 80 blocks, and 10 metric sources.'); return; }
+    if (next.definition.sections.length > 24 || dashboardBlocks(next.definition).length > 80 || next.definition.metrics.length > DASHBOARD_METRIC_LIMIT) { setError(`A dashboard supports up to 24 sections, 80 blocks, and ${DASHBOARD_METRIC_LIMIT} metric sources.`); return; }
     setUndo(items => [...items.slice(-49), draft]); setRedo([]); setDraft(next); setNotice(null); setError(null);
   }
   function selectDashboard(id: string) {
@@ -109,7 +111,7 @@ export default function DashboardWorkspace() {
     applyDraft(resource ? { name: resource.name, definition: resource.definition } : operationsDashboard(), id);
     remember(id);
   }
-  function startEditing() { setEditing(true); setBaseline(JSON.stringify(draft)); setViewScope(page.scope ?? {}); setViewWindow({ from: page.from, to: page.to, timezone: page.timezone }); setNotice(null); }
+  function startEditing() { setEditing(true); setBaseline(JSON.stringify(draft)); setViewScope(page.scope ?? {}); setViewWindow(pageWindow(page)); setNotice(null); }
   async function save() {
     setSaving(true); setError(null);
     try {
@@ -139,7 +141,7 @@ export default function DashboardWorkspace() {
     insert({ id: dashboardId(), type: 'metric', binding_id: id, title: report.name, display: metric.display ?? 'card', precision: 2, accent: 'blue' }, { ...metric, id, view });
   }
   function setScope(next: TelemetryScope) { if (editing) change({ ...draft, definition: { ...page, scope: next } }); else { setViewScope(next); setInspection(null); } }
-  function setWindow(next: typeof windowSettings) { if (editing) change({ ...draft, definition: { ...page, ...next } }); else { setViewWindow(next); setInspection(null); } }
+  function setWindow(next: typeof windowSettings) { if (editing) change({ ...draft, definition: { ...page, from: next.from, to: next.to, range: next.range, timezone: next.timezone } }); else { setViewWindow(next); setInspection(null); } }
   async function exportPage() {
     if (!active) return;
     try {
@@ -165,8 +167,8 @@ export default function DashboardWorkspace() {
   ];
   const latest = Object.values(data).flatMap(item => item.result?.as_of ? [item.result.as_of] : []).sort()[0];
   const operationalAllowed = !scope.workflow_id && !scope.workflow_type && !scope.task_type;
-  const metricBudgetFull = page.metrics.length >= 10;
-  const viewingOverrides = !editing && (JSON.stringify(viewScope) !== JSON.stringify(page.scope ?? {}) || JSON.stringify(viewWindow) !== JSON.stringify({ from: page.from, to: page.to, timezone: page.timezone }));
+  const metricBudgetFull = page.metrics.length >= DASHBOARD_METRIC_LIMIT;
+  const viewingOverrides = !editing && (JSON.stringify(viewScope) !== JSON.stringify(page.scope ?? {}) || JSON.stringify(viewWindow) !== JSON.stringify(pageWindow(page)));
   const currentResource = dirty || viewingOverrides || !active ? undefined : { dashboardId: active.id };
   return <div className={`${styles.page} ${styles[page.appearance.width]} ${page.appearance.density === 'compact' ? styles.compact : ''}`}>
     <div className={styles.toolbar} data-tour-target="dashboard-toolbar"><label className={styles.actions}><span className={styles.muted}>Dashboard</span><select className={styles.input} aria-label="Dashboard" disabled={dirty || saving || loading} value={selected} onChange={event => selectDashboard(event.target.value)}><option value="overview">Operational overview</option>{saved.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}{selected === 'new' && <option value="new">New dashboard</option>}</select></label>
@@ -176,8 +178,10 @@ export default function DashboardWorkspace() {
     </div>
     {userName && !editing && <p className={`${styles.muted} mb-1`}>Welcome back, {userName}</p>}<h1 className={styles.title}>{draft.name}</h1>{page.description && <p className={styles.description}>{page.description}</p>}
     <div className={styles.filters}><label>Project<select className={styles.input} aria-label="Project scope" value={scope.project_id ?? ''} disabled={Boolean(active?.scope?.project_id) || saving} onChange={event => setScope({ include_archived: scope.include_archived, project_id: event.target.value ? Number(event.target.value) : undefined })}><option value="">All projects</option>{catalog?.projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>
-      {isSnapshotOnly && <span>Current snapshot</span>}{!page.metrics.length && dashboardBlocks(page).some(block => block.type === 'operation') && <span>Current inventory & last 24h activity</span>}
-      {historical && <><label>History<select className={styles.input} aria-label="Historical date range" value="custom" onChange={event => { const days = Number(event.target.value); if (days) setWindow({ ...windowSettings, from: new Date(Date.now() - days * 86400000).toISOString(), to: new Date().toISOString() }); else if (event.target.value === 'all') setWindow({ ...windowSettings, from: undefined, to: undefined }); }}><option value="custom">Custom / saved</option><option value="1">Last 24 hours</option><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="all">All recorded history</option></select></label><label>From (UTC)<input className={styles.input} type="datetime-local" value={windowSettings.from ? new Date(windowSettings.from).toISOString().slice(0, 16) : ''} onChange={event => setWindow({ ...windowSettings, from: event.target.value ? `${event.target.value}:00.000Z` : undefined })}/></label><label>To (UTC)<input className={styles.input} type="datetime-local" value={windowSettings.to ? new Date(windowSettings.to).toISOString().slice(0, 16) : ''} onChange={event => setWindow({ ...windowSettings, to: event.target.value ? `${event.target.value}:00.000Z` : undefined })}/></label><span>Historical metrics only</span></>}
+      {isSnapshotOnly && !windowSettings.range && !windowSettings.from && !windowSettings.to && <span>Current snapshot</span>}{!page.metrics.length && dashboardBlocks(page).some(block => block.type === 'operation') && <span>Current inventory & last 24h activity</span>}
+      {page.metrics.length > 0 && <><label>Time range<select className={styles.input} aria-label="Time range" value={windowSettings.range ?? (windowSettings.from || windowSettings.to ? 'custom' : 'all')} onChange={event => { const value = event.target.value; if (value === 'all') setWindow({ ...windowSettings, range: undefined, from: undefined, to: undefined }); else if (value === 'custom') setWindow({ ...windowSettings, range: undefined, from: new Date(Date.now() - 86400000).toISOString(), to: new Date().toISOString() }); else setWindow({ ...windowSettings, range: value as DashboardRange, from: undefined, to: undefined }); }}><option value="all">All time</option>{Object.entries(dashboardRangeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}<option value="custom">Custom dates</option></select></label>
+        {!windowSettings.range && (windowSettings.from || windowSettings.to) && <><label>From (UTC)<input className={styles.input} type="datetime-local" value={windowSettings.from ? new Date(windowSettings.from).toISOString().slice(0, 16) : ''} onChange={event => setWindow({ ...windowSettings, from: event.target.value ? `${event.target.value}:00.000Z` : undefined })}/></label><label>To (UTC)<input className={styles.input} type="datetime-local" value={windowSettings.to ? new Date(windowSettings.to).toISOString().slice(0, 16) : ''} onChange={event => setWindow({ ...windowSettings, to: event.target.value ? `${event.target.value}:00.000Z` : undefined })}/></label></>}
+        {(windowSettings.range || windowSettings.from || windowSettings.to) && !historicalOnly && <span>Snapshot metrics count records created in this range</span>}</>}
       {latest && <span>Updated {new Date(latest).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</span>}
     </div>
     {error && <p className={styles.error} role="alert">{error}</p>}{notice && <p className={styles.notice} role="status">{notice}</p>}{dirty && <p className={styles.notice}>Unsaved layout changes · Save or cancel before switching dashboards.</p>}
@@ -189,8 +193,9 @@ export default function DashboardWorkspace() {
     <Dialog open={newOpen} title="Start a dashboard" close={() => setNewOpen(false)}><div className={styles.insertList}><button className={styles.button} type="button" onClick={() => { applyDraft(blankDashboard(), 'new', true); setNewOpen(false); }}>Blank page</button><button className={styles.button} type="button" onClick={() => { const next = operationsDashboard(); next.name = 'My operational overview'; applyDraft(next, 'new', true); setNewOpen(false); }}>Operational overview template</button></div></Dialog>
     <Dialog open={Boolean(insertColumn)} title="Add a block" close={() => setInsertColumn(null)}><input autoFocus className={`${styles.input} w-full`} aria-label="Find a block or metric" placeholder="Search blocks, metrics, or saved views…" value={search} onChange={event => setSearch(event.target.value)}/><div className={styles.insertList}>
       {(['heading', 'note', 'callout', 'divider', 'link', 'comparison'] as const).filter(matches).map(type => <button className={styles.button} type="button" key={type} disabled={type === 'comparison' && !page.metrics.length} onClick={() => insert(type === 'comparison' ? { id: dashboardId(), type, title: 'Metric comparison', binding_ids: page.metrics.slice(0, 4).map(metric => metric.id) } : type === 'link' ? { id: dashboardId(), type, title: 'Tasks board', url: '/tasks' } : type === 'divider' ? { id: dashboardId(), type } : { id: dashboardId(), type, text: type === 'heading' ? 'New heading' : '', surface: type === 'note' ? 'plain' : 'card' })}>{type[0].toUpperCase() + type.slice(1)}</button>)}
+      {matches('task list') && <button className={styles.button} type="button" onClick={() => insert({ id: dashboardId(), type: 'task_list', title: 'Needs attention', statuses: ['blocked', 'stalled'], limit: 10 })}>task list</button>}
       {operationalAllowed && Object.entries(operationLabels).filter(([, label]) => matches(label)).map(([operation, label]) => <button className={styles.button} type="button" key={operation} onClick={() => insert({ id: dashboardId(), type: 'operation', operation: operation as DashboardOperation, accent: 'blue' })}>{label}</button>)}
-      {metricBudgetFull && <p className={styles.muted}>All 10 metric sources are in use. Duplicate an existing block to reuse its source.</p>}
+      {metricBudgetFull && <p className={styles.muted}>All {DASHBOARD_METRIC_LIMIT} metric sources are in use. Duplicate an existing block to reuse its source.</p>}
       {sources.filter(source => !source.conflict).map(source => <button className={styles.button} type="button" key={source.key} disabled={metricBudgetFull} onClick={source.add}>{source.label}</button>)}
       {sources.some(source => source.conflict) && <p className={styles.muted}>Not available here: this dashboard only covers {pageScopeSummary}. Start a blank dashboard to combine metrics from other workflows or task types.</p>}
       {sources.filter(source => source.conflict).map(source => <button className={styles.button} type="button" key={source.key} disabled title={source.conflict ?? undefined}>{source.label}</button>)}

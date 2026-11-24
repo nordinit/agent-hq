@@ -20,8 +20,10 @@ export const telemetryWidgetSchema = z.object({
   layout: z.object({ width: z.union([z.literal(4), z.literal(6), z.literal(12)]), height: z.enum(['compact', 'regular', 'tall']) }).strict().optional(),
 }).strict();
 
+/** Reports and saved views pin at most 10 metrics; dashboard pages validate up to 30 through this schema. */
+export const REPORT_METRIC_LIMIT = 10;
 export const reportSchema = z.object({
-  metrics: z.array(telemetryWidgetSchema).min(1).max(10),
+  metrics: z.array(telemetryWidgetSchema).min(1).max(30),
   // 'dashboard' is no longer a UI surface, but stored report revisions carry it and dashboard pages
   // validate their metric bindings through this schema with it.
   presentation: z.enum(['report', 'view', 'dashboard']).optional(),
@@ -29,6 +31,7 @@ export const reportSchema = z.object({
   comparison: z.object({ compatible: z.boolean(), key: z.string().min(1), semantic_version: z.string().min(1) }).strict().optional(),
 }).strict().superRefine((report, ctx) => {
   if (report.presentation === 'view' && report.metrics.length !== 1) ctx.addIssue({ code: 'custom', path: ['metrics'], message: 'A saved view contains exactly one metric.' });
+  if (report.presentation !== 'dashboard' && report.metrics.length > REPORT_METRIC_LIMIT) ctx.addIssue({ code: 'custom', path: ['metrics'], message: `A report contains at most ${REPORT_METRIC_LIMIT} metrics.` });
   const ids = report.metrics.map(metric => metric.id).filter(Boolean);
   if (new Set(ids).size !== ids.length) ctx.addIssue({ code: 'custom', path: ['metrics'], message: 'Widget IDs must be unique.' });
 });

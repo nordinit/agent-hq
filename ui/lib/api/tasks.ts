@@ -35,6 +35,14 @@ getTasks: (projectId?: number, workflowId?: number, filters?: { origin_task_id?:
   const q = qs.toString();
   return apiFetch<Task[]>(`/api/v1/tasks${q ? `?${q}` : ''}`);
 },
+/** Newest tasks matching statuses and task types; the API caps limit at 500. */
+getTaskList: (params: { projectId?: number; workflowId?: number; statuses: string[]; taskTypes?: string[]; limit: number }) => {
+  const qs = new URLSearchParams({ status: params.statuses.join(','), limit: String(params.limit) });
+  if (params.projectId) qs.set('project_id', String(params.projectId));
+  if (params.workflowId) qs.set('workflow_id', String(params.workflowId));
+  if (params.taskTypes?.length) qs.set('task_type', params.taskTypes.join(','));
+  return apiFetch<{ tasks: Task[]; total: number }>(`/api/v1/tasks?${qs.toString()}`);
+},
 searchTasks: (q: string, excludeId?: number, filters?: { project_id?: number | null; workflow_id?: number | null }) => {
   const qs = new URLSearchParams({ q });
   if (excludeId != null) qs.set('exclude_id', String(excludeId));

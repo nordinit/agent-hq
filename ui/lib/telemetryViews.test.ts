@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { availableTelemetryDisplays, sortedTelemetryGroups, telemetryDimensionLabel, telemetryGroupLabel, telemetryScopeConflict, telemetryScopeConflictMessage, telemetryTimeSeries, telemetryWidgetQuery } from './telemetryViews.ts';
+import { availableTelemetryDisplays, sortedTelemetryGroups, telemetryDimensionLabel, telemetryGroupLabel, telemetryScopeConflict, telemetryScopeConflictMessage, telemetryTimeSeries, telemetryWidgetQuery, telemetryCreatedWithin } from './telemetryViews.ts';
 import { buildTelemetryDefinition, newTelemetryGuide, telemetryGuideFromDefinition } from './telemetryBuilder.ts';
 import { telemetryGuideSelectionIssue } from './telemetryBuilderOptions.ts';
 import { metricAttributionIssues } from './telemetry-contracts/requirements.ts';
@@ -59,4 +59,18 @@ test('dashboard scope conflicts name both sides so an incompatible metric is exp
   assert.deepEqual(conflict,{key:'workflow_id',own:115,dashboard:114});
   assert.equal(telemetryScopeConflictMessage(conflict!,named),'This metric is limited to workflow Development, but this dashboard only covers workflow Lead Generation. Remove the block, or use a dashboard without that filter.');
   assert.match(telemetryScopeConflictMessage(telemetryScopeConflict({task_type:'ops'},{task_type:'lead_search'})!),/task type ops.*task type lead_search/);
+});
+
+test('a dashboard time range limits current snapshots to records created inside it, keeping saved filters',()=>{
+  const widget:TelemetryWidget={metric_revision_id:'r1',view:{filter:{field:'status',op:'eq',value:'closed'}}};
+  const window={from:'2026-11-22T00:00:00.000Z',to:'2026-11-24T00:00:00.000Z',timezone:'UTC'};
+  assert.deepEqual(telemetryWidgetQuery(widget,count,{},window).filter,widget.view!.filter);
+  const query=telemetryWidgetQuery(widget,count,{},{...window,snapshotCohort:true});
+  assert.deepEqual(query.filter,{all:[{field:'status',op:'eq',value:'closed'},{all:[{field:'created_at',op:'gte',value:window.from},{field:'created_at',op:'lt',value:window.to}]}]});
+  assert.equal(query.from,undefined);
+  assert.equal(telemetryCreatedWithin(),undefined);
+  assert.deepEqual(telemetryCreatedWithin(window.from),{all:[{field:'created_at',op:'gte',value:window.from}]});
+  const historical={...count,time_basis:'event_occurred_at' as const,grain:'event' as const};
+  const history=telemetryWidgetQuery({metric_revision_id:'r2'},historical,{},{...window,snapshotCohort:true});
+  assert.equal(history.filter,undefined);assert.equal(history.from,window.from);
 });

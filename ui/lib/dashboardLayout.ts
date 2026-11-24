@@ -1,5 +1,5 @@
-import type { DashboardBlock, DashboardColumn, DashboardDocument, DashboardDraft, DashboardOperation, DashboardSection } from './dashboardTypes.ts';
-import type { Scalar, TelemetryResult } from './telemetryTypes.ts';
+import type { DashboardBlock, DashboardColumn, DashboardDocument, DashboardDraft, DashboardOperation, DashboardRange, DashboardSection } from './dashboardTypes.ts';
+import type { Scalar, TelemetryResult, TelemetryScope } from './telemetryTypes.ts';
 import { createClientId } from './clientId.ts';
 
 export const dashboardId = createClientId;
@@ -9,6 +9,19 @@ export const operationLabels: Record<DashboardOperation, string> = {
   completed_runs: 'Completed runs · last 24h', tokens: 'Tokens · last 24h', failed_runs: 'Failed runs · last 24h',
   failures: 'Recent failures', completed_tasks: 'Completed tasks · last 24h', links: 'Quick links',
 };
+/** Pages pin at most this many metric sources (the API enforces the same limit). */
+export const DASHBOARD_METRIC_LIMIT = 30;
+export const dashboardRangeLabels: Record<DashboardRange, string> = { '24h': 'Last 24 hours', '48h': 'Last 48 hours', '7d': 'Last 7 days', '30d': 'Last 30 days' };
+const rangeMs: Record<DashboardRange, number> = { '24h': 86_400_000, '48h': 172_800_000, '7d': 604_800_000, '30d': 2_592_000_000 };
+/** The concrete window a relative range covers when the page loads at `now`. */
+export function resolveDashboardRange(range: DashboardRange, now = Date.now()): { from: string; to: string } {
+  return { from: new Date(now - rangeMs[range]).toISOString(), to: new Date(now).toISOString() };
+}
+/** The tasks a task-list block asks for: its own filters, narrowed to the page's project, workflow and task type. */
+export function taskListRequest(block: Extract<DashboardBlock, { type: 'task_list' }>, scope: TelemetryScope) {
+  return { projectId: scope.project_id, workflowId: block.workflow_id ?? scope.workflow_id, statuses: block.statuses,
+    taskTypes: block.task_types?.length ? block.task_types : scope.task_type ? [scope.task_type] : undefined, limit: block.limit ?? 10 };
+}
 export function dashboardSection(title: string, blocks: DashboardBlock[] = [], count = 1): DashboardSection {
   const columns: DashboardColumn[] = Array.from({ length: count }, () => ({ id: dashboardId(), width: 12 / count, blocks: [] }));
   blocks.forEach((block, index) => columns[index % count].blocks.push(block));

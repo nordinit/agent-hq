@@ -1,4 +1,4 @@
-import type { GroupResult, MetricDefinition, Scalar, TelemetryCatalog, TelemetryDisplay, TelemetryQuery, TelemetryQueryResponse, TelemetryResult, TelemetryScope, TelemetryView, TelemetryWidget } from './telemetryTypes.ts';
+import type { GroupResult, MetricDefinition, Predicate, Scalar, TelemetryCatalog, TelemetryDisplay, TelemetryQuery, TelemetryQueryResponse, TelemetryResult, TelemetryScope, TelemetryView, TelemetryWidget } from './telemetryTypes.ts';
 
 export const telemetryDisplays: {value: TelemetryDisplay; label: string}[] = [
   {value:'card',label:'Number'}, {value:'bar',label:'Horizontal bars'}, {value:'table',label:'Table'},
@@ -76,13 +76,23 @@ export function telemetryScopeValueLabel(key: keyof typeof SCOPE_FILTERS, value:
 export function telemetryScopeConflictMessage(conflict: TelemetryScopeConflict, catalog?: TelemetryCatalog|null): string {
   return `This metric is limited to ${telemetryScopeValueLabel(conflict.key,conflict.own,catalog)}, but this dashboard only covers ${telemetryScopeValueLabel(conflict.key,conflict.dashboard,catalog)}. Remove the block, or use a dashboard without that filter.`;
 }
-export function telemetryWidgetQuery(widget: TelemetryWidget, definition: MetricDefinition, scope: TelemetryScope, window: {from?:string;to?:string;timezone?:string} = {}): TelemetryQuery {
+/**
+ * Current snapshots have no occurrence time, so a page time range limits them to the records
+ * created inside it (a creation cohort). Returns the predicate, or undefined without a range.
+ */
+export function telemetryCreatedWithin(from?: string, to?: string): Predicate | undefined {
+  const bounds: Predicate[] = [...(from ? [{field:'created_at',op:'gte',value:from} as Predicate] : []), ...(to ? [{field:'created_at',op:'lt',value:to} as Predicate] : [])];
+  return bounds.length ? {all:bounds} : undefined;
+}
+export function telemetryWidgetQuery(widget: TelemetryWidget, definition: MetricDefinition, scope: TelemetryScope, window: {from?:string;to?:string;timezone?:string;snapshotCohort?:boolean} = {}): TelemetryQuery {
   // The server intersects these requested filters with the immutable metric scope.
   const view=widget.view??{};
   const conflict=telemetryScopeConflict(view.scope,scope);
   if(conflict) throw new Error(telemetryScopeConflictMessage(conflict));
+  const cohort=definition.time_basis==='current'&&window.snapshotCohort?telemetryCreatedWithin(view.from??window.from,view.to??window.to):undefined;
+  const filter=cohort&&view.filter?{all:[view.filter as Predicate,cohort]}:cohort??view.filter;
   return {metric_revision_id:widget.metric_revision_id,scope:{...scope,...view.scope,include_archived:scope.include_archived===false||view.scope?.include_archived===false?false:view.scope?.include_archived??scope.include_archived},timezone:view.timezone??window.timezone??'UTC',
-    group_by:view.group_by??definition.group_by??[],bucket:view.bucket===undefined?definition.bucket??null:view.bucket,filter:view.filter,
+    group_by:view.group_by??definition.group_by??[],bucket:view.bucket===undefined?definition.bucket??null:view.bucket,filter,
     ...(definition.time_basis==='current'?{}:{from:view.from??window.from,to:view.to??window.to})};
 }
 export function telemetryResponseResults(response: TelemetryQueryResponse): TelemetryResult[] {

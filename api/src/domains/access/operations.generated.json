@@ -9387,7 +9387,7 @@
       "mapping": "source_client_methods"
     },
     "agent_hq_save_telemetry_dashboard": {
-      "source_contract_digest": "37d52d7564a8165182e0a22c14730ec359009ab7c724f667958bbedbc7f2906f",
+      "source_contract_digest": "b6bd85578915c8dd196841baa354de9edbdc6921874e3bc286ffc2054d85367f",
       "methods": [
         "POST"
       ],
@@ -9400,7 +9400,7 @@
       "mapping": "source_client_methods"
     },
     "agent_hq_save_telemetry_metric": {
-      "source_contract_digest": "37d52d7564a8165182e0a22c14730ec359009ab7c724f667958bbedbc7f2906f",
+      "source_contract_digest": "b6bd85578915c8dd196841baa354de9edbdc6921874e3bc286ffc2054d85367f",
       "methods": [
         "POST"
       ],
@@ -9413,7 +9413,7 @@
       "mapping": "source_client_methods"
     },
     "agent_hq_save_telemetry_profile": {
-      "source_contract_digest": "37d52d7564a8165182e0a22c14730ec359009ab7c724f667958bbedbc7f2906f",
+      "source_contract_digest": "b6bd85578915c8dd196841baa354de9edbdc6921874e3bc286ffc2054d85367f",
       "methods": [
         "POST"
       ],
@@ -9426,7 +9426,7 @@
       "mapping": "source_client_methods"
     },
     "agent_hq_save_telemetry_report": {
-      "source_contract_digest": "37d52d7564a8165182e0a22c14730ec359009ab7c724f667958bbedbc7f2906f",
+      "source_contract_digest": "b6bd85578915c8dd196841baa354de9edbdc6921874e3bc286ffc2054d85367f",
       "methods": [
         "POST"
       ],

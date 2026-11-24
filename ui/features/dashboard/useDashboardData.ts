@@ -1,17 +1,19 @@
 'use client';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { api, type CompletedRecentTask, type DashboardStats } from '@/lib/api';
+import { api, type CompletedRecentTask, type DashboardStats, type Task } from '@/lib/api';
 import { telemetryClient } from '@/lib/api/telemetry';
-import { dashboardBlocks } from '@/lib/dashboardLayout';
+import { dashboardBlocks, resolveDashboardRange, taskListRequest } from '@/lib/dashboardLayout';
 import { telemetryResponseResults, telemetryWidgetQuery } from '@/lib/telemetryViews';
-import type { DashboardDocument } from '@/lib/dashboardTypes';
+import type { DashboardDocument, DashboardRange } from '@/lib/dashboardTypes';
 import type { MetricDefinition, TelemetryMetric, TelemetryQuery, TelemetryResult, TelemetryScope } from '@/lib/telemetryTypes';
 import { createTelemetryRecoveryGate } from '@/lib/telemetryRecovery';
 import { beginDashboardRefresh, finishDashboardMetric, type DashboardMetricSnapshot, type DashboardMetricState } from '@/lib/dashboardMetricState';
 
 export type { DashboardMetricState } from '@/lib/dashboardMetricState';
-export interface DashboardOperations { stats?: DashboardStats; tasks?: CompletedRecentTask[]; statsError?: string; tasksError?: string; busy: boolean }
-export function useDashboardData(page: DashboardDocument, metrics: TelemetryMetric[], scope: TelemetryScope, window: { from?: string; to?: string; timezone: string }, refresh: number) {
+export interface DashboardTaskList { tasks?: Task[]; total?: number; error?: string; busy: boolean }
+export interface DashboardOperations { stats?: DashboardStats; tasks?: CompletedRecentTask[]; statsError?: string; tasksError?: string; busy: boolean; taskLists?: Record<string, DashboardTaskList> }
+export interface DashboardWindow { from?: string; to?: string; range?: DashboardRange; timezone: string }
+export function useDashboardData(page: DashboardDocument, metrics: TelemetryMetric[], scope: TelemetryScope, window: DashboardWindow, refresh: number) {
   const [snapshot, setSnapshot] = useState<DashboardMetricSnapshot>({ requestKey: '', data: {} });
   const [operations, setOperations] = useState<DashboardOperations>({ busy: false });
   const recoverRef = useRef<(bindingId: string, queryId: string, manual?: boolean) => Promise<boolean>>(async () => false);
@@ -72,10 +74,13 @@ export function useDashboardData(page: DashboardDocument, metrics: TelemetryMetr
     };
     const load = async () => {
       type Prepared = { id: string; definition: MetricDefinition; query: TelemetryQuery };
+      // A relative range is resolved now, so each load or refresh covers the latest window.
+      const resolved = input.window.range ? { ...resolveDashboardRange(input.window.range), timezone: input.window.timezone } : input.window;
+      const queryWindow = { ...resolved, snapshotCohort: Boolean(resolved.from || resolved.to) };
       const prepared = await Promise.all(input.bindings.map(async binding => {
         try {
           const definition = await definitionFor(binding);
-          return { id: binding.id, definition, query: telemetryWidgetQuery(binding, definition, input.scope, input.window) };
+          return { id: binding.id, definition, query: telemetryWidgetQuery(binding, definition, input.scope, queryWindow) };
         } catch (cause) {
           if (!controller.signal.aborted) setData(current => ({ ...current, [binding.id]: { error: cause instanceof Error ? cause.message : 'Could not load this metric.', busy: false } }));
           return undefined;
@@ -122,6 +127,22 @@ export function useDashboardData(page: DashboardDocument, metrics: TelemetryMetr
     const debounce = setTimeout(() => { void load(); }, 250);
     return () => { clearTimeout(debounce); controller.abort(); };
   }, [requestKey, metrics, refresh]);
+  const taskListKey = JSON.stringify(dashboardBlocks(page).flatMap(block => block.type === 'task_list' ? [[block.id, taskListRequest(block, scope)]] : []));
+  const [taskLists, setTaskLists] = useState<Record<string, DashboardTaskList>>({});
+  useEffect(() => {
+    const requests = JSON.parse(taskListKey) as [string, ReturnType<typeof taskListRequest>][];
+    if (!requests.length) { setTaskLists({}); return; }
+    let active = true;
+    setTaskLists(current => Object.fromEntries(requests.map(([id]) => [id, { ...current[id], busy: true }])));
+    for (const [id, request] of requests) {
+      void api.getTaskList(request).then(page => {
+        if (active) setTaskLists(current => ({ ...current, [id]: { tasks: page.tasks, total: page.total, busy: false } }));
+      }, (cause: unknown) => {
+        if (active) setTaskLists(current => ({ ...current, [id]: { ...current[id], busy: false, error: cause instanceof Error ? cause.message : 'Could not load these tasks.' } }));
+      });
+    }
+    return () => { active = false; };
+  }, [taskListKey, refresh]);
   const needsOperations = dashboardBlocks(page).some(block => block.type === 'operation');
   const project = scope.project_id;
   const invalidOperationalScope = Boolean(scope.workflow_id || scope.workflow_type || scope.task_type);
@@ -136,5 +157,5 @@ export function useDashboardData(page: DashboardDocument, metrics: TelemetryMetr
     });
     return () => { active = false; };
   }, [needsOperations, project, invalidOperationalScope, refresh]);
-  return { data, operations, recover };
+  return { data, operations: { ...operations, taskLists }, recover };
 }
