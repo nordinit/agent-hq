@@ -34,7 +34,7 @@ Red means a task is waiting on that check now. Amber means work routed to the ag
 - For an agent without `host.execute`, reviewing **Allowed to run on this machine** offers **Allow it to run**, and reviewing a setup offers **Also allow it to run on this machine**. Both add the permission to the agent's current permissions; they never replace them.
 - **Stop routing it here** opens the routing page's rules for that agent and workflow. Turn them off there if the agent shouldn't work in that workflow.
 
-The drawer says when approving one check won't start the agent's tasks on its own, and names what else is still needed.
+Every setting in the drawer says what it is, why it needs your approval, and where it is changed, with a link there. Settings saved as code read in words first, with the exact value a click away; for example an environment setup of `{"mode": "off"}` reads "Off: nothing runs before the agent starts". A workflow's setup is set on the workflow, so it is the same for every agent in it, but each agent is approved separately; the drawer names the agents it is already approved for. The drawer also says when approving one check won't start the agent's tasks on its own, and names what else is still needed.
 
 **Approve** approves exactly what the drawer showed you. If the setup changes again before you select it, nothing is approved and the page asks you to review the new change. Only the operator can approve here; an agent's key can't.
 

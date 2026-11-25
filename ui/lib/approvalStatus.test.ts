@@ -46,6 +46,9 @@ test('an agent with approved work and one unapproved routed workflow is not show
   const poc = reviewer.workflows[1];
   assert.equal(routesSentence('Reviewer', poc), '5 routing rules send Reviewer tasks here when they reach blocked, deployed, failed, review or uat review.');
   assert.equal(workflowExplanation(reviewer, poc), 'Never approved for Reviewer. No task is waiting on it, so nothing is blocked today.');
+  // Another agent already has this workflow's setup approved: say so, since the setup is the same.
+  assert.equal(workflowExplanation(reviewer, poc, ['Producer']),
+    'Never approved for Reviewer. It is approved for Producer: the setup is the same for every agent in this workflow, but each agent needs its own approval. No task is waiting on it, so nothing is blocked today.');
 });
 
 test('a check a task is waiting on is shown as blocking it', () => {

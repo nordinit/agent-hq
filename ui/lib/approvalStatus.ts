@@ -119,14 +119,29 @@ export function routesSentence(agentName: string, check: WorkflowCheck): string 
     : `${rules} ${agentName} tasks here.`;
 }
 
-export function workflowExplanation(entry: AgentApprovals, check: WorkflowCheck): string {
+/** "James", "James and Casper", "James, Casper and 2 others". */
+export function joinNames(names: string[]): string {
+  if (names.length <= 1) return names[0] ?? '';
+  if (names.length === 2) return `${names[0]} and ${names[1]}`;
+  if (names.length === 3) return `${names[0]}, ${names[1]} and ${names[2]}`;
+  return `${names[0]}, ${names[1]} and ${names.length - 2} others`;
+}
+
+/**
+ * `approvedFor` names the other agents this workflow's current setup is approved for: the setup
+ * is the workflow's, so it is the same for all of them, but each agent is approved separately.
+ */
+export function workflowExplanation(entry: AgentApprovals, check: WorkflowCheck, approvedFor: string[] = []): string {
   const name = entry.agent.name;
   if (check.state === 'approved') return `Approved for ${name}, so its tasks here start normally.`;
-  if (check.holds.length > 0) return `${plural(check.holds.length, 'task')} here can't start until you review this setup.`;
+  const elsewhere = check.state === 'not_approved' && approvedFor.length > 0
+    ? ` It is approved for ${joinNames(approvedFor)}: the setup is the same for every agent in this workflow, but each agent needs its own approval.`
+    : '';
+  if (check.holds.length > 0) return `${plural(check.holds.length, 'task')} here can't start until you review this setup.${elsewhere}`;
   if (check.state === 'changed_since_approval') {
     return `Changed after you approved it: ${changeSummary(check) || 'see the details'}. The next task here waits for you.`;
   }
-  return `Never approved for ${name}. No task is waiting on it, so nothing is blocked today.`;
+  return `Never approved for ${name}.${elsewhere} No task is waiting on it, so nothing is blocked today.`;
 }
 
 /** What else must pass before the agent's tasks can start, besides the check being approved. */

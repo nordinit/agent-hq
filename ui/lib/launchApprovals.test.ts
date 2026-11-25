@@ -56,4 +56,9 @@ test('the review drawer shows what changed and approves exactly what was reviewe
   assert.match(drawer, /const \[alsoAllow, setAlsoAllow\] = useState\(false\)/);
   assert.match(drawer, /const granting = target\.kind === 'permission' \|\| \(!entry\.host_execute && alsoAllow\)/);
   assert.match(drawer, /Approving this alone won’t start its tasks/);
+  // Every setting says what it is, why it needs approval, its value in words, and where it is changed.
+  assert.match(drawer, /const guide = fieldGuide\(change, context\)/);
+  assert.match(drawer, /Why it needs your approval:/);
+  assert.match(drawer, /describeValue\(path, value\)/);
+  assert.match(drawer, /Change it: \{guide\.where\.label\}/);
 });

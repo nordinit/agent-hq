@@ -17,6 +17,7 @@ import {
   workflowStatus,
   type CellStatus,
 } from '@/lib/approvalStatus';
+import { describeValue, fieldGuide, type FieldContext } from '@/lib/approvalFields';
 import { StatusChip } from './HowApprovalsWork';
 
 export type ApprovalTarget = { kind: 'permission' } | { kind: 'setup'; check: SetupCheck | WorkflowCheck };
@@ -31,27 +32,51 @@ function isWorkflow(check: SetupCheck | WorkflowCheck): check is WorkflowCheck {
   return check.resource_kind === 'workflow_setup';
 }
 
-function ChangeRow({ change, firstApproval }: { change: ProfileChange; firstApproval: boolean }) {
+/** A setting's value: in plain words when its saved form is code or JSON, with the exact value a click away. */
+function ValueBlock({ path, value, tone }: { path: string; value: string | null; tone: 'before' | 'after' | 'only' }) {
+  const plain = describeValue(path, value);
+  const color = tone === 'before' ? 'text-slate-400' : tone === 'after' ? 'text-amber-100' : 'text-slate-200';
+  const raw = <pre className={`mt-1 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded bg-slate-950 p-2 text-xs ${color}`}>{value ?? '(empty)'}</pre>;
+  if (!plain) return raw;
+  return <div>
+    <p className={`whitespace-pre-line rounded bg-slate-950 p-2 text-sm ${color}`}>{plain}</p>
+    {value !== null && <details className="mt-1 text-xs text-slate-500">
+      <summary className="cursor-pointer select-none hover:text-slate-300">Exact value</summary>
+      {raw}
+    </details>}
+  </div>;
+}
+
+function ChangeRow({ change, firstApproval, context }: { change: ProfileChange; firstApproval: boolean; context: FieldContext }) {
+  const guide = fieldGuide(change, context);
   return <li className="rounded-lg border border-slate-700 bg-slate-900/60 p-3">
-    <p className="text-sm text-slate-200">
+    <p className="text-sm text-slate-100">
       <span className="font-medium">{change.label}</span>
       {!firstApproval && <span className="ml-2 text-xs text-slate-400">{CHANGE_LABELS[change.change]}</span>}
     </p>
-    {change.note && <p className="mt-1 text-xs text-slate-400">{change.note}</p>}
+    <p className="mt-1 text-xs text-slate-300">{guide.what}</p>
+    <p className="mt-1 text-xs text-slate-400"><span className="font-medium text-slate-300">Why it needs your approval:</span> {guide.why}</p>
+    {change.note && <p className="mt-2 text-xs text-slate-400">{change.note}</p>}
     {!change.note && (firstApproval ? (
-      change.after && <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded bg-slate-950 p-2 text-xs text-slate-200">{change.after}</pre>
+      <div className="mt-2">
+        <p className="text-[11px] uppercase tracking-wide text-slate-500">You would approve</p>
+        <ValueBlock path={change.path} value={change.after} tone="only" />
+      </div>
     ) : (
       <div className="mt-2 grid gap-2 md:grid-cols-2">
         <div>
           <p className="text-[11px] uppercase tracking-wide text-slate-500">Approved</p>
-          <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded bg-slate-950 p-2 text-xs text-slate-400">{change.before ?? '(empty)'}</pre>
+          <ValueBlock path={change.path} value={change.before} tone="before" />
         </div>
         <div>
           <p className="text-[11px] uppercase tracking-wide text-slate-500">Now</p>
-          <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded bg-slate-950 p-2 text-xs text-amber-100">{change.after ?? '(empty)'}</pre>
+          <ValueBlock path={change.path} value={change.after} tone="after" />
         </div>
       </div>
     ))}
+    {guide.where && <p className="mt-2 text-xs">
+      <Link href={guide.where.href} className="text-amber-300 hover:underline">Change it: {guide.where.label}</Link>
+    </p>}
   </li>;
 }
 
@@ -63,9 +88,11 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 }
 
 /** Review one check for one agent, and approve exactly what is shown. */
-export function ApprovalDrawer({ entry, target, onClose, onApproved }: {
+export function ApprovalDrawer({ entry, target, approvedFor = [], onClose, onApproved }: {
   entry: AgentApprovals;
   target: ApprovalTarget;
+  /** Other agents the reviewed workflow's current setup is approved for. */
+  approvedFor?: string[];
   onClose: () => void;
   onApproved: (message: string) => void;
 }) {
@@ -89,10 +116,11 @@ export function ApprovalDrawer({ entry, target, onClose, onApproved }: {
   const what = target.kind === 'permission'
     ? `Whether Agent HQ may start ${name} on this machine at all. With it, ${name} can start its runtime and run commands here, as your user account.`
     : workflow
-      ? `How tasks in ${workflow.workflow.name} prepare their workspace for ${name}: which repository it checks out, how it may use it, and the setup commands it runs before it starts.`
-      : `Everything that decides how ${name} behaves: its instructions, skills, model, runtime settings and the credentials it uses.`;
+      ? `How tasks in ${workflow.workflow.name} prepare their workspace for ${name}: which repository it gets, how it gets it, and the commands that run before it starts. These are set on the workflow, so every agent in it gets the same setup, but each agent needs its own approval.`
+      : `Everything that decides how ${name} behaves: its instructions, skills, model, runtime settings and the credentials it uses. These are set on ${name}'s agent page.`;
+  const context: FieldContext = { agentId: entry.agent.id, agentName: name, workflowId: workflow?.workflow.id, workflowName: workflow?.workflow.name };
   const why = target.kind === 'permission' ? permissionExplanation(entry)
-    : workflow ? `${routesSentence(name, workflow)} ${workflowExplanation(entry, workflow)}` : setupExplanation(entry);
+    : workflow ? `${routesSentence(name, workflow)} ${workflowExplanation(entry, workflow, approvedFor)}` : setupExplanation(entry);
   const holds = target.kind === 'permission' ? entry.host_execute_holds : check!.holds;
   const firstApproval = check?.state === 'not_approved';
   const approvable = target.kind === 'permission' ? !entry.host_execute : Boolean(check?.digest && !check.error && check.state !== 'approved');
@@ -150,8 +178,13 @@ export function ApprovalDrawer({ entry, target, onClose, onApproved }: {
 
         {check && check.state !== 'approved' && <Section title={firstApproval ? 'What you would approve' : 'What changed since you approved it'}>
           {check.error && <p className="flex items-start gap-2 text-red-300"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />This setup can’t be approved until this is fixed: {check.error}</p>}
+          <p className="text-xs text-slate-400">
+            {firstApproval
+              ? 'Each setting below is what Agent HQ would run with once you approve it, with what it is and why it needs your approval.'
+              : 'Each setting that differs from what you approved, with what it is and why it needs your approval.'}
+          </p>
           {check.changes.length > 0
-            ? <ul className="space-y-2">{check.changes.map(change => <ChangeRow key={change.path} change={change} firstApproval={firstApproval} />)}</ul>
+            ? <ul className="space-y-2">{check.changes.map(change => <ChangeRow key={change.path} change={change} firstApproval={firstApproval} context={context} />)}</ul>
             : !check.error && <p className="text-xs text-slate-500">No setting has a value yet.</p>}
         </Section>}
 

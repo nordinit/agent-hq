@@ -78,7 +78,11 @@ function CheckRow({ name, sub, status, explanation, holds, children }: {
 }
 
 /** The expanded row: every check for one agent, with a plain reason and the action that fits. */
-function AgentChecks({ entry, onReview }: { entry: AgentApprovals; onReview: (target: ApprovalTarget) => void }) {
+function AgentChecks({ entry, approvedFor, onReview }: {
+  entry: AgentApprovals;
+  approvedFor: (workflowId: number, agentId: number) => string[];
+  onReview: (target: ApprovalTarget) => void;
+}) {
   const name = entry.agent.name;
   return <div className="rounded-lg border border-slate-700 bg-slate-900/70">
     <table className="w-full text-sm">
@@ -105,7 +109,7 @@ function AgentChecks({ entry, onReview }: { entry: AgentApprovals; onReview: (ta
         </CheckRow>
         {entry.workflows.map(check => <CheckRow key={check.workflow.id} name={`Workflow: ${check.workflow.name}`}
           sub={check.workflow.project_name ? `Project ${check.workflow.project_name}` : null} status={workflowStatus(check)}
-          explanation={`${routesSentence(name, check)} ${workflowExplanation(entry, check)}`} holds={check.holds}>
+          explanation={`${routesSentence(name, check)} ${workflowExplanation(entry, check, approvedFor(check.workflow.id, entry.agent.id))}`} holds={check.holds}>
           {check.state !== 'approved'
             ? <>
               <Button size="sm" variant="primary" onClick={() => onReview({ kind: 'setup', check })}>Review</Button>
@@ -178,6 +182,11 @@ export default function ApprovalsPage() {
   const shown = view === 'attention' ? attention : inProject;
   const stuckTasks = new Set(inProject.flatMap(entry => entry.holds.map(hold => hold.task_id))).size;
   const reviewed = review ? (entries ?? []).find(entry => entry.agent.id === review.agentId) ?? null : null;
+  // The setup is the workflow's, so naming who already has it approved explains why one agent is
+  // listed and another isn't.
+  const approvedFor = useCallback((workflowId: number, agentId: number) => (entries ?? [])
+    .filter(entry => entry.agent.id !== agentId && entry.workflows.some(check => check.workflow.id === workflowId && check.state === 'approved'))
+    .map(entry => entry.agent.name), [entries]);
 
   function toggle(agentId: number) {
     setExpanded(current => {
@@ -279,7 +288,7 @@ export default function ApprovalsPage() {
                 </tr>
                 {open && <tr className="border-b border-slate-700/60 bg-slate-900/40">
                   <td colSpan={5} className="px-3 py-3">
-                    <AgentChecks entry={entry} onReview={target => setReview({ agentId: entry.agent.id, target })} />
+                    <AgentChecks entry={entry} approvedFor={approvedFor} onReview={target => setReview({ agentId: entry.agent.id, target })} />
                   </td>
                 </tr>}
               </Fragment>;
@@ -289,7 +298,9 @@ export default function ApprovalsPage() {
       </div>
     </div>}
 
-    {review && reviewed && <ApprovalDrawer entry={reviewed} target={review.target} onClose={() => setReview(null)}
+    {review && reviewed && <ApprovalDrawer entry={reviewed} target={review.target}
+      approvedFor={review.target.kind === 'setup' && review.target.check.resource_kind === 'workflow_setup' ? approvedFor(review.target.check.resource_id, reviewed.agent.id) : []}
+      onClose={() => setReview(null)}
       onApproved={text => { setReview(null); setMessage(text); void load(); }} />}
   </div>;
 }
