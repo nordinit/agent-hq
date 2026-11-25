@@ -7,7 +7,7 @@ The API serves the self-hosted OpenAPI document from:
 
 The in-product API console lives at Settings > API (`/settings/api`). Legacy `/docs` traffic redirects there.
 
-The document is written by hand in `api/src/openapi/document.ts`. A proposed convention for generating it from route-local Zod schemas was not adopted; it is kept in [archive/openapi-schema-backed-convention.md](archive/openapi-schema-backed-convention.md).
+The document is written by hand in `api/src/openapi/document.ts`. A proposed convention for generating it from route-local Zod schemas was not adopted.
 
 The document covers a public subset of the API. Internal callback hooks, logs, browser controls, telemetry, artifact file access, credential registries, gateway tokens, and other deferred route groups stay out of the published spec until their auth, redaction, and examples are approved.
 

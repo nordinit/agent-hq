@@ -2,10 +2,13 @@ import {execFileSync} from 'node:child_process';
 import fs from 'node:fs';
 // These tests exercise immutable historical schemas and the detector must name
 // the forbidden term. Applied SQL migrations are outside the runtime roots.
+// migrationRunner.ts lists the folded migrations by their original file names,
+// which databases recorded with their checksums, so those names cannot change.
 const exceptions=new Set([
   'scripts/check-workflow-terminology.mjs',
   'api/src/db/pg/migration19TenantOwnership.test.ts',
   'api/src/db/pg/migration32WorkflowTerminology.test.ts',
+  'api/src/db/pg/migrationRunner.ts',
 ]);
 // Agent contracts are rendered into every dispatch, so a stale placeholder there
 // reaches agents verbatim.

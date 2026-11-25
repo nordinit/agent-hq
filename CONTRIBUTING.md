@@ -2,11 +2,14 @@
 
 Thanks for contributing. Agent HQ is a task-routing and agent-orchestration system, so changes should optimize for predictable behavior, clear state transitions, and operator visibility.
 
+Everyone who takes part is expected to follow the [Code of Conduct](CODE_OF_CONDUCT.md).
+
 ## Before you start
 
 - Search existing issues and pull requests before opening a new one.
 - Keep changes scoped. Small, reviewable PRs are easier to validate in this repo than broad mixed refactors.
 - If the change affects workflow semantics, routing, or transcripts, include tests.
+- If users will notice the change, add a line under `[Unreleased]` in [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Local development
 
