@@ -121,13 +121,14 @@ describe('operator edits approve what they change', () => {
 
     const listed = await call('GET', `/execution/approvals?agent_id=${id}`);
     expect(listed.status).toBe(200);
-    const [pending] = listed.body.agents;
-    expect(pending.profiles).toEqual([expect.objectContaining({
+    const [entry] = listed.body.agents;
+    expect(entry.needs_attention).toBe(true);
+    expect(entry.setup).toEqual(expect.objectContaining({
       resource_kind: 'agent_runtime',
       state: 'changed_since_approval',
       changes: [expect.objectContaining({ path: 'job_instructions', before: 'Build it.', after: 'Changed by an agent.' })],
-    })]);
-    const approval = { agent_id: id, profiles: [{ resource_kind: 'agent_runtime', resource_id: id, digest: pending.profiles[0].digest }] };
+    }));
+    const approval = { agent_id: id, profiles: [{ resource_kind: 'agent_runtime', resource_id: id, digest: entry.setup.digest }] };
 
     // An agent may not approve changes, even one whose key can edit agents.
     const byAgent = await call('POST', '/execution/approvals', approval, 'agent');
@@ -138,7 +139,10 @@ describe('operator edits approve what they change', () => {
     const approved = await call('POST', '/execution/approvals', approval);
     expect(approved.status).toBe(200);
     expect(await refusal(id)).toBeNull();
-    expect((await call('GET', `/execution/approvals?agent_id=${id}`)).body.agents).toEqual([]);
+    expect((await call('GET', `/execution/approvals?agent_id=${id}`)).body.agents).toEqual([expect.objectContaining({
+      needs_attention: false,
+      setup: expect.objectContaining({ state: 'approved', changes: [] }),
+    })]);
   });
 
   it('keeps agents approved when the operator edits or assigns a skill', async () => {

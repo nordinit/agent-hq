@@ -15,14 +15,28 @@ Changes you make in the UI, or with the operator token from the CLI or API, are 
 
 When Agent HQ refuses to start an agent, no run exists, so the reason goes on the task instead. The task card shows **Can't start**, and the task page says why: the agent isn't allowed to run on this machine, its setup was never approved, or its setup (or the workflow's setup) changed after it was approved. The task also gets one note saying so, and another only if the reason changes. Agent HQ keeps trying about every 12 seconds and starts the task on the first check after the problem is fixed.
 
-**Review and approve** on the task opens **Approvals** (also in the sidebar). It lists every agent that can't start, or whose approved setup changed, with:
+**Review and approve** on the task opens **Approvals** (also in the sidebar) with that agent's row open. The page starts with **How approvals work**, which explains the three checks Agent HQ makes before it starts an agent on a task, and a colour legend. Close it once you know it; the page remembers.
 
-- the tasks it couldn't start and why;
-- what changed since the last approval, shown as the approved value next to the current one (secrets and credentials show only that they changed);
-- for a setup that was never approved, what you would approve;
-- **Allow it to run on this machine**, when the agent lacks `host.execute`. This adds the permission to the agent's current permissions; it never replaces them.
+The grid has one row per agent and one column per check:
 
-**Approve** approves exactly what the page showed you. If the setup changes again before you select it, nothing is approved and the page asks you to review the new change. Only the operator can approve here; an agent's key can't.
+| Column | What it checks |
+| --- | --- |
+| Allowed to run | The agent has `host.execute`, so Agent HQ may start it on this machine at all. |
+| Agent setup | Its instructions, skills, model, runtime settings and credentials match what you approved. |
+| Workflow setups | For each workflow a routing rule sends the agent work in, that workflow's repository and setup commands are approved for this agent. |
+| Tasks | Tasks that can't start right now because a check failed. |
+
+Red means a task is waiting on that check now. Amber means work routed to the agent would wait, though nothing is waiting yet. Green passes. Grey fails but nothing is routed there, so nothing waits on it. Approval is per agent and per workflow, so an agent can work normally in one workflow while another workflow routed to it is not approved; it shows amber, not red.
+
+**Needs attention** (the default) shows agents with a red or amber check; **All agents** shows the rest too, and **Project** narrows either view. Select a row to see each check with a plain reason and what you can do:
+
+- **Review** opens the check beside the grid: what it is, why it is listed, and for a setup the approved value next to the current one (secrets and credentials show only that they changed), or everything you would approve if it was never approved.
+- For an agent without `host.execute`, reviewing **Allowed to run on this machine** offers **Allow it to run**, and reviewing a setup offers **Also allow it to run on this machine**. Both add the permission to the agent's current permissions; they never replace them.
+- **Stop routing it here** opens the routing page's rules for that agent and workflow. Turn them off there if the agent shouldn't work in that workflow.
+
+The drawer says when approving one check won't start the agent's tasks on its own, and names what else is still needed.
+
+**Approve** approves exactly what the drawer showed you. If the setup changes again before you select it, nothing is approved and the page asks you to review the new change. Only the operator can approve here; an agent's key can't.
 
 **Review and approve executable revisions** on this page still works on one revision at a time, by kind and ID, for tools and MCP servers as well.
 

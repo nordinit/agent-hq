@@ -10,7 +10,7 @@ import { fetchAgentTools } from '../runtimes/toolInjection';
 import { executionReadiness } from '../domains/execution/readiness';
 import { fetchEffectiveAgentMcpRows } from '../domains/teams/effectiveCapabilities';
 import { reviewSnapshot } from '../domains/execution/review';
-import { approveReviewed, listPendingApprovals } from '../domains/execution/pendingApprovals';
+import { approveReviewed, listApprovals } from '../domains/execution/pendingApprovals';
 import { OPERATOR_ACTOR } from '../lib/operatorActor';
 const router = Router();
 const kind = z.enum(['tool', 'mcp_server', 'agent_runtime', 'workflow_setup']);
@@ -23,11 +23,11 @@ router.get('/operations', handle(async (req, res) => {
     res.json({ operations: operations.slice(offset, offset + limit), total: operations.length, limit, offset, has_more: offset + limit < operations.length });
 }));
 router.get('/readiness', handle(async (req, res) => res.json(await executionReadiness(getDb(), await resolveTenantIdFromRequest(getDb(), req)))));
-// Agents that cannot start or whose setup changed since approval, with what changed.
+// Every enabled agent with where it stands on each check made before it starts, and what changed.
 router.get('/approvals', handle(async (req, res) => {
     const { agent_id } = z.object({ agent_id: z.coerce.number().int().positive().optional() }).strict().parse(req.query);
     const db = getDb();
-    res.json({ agents: await listPendingApprovals(db, await resolveTenantIdFromRequest(db, req), { agentId: agent_id }) });
+    res.json({ agents: await listApprovals(db, await resolveTenantIdFromRequest(db, req), { agentId: agent_id }) });
 }));
 // Approves exactly what the operator reviewed; a setup that changed since then is refused with 409.
 router.post('/approvals', handle(async (req, res) => {

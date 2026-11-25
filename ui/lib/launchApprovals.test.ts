@@ -10,6 +10,8 @@ const banner = read('components', 'LaunchHoldBanner.tsx');
 const detail = read('features', 'tasks', 'TaskDetailPanel.tsx');
 const board = read('features', 'tasks', 'TaskBoardComponents.tsx');
 const page = read('features', 'approvals', 'ApprovalsPage.tsx');
+const drawer = read('features', 'approvals', 'ApprovalDrawer.tsx');
+const explainer = read('features', 'approvals', 'HowApprovalsWork.tsx');
 const client = read('lib', 'api', 'approvals.ts');
 const sidebar = read('components', 'Sidebar.tsx');
 
@@ -21,14 +23,37 @@ test('a task Agent HQ refused to start says why and links to the approval', () =
   assert.match(board, /task\.launch_hold && <span[^>]*title=\{task\.launch_hold\.reason\}>Can&apos;t start<\/span>/);
 });
 
-test('the approvals page shows what changed and approves exactly what was reviewed', () => {
-  assert.match(client, /getPendingApprovals:[\s\S]*\/api\/v1\/execution\/approvals/);
+test('the approvals page is a grid of every agent against each check', () => {
+  assert.match(client, /getApprovals:[\s\S]*\/api\/v1\/execution\/approvals/);
   assert.match(client, /approvePending:[\s\S]*method: 'POST'/);
-  assert.match(page, /Changed since you approved it/);
-  assert.match(page, /Never approved: this is what you would approve/);
-  assert.match(page, />Approved<\/p>[\s\S]*>Now<\/p>/);
-  assert.match(page, /digest: profile\.digest!/);
-  // host.execute is granted only when the operator ticks it.
-  assert.match(page, /useState\(false\)[\s\S]*grant_host_execute: !entry\.host_execute && allowRun/);
+  for (const column of ['Agent', 'Allowed to run', 'Agent setup', 'Workflow setups', 'Tasks']) {
+    assert.match(page, new RegExp(`<ColumnHeaderLabel label="${column}" description=\\{COLUMN_HELP\\.`));
+  }
+  // Agents needing attention by default, with every agent one click away.
+  assert.match(page, /useState<View>\('attention'\)/);
+  assert.match(page, /Needs attention \(\$\{attention\.length\}\)/);
+  assert.match(page, /All agents \(\$\{inProject\.length\}\)/);
+  // A task's "Review and approve" link opens that agent's row.
+  assert.match(page, /new Set\(linkedAgentId \? \[linkedAgentId\] : \[\]\)/);
+  // Stopping routing is a link to the agent's rules for that workflow, not an action here.
+  assert.match(page, /<Link href=\{routingRulesHref\(check\.workflow\.id, entry\.agent\.id\)\}/);
   assert.match(sidebar, /\{ href: '\/approvals', label: 'Approvals', icon: ShieldCheck \}/);
+});
+
+test('the page explains approvals before asking for one', () => {
+  assert.match(explainer, /How approvals work/);
+  for (const check of ['Allowed to run here', 'Agent setup approved', 'Workflow setup approved']) assert.match(explainer, new RegExp(check));
+  assert.match(explainer, /Approval is per agent and per workflow/);
+  assert.match(explainer, /What the colours mean/);
+});
+
+test('the review drawer shows what changed and approves exactly what was reviewed', () => {
+  assert.match(drawer, /What changed since you approved it/);
+  assert.match(drawer, /What you would approve/);
+  assert.match(drawer, />Approved<\/p>[\s\S]*>Now<\/p>/);
+  assert.match(drawer, /digest: check\.digest!/);
+  // host.execute is granted only for the permission itself, or when the operator ticks it.
+  assert.match(drawer, /const \[alsoAllow, setAlsoAllow\] = useState\(false\)/);
+  assert.match(drawer, /const granting = target\.kind === 'permission' \|\| \(!entry\.host_execute && alsoAllow\)/);
+  assert.match(drawer, /Approving this alone won’t start its tasks/);
 });

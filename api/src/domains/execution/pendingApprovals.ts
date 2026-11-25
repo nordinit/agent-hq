@@ -26,26 +26,56 @@ export interface ProfileChange {
   note?: string;
 }
 
-export interface PendingProfile {
+/** A task Agent HQ could not start, and why. */
+export interface ApprovalHold {
+  task_id: number;
+  task_title: string;
+  reason_code: string;
+  reason: string;
+  last_refused_at: string;
+}
+
+/**
+ * One setup Agent HQ checks before it starts the agent: the agent's own setup, or a workflow's
+ * repository and environment setup for this agent.
+ */
+export interface SetupCheck {
   resource_kind: ProfileKind;
   resource_id: number;
   resource_name: string;
-  state: 'not_approved' | 'changed_since_approval';
+  state: 'approved' | 'not_approved' | 'changed_since_approval';
   /** The setup Approve approves. Approving fails if the setup changes again before then. */
   digest: string | null;
   approved_revision_id: string | null;
+  /** What differs from the approved setup; for a setup never approved, everything it holds. */
   changes: ProfileChange[];
   /** Set when the current setup cannot be approved, for example a missing dependency file. */
   error: string | null;
+  /** Tasks that could not start because of this setup. */
+  holds: ApprovalHold[];
 }
 
-export interface PendingAgent {
-  agent: { id: number; name: string; project_id: number | null; runtime_type: string | null };
+export interface WorkflowCheck extends SetupCheck {
+  workflow: { id: number; name: string; project_id: number | null; project_name: string | null };
+  /** The enabled routing rules that send this agent work in this workflow. */
+  routes: { count: number; statuses: string[] };
+}
+
+/** Where an agent stands on each check Agent HQ makes before it starts the agent on a task. */
+export interface AgentApprovals {
+  agent: { id: number; name: string; project_id: number | null; project_name: string | null; runtime_type: string | null };
+  /** Allowed to run on this machine: the host.execute permission. */
   host_execute: boolean;
+  /** Tasks that could not start because the agent may not run on this machine. */
+  host_execute_holds: ApprovalHold[];
   /** An enabled routing rule sends tasks to this agent. */
   routed: boolean;
-  holds: Array<{ task_id: number; task_title: string; reason_code: string; reason: string; last_refused_at: string }>;
-  profiles: PendingProfile[];
+  /** A task can't start, a setup changed since approval, or routed work would be refused. */
+  needs_attention: boolean;
+  /** Every task this agent could not start. */
+  holds: ApprovalHold[];
+  setup: SetupCheck;
+  workflows: WorkflowCheck[];
 }
 
 const FIELD_LABELS: Record<string, string> = {
@@ -149,42 +179,44 @@ export function profileChanges(kind: ProfileKind, approved: Row | null, current:
   return changes;
 }
 
-async function pendingProfile(db: Db, tenantId: number, agentId: number, kind: ProfileKind, resourceId: number, name: string): Promise<PendingProfile | null> {
+async function setupCheck(db: Db, tenantId: number, agentId: number, kind: ProfileKind, resourceId: number, name: string): Promise<SetupCheck> {
   const bound = await findBoundRevision(db, tenantId, agentId, kind, resourceId);
+  const base = {
+    resource_kind: kind,
+    resource_id: resourceId,
+    resource_name: name,
+    approved_revision_id: bound?.id == null ? null : String(bound.id),
+    holds: [] as ApprovalHold[],
+  };
   let current: Row;
   try {
     current = await resourceSnapshot(db, tenantId, kind, resourceId);
   } catch (error) {
     return {
-      resource_kind: kind, resource_id: resourceId, resource_name: name,
-      state: bound ? 'changed_since_approval' : 'not_approved', digest: null,
-      approved_revision_id: bound?.id == null ? null : String(bound.id), changes: [],
+      ...base, state: bound ? 'changed_since_approval' : 'not_approved', digest: null, changes: [],
       error: error instanceof Error ? error.message : String(error),
     };
   }
   const digest = executableDigest(current);
-  if (bound && bound.digest === digest) return null;
+  if (bound && bound.digest === digest) return { ...base, state: 'approved', digest, changes: [], error: null };
   return {
-    resource_kind: kind,
-    resource_id: resourceId,
-    resource_name: name,
+    ...base,
     state: bound ? 'changed_since_approval' : 'not_approved',
     digest,
-    approved_revision_id: bound?.id == null ? null : String(bound.id),
     changes: profileChanges(kind, bound ? decode(bound.snapshot) as Row : null, current),
     error: null,
   };
 }
 
 /**
- * Agents that cannot start, or whose setup changed since it was approved, with what changed.
- * An agent is listed when a task could not start on it, when its approved setup changed, or when
- * tasks are routed to it but it may not run yet.
+ * Every enabled agent in an active project, with where it stands on each check Agent HQ makes
+ * before starting it on a task: allowed to run on this machine, its own setup approved, and the
+ * setup of each workflow routed to it approved for it.
  */
-export async function listPendingApprovals(db: Db, tenantId: number, options: { agentId?: number } = {}): Promise<PendingAgent[]> {
-  const agents = await db.all<{ id: number; name: string; project_id: number | null; runtime_type: string | null; host_execute: number | boolean }>(`
-    SELECT a.id, a.name, a.project_id, a.runtime_type,
-      EXISTS(SELECT 1 FROM agent_mcp_capability_policies p WHERE p.agent_id = a.id AND p.capability_key = 'host.execute' AND p.enabled = 1) AS host_execute
+export async function listApprovals(db: Db, tenantId: number, options: { agentId?: number } = {}): Promise<AgentApprovals[]> {
+  const agents = await db.all<{ id: number; name: string; project_id: number | null; project_name: string | null; runtime_type: string | null; host_execute: number | boolean }>(`
+    SELECT a.id, a.name, a.project_id, p.name AS project_name, a.runtime_type,
+      EXISTS(SELECT 1 FROM agent_mcp_capability_policies c WHERE c.agent_id = a.id AND c.capability_key = 'host.execute' AND c.enabled = 1) AS host_execute
     FROM agents a
     LEFT JOIN projects p ON p.id = a.project_id
     WHERE a.tenant_id = ? AND a.enabled = 1 AND a.deleted_at IS NULL AND p.archived_at IS NULL
@@ -195,47 +227,97 @@ export async function listPendingApprovals(db: Db, tenantId: number, options: { 
 
   // The workflows each agent is routed to: a rule names its workflow, or covers every workflow of
   // its type in its project.
-  const routes = await db.all<{ agent_id: number; workflow_id: number; workflow_name: string }>(`
-    SELECT DISTINCT r.agent_id, w.id AS workflow_id, w.name AS workflow_name
+  const routes = await db.all<{ rule_id: number; agent_id: number; status: string | null; workflow_id: number; workflow_name: string; project_id: number | null; project_name: string | null }>(`
+    SELECT r.id AS rule_id, r.agent_id, r.status, w.id AS workflow_id, w.name AS workflow_name, w.project_id, p.name AS project_name
     FROM workflow_task_routing_rules r
     JOIN workflows w ON w.tenant_id = r.tenant_id
       AND (w.id = r.workflow_id OR (r.workflow_id IS NULL AND w.project_id = r.project_id AND w.workflow_type = r.workflow_type))
     LEFT JOIN projects p ON p.id = w.project_id
     WHERE r.tenant_id = ? AND r.enabled = 1 AND r.agent_id = ANY(?::bigint[]) AND p.archived_at IS NULL
-    ORDER BY w.id
+    ORDER BY w.id, r.id
   `, tenantId, agents.map((agent) => agent.id));
-  const workflowsByAgent = new Map<number, Array<{ id: number; name: string }>>();
-  for (const route of routes) {
-    const list = workflowsByAgent.get(Number(route.agent_id)) ?? [];
-    list.push({ id: Number(route.workflow_id), name: String(route.workflow_name) });
-    workflowsByAgent.set(Number(route.agent_id), list);
+  type Route = { workflow: WorkflowCheck['workflow']; rules: Set<number>; statuses: Set<string> };
+  const routesByAgent = new Map<number, Map<number, Route>>();
+  for (const row of routes) {
+    const byWorkflow = routesByAgent.get(Number(row.agent_id)) ?? new Map<number, Route>();
+    const workflowId = Number(row.workflow_id);
+    const route = byWorkflow.get(workflowId) ?? {
+      workflow: { id: workflowId, name: String(row.workflow_name), project_id: row.project_id == null ? null : Number(row.project_id), project_name: row.project_name ?? null },
+      rules: new Set<number>(),
+      statuses: new Set<string>(),
+    };
+    route.rules.add(Number(row.rule_id));
+    if (row.status) route.statuses.add(String(row.status));
+    byWorkflow.set(workflowId, route);
+    routesByAgent.set(Number(row.agent_id), byWorkflow);
   }
-  const holds = await listAgentLaunchHolds(db, tenantId, options.agentId);
+  const allHolds = await listAgentLaunchHolds(db, tenantId, options.agentId);
+  // A task can be held on a workflow no rule routes the agent to, for example one assigned to it
+  // directly. That workflow's setup still needs a place to be approved.
+  const unrouted = allHolds.filter((hold) => hold.resource_kind === 'workflow_setup'
+    && !routesByAgent.get(hold.agent_id)?.has(hold.resource_id));
+  if (unrouted.length > 0) {
+    const named = await db.all<{ id: number; name: string; project_id: number | null; project_name: string | null }>(`
+      SELECT w.id, w.name, w.project_id, p.name AS project_name
+      FROM workflows w LEFT JOIN projects p ON p.id = w.project_id
+      WHERE w.tenant_id = ? AND w.id = ANY(?::bigint[])
+    `, tenantId, [...new Set(unrouted.map((hold) => hold.resource_id))]);
+    const workflowsById = new Map(named.map((row) => [Number(row.id), row]));
+    for (const hold of unrouted) {
+      const row = workflowsById.get(hold.resource_id);
+      if (!row) continue;
+      const byWorkflow = routesByAgent.get(hold.agent_id) ?? new Map<number, Route>();
+      byWorkflow.set(hold.resource_id, {
+        workflow: { id: Number(row.id), name: String(row.name), project_id: row.project_id == null ? null : Number(row.project_id), project_name: row.project_name ?? null },
+        rules: new Set<number>(),
+        statuses: new Set<string>(),
+      });
+      routesByAgent.set(hold.agent_id, byWorkflow);
+    }
+  }
 
-  const result: PendingAgent[] = [];
+  const result: AgentApprovals[] = [];
   for (const agent of agents) {
     const id = Number(agent.id);
-    const profiles: PendingProfile[] = [];
-    const runtime = await pendingProfile(db, tenantId, id, 'agent_runtime', id, `${agent.name}'s setup`);
-    if (runtime) profiles.push(runtime);
-    for (const workflow of workflowsByAgent.get(id) ?? []) {
-      const setup = await pendingProfile(db, tenantId, id, 'workflow_setup', workflow.id, `Workflow "${workflow.name}" setup`);
-      if (setup) profiles.push(setup);
-    }
-    const agentHolds = holds.filter((hold) => hold.agent_id === id).map((hold) => ({
+    const agentHolds = allHolds.filter((hold) => hold.agent_id === id);
+    const brief = (hold: typeof agentHolds[number]): ApprovalHold => ({
       task_id: hold.task_id, task_title: hold.task_title, reason_code: hold.reason_code, reason: hold.reason, last_refused_at: hold.last_refused_at,
-    }));
+    });
+    // host.execute is checked before either setup, so that refusal belongs to the permission.
+    const heldBy = (kind: ProfileKind, resourceId: number) => agentHolds
+      .filter((hold) => hold.reason_code !== 'host_execute_missing' && hold.resource_kind === kind && hold.resource_id === resourceId)
+      .map(brief);
+
+    const setup = await setupCheck(db, tenantId, id, 'agent_runtime', id, `${agent.name}'s setup`);
+    setup.holds = heldBy('agent_runtime', id);
+    const workflows: WorkflowCheck[] = [];
+    for (const route of (routesByAgent.get(id) ?? new Map<number, Route>()).values()) {
+      const check = await setupCheck(db, tenantId, id, 'workflow_setup', route.workflow.id, route.workflow.name);
+      workflows.push({
+        ...check,
+        holds: heldBy('workflow_setup', route.workflow.id),
+        workflow: route.workflow,
+        routes: { count: route.rules.size, statuses: [...route.statuses].sort() },
+      });
+    }
     const hostExecute = agent.host_execute === true || Number(agent.host_execute) === 1;
-    const routed = (workflowsByAgent.get(id) ?? []).length > 0;
-    const changed = profiles.some((profile) => profile.state === 'changed_since_approval');
-    if (agentHolds.length === 0 && !changed && !(routed && (!hostExecute || profiles.length > 0)) && options.agentId == null) continue;
-    if (options.agentId != null && agentHolds.length === 0 && profiles.length === 0 && hostExecute) continue;
+    const routed = workflows.some((workflow) => workflow.routes.count > 0);
+    const checks = [setup, ...workflows];
+    const needsAttention = agentHolds.length > 0
+      || checks.some((check) => check.state === 'changed_since_approval')
+      || (routed && (!hostExecute || checks.some((check) => check.state !== 'approved')));
     result.push({
-      agent: { id, name: String(agent.name), project_id: agent.project_id == null ? null : Number(agent.project_id), runtime_type: agent.runtime_type },
+      agent: {
+        id, name: String(agent.name), project_id: agent.project_id == null ? null : Number(agent.project_id),
+        project_name: agent.project_name ?? null, runtime_type: agent.runtime_type,
+      },
       host_execute: hostExecute,
+      host_execute_holds: agentHolds.filter((hold) => hold.reason_code === 'host_execute_missing').map(brief),
       routed,
-      holds: agentHolds,
-      profiles,
+      needs_attention: needsAttention,
+      holds: agentHolds.map(brief),
+      setup,
+      workflows,
     });
   }
   return result;
