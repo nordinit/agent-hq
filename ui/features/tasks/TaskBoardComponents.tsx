@@ -25,6 +25,7 @@ export interface BoardTaskLink {
 
 export interface BoardTask {
   runtime_recovery?: import('@/lib/api').RuntimeRecovery | null;
+  launch_hold?: import('@/lib/api').LaunchHold | null;
   id: number;
   title: string;
   /** Not on board rows (GET /tasks/board); the full task carries it. */
@@ -342,6 +343,7 @@ export const TaskCard = memo(function TaskCard({ task, onClick, relationshipType
           <span className={`text-sm md:text-sm font-semibold leading-snug ${blocked ? 'text-orange-100' : 'text-white group-hover:text-amber-50'}`}>
             {task.title}
             {task.runtime_recovery && <span className="ml-2 text-xs text-amber-300">{task.runtime_recovery.state === 'attention' ? 'Recovery needs attention' : 'Recovering tools'}</span>}
+            {task.launch_hold && <span className="ml-2 text-xs text-amber-300" title={task.launch_hold.reason}>Can&apos;t start</span>}
             {task.recurring ? <span className="ml-1.5 text-xs text-slate-400" title="Recurring">🔁</span> : null}
           </span>
         </div>

@@ -2,6 +2,7 @@ import { type Db } from '../../db/adapter/types';
 import { hideArchivedProjectsCondition } from '../../lib/projectArchive';
 import { listConfiguredTerminalStatuses } from './terminality';
 import { TASK_RECURRENCE_SELECT, taskRecurrenceMetadata } from './recurrence';
+import { getLaunchHolds } from '../execution/launchHolds';
 
 /**
  * The task board's read model.
@@ -369,6 +370,8 @@ async function enrichBoardRows(db: Db, rows: Array<Record<string, unknown>>): Pr
   const recoveryLinks = recoveries.length === 0 ? [] : await db.all<{ recovery_id: number; task_id: number }>(
     'SELECT recovery_id, task_id FROM agent_mcp_recovery_tasks WHERE task_id = ANY(?::bigint[])', ids,
   );
+  // Launches Agent HQ refused because the agent may not run or its setup is not approved.
+  const launchHolds = await getLaunchHolds(db, ids);
 
   const blockersById = new Map<number, BoardTaskLink[]>();
   const blockingById = new Map<number, BoardTaskLink[]>();
@@ -438,6 +441,9 @@ async function enrichBoardRows(db: Db, rows: Array<Record<string, unknown>>): Pr
       latest_task_outcome: latestOutcome,
       active_agent_name: row.agent_name ?? null,
       runtime_recovery: runtimeRecovery,
+      launch_hold: launchHolds.has(id) && !(await terminalStatuses(workflowId, tenantId)).includes(String(row.status))
+        ? launchHolds.get(id)
+        : null,
       is_blocked: !taskIsTerminal && activeBlockerIds.size > 0,
       blockers: (blockersById.get(id) ?? []).map(blocker => ({ ...blocker, blocks_dispatch: activeBlockerIds.has(blocker.id) })),
       blocking: blockingById.get(id) ?? [],

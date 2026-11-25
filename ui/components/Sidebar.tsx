@@ -23,6 +23,7 @@ import {
   Settings,
   HelpCircle,
   Layers,
+  ShieldCheck,
   LogOut,
   MoreHorizontal,
   X,
@@ -33,6 +34,7 @@ import { Button } from '@/components/ui/button';
 const navItems = [
   { href: '/', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/agents', label: 'Agents', icon: Bot },
+  { href: '/approvals', label: 'Approvals', icon: ShieldCheck },
   { href: '/teams', label: 'Teams', icon: Users },
   { href: '/tasks', label: 'Tasks', icon: ClipboardList },
   { href: '/tasks/recurring', label: 'Recurring Tasks', icon: CalendarClock },
@@ -58,6 +60,7 @@ const mobilePrimaryNavItems = [
 ];
 
 const mobileOverflowNavItems = [
+  { href: '/approvals', label: 'Approvals', description: 'Agents that can’t start, and changes waiting for you', icon: ShieldCheck },
   { href: '/workflows', label: 'Workflows', description: 'Workflow boards and execution', icon: Rocket },
   { href: '/tasks/recurring', label: 'Recurring Tasks', description: 'Fixed-workflow task schedules', icon: CalendarClock },
   { href: '/workflow-definitions', label: 'Workflow Definitions', description: 'Workflow templates and outcomes', icon: Workflow },

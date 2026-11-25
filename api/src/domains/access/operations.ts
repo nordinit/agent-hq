@@ -65,6 +65,9 @@ export function sensitiveOperation(method: string, p: string, body: Record<strin
     if (p.startsWith('/execution')) {
         if (p === '/execution/readiness')
             return read(['permissions.manage']);
+        // The list shows agents' job instructions and setup changes; approving is operator-only in the route.
+        if (p === '/execution/approvals')
+            return method === 'GET' ? read(['permissions.manage']) : { requirements: ['permissions.manage', 'tools.publish', 'tools.assign', 'host.execute'], effect: 'permission_change' };
         if (method === 'GET' && (p === '/execution/presets' || p === '/execution/operations'))
             return read(['discovery.read_catalog']);
         if (method === 'GET' && p === '/execution/agent-tools')

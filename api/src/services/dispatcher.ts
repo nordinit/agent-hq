@@ -1,4 +1,5 @@
 import {requirePublishedProfile} from '../domains/execution/authority';
+import { clearLaunchHold, recordLaunchHold } from '../domains/execution/launchHolds';
 import { activeProjectPredicate } from '../lib/projectArchive';
 import fs from 'fs';
 import path from 'path';
@@ -1770,9 +1771,19 @@ export async function dispatchTaskToJob(
   candidateCount: number,
   ruleLabel?: string,
 ): Promise<boolean> {
-  // Check before workspace preparation, git commands, setup or runtime launch.
-  await requirePublishedProfile(db,job.agent_id,'agent_runtime',job.agent_id);
-  if(task.workflow_id!=null)await requirePublishedProfile(db,job.agent_id,'workflow_setup',task.workflow_id);
+  // Check before workspace preparation, git commands, setup or runtime launch. A refusal happens
+  // before any run exists, so it is recorded on the task for the task page and Approvals.
+  const checks: Array<['agent_runtime' | 'workflow_setup', number]> = [['agent_runtime', job.agent_id]];
+  if (task.workflow_id != null) checks.push(['workflow_setup', task.workflow_id]);
+  for (const [kind, resourceId] of checks) {
+    try {
+      await requirePublishedProfile(db, job.agent_id, kind, resourceId);
+    } catch (error) {
+      await recordLaunchHold(db, { taskId: task.id, agentId: job.agent_id, kind, resourceId, error });
+      throw error;
+    }
+  }
+  await clearLaunchHold(db, task.id);
   const routingReason = [
     `Priority: ${task.priority}`,
     task.blocking_count > 0 ? `Blocking ${task.blocking_count} task(s)` : null,

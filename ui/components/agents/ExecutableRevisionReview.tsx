@@ -1,5 +1,6 @@
 'use client';
 import { useState } from 'react';
+import Link from 'next/link';
 import { apiFetch } from '@/lib/api/http';
 
 type Revision = { id: string; resource_kind: string; resource_id: number; digest: string; published_at: string | null; revoked_at: string | null; snapshot?: unknown };
@@ -19,6 +20,7 @@ export function ExecutableRevisionReview({ agentId }: { agentId: number }) {
   async function load(id: string) { setRevision(await apiFetch<Revision>(`/api/v1/execution/revisions/${id}`)); setConfirmed(false); }
   return <details className="rounded-xl border border-slate-700 p-4 text-sm text-slate-300">
     <summary className="cursor-pointer font-medium">Review and approve executable revisions</summary>
+    <p className="mt-3">To see what changed and approve it in one step, use <Link href={`/approvals?agent=${agentId}`} className="text-amber-300 underline">Approvals</Link>. This panel works on one revision at a time.</p>
     <p className="mt-3">Draft changes do not replace published execution. Review the exact source, dependency pins and digest before approval. Publishing, binding and granting execution are separate actions.</p>
     <div className="mt-3 flex flex-wrap gap-2">
       <select aria-label="Executable kind" className="bg-slate-900 p-2" value={kind} onChange={e => { setKind(e.target.value); setRevision(null); }}>{['agent_runtime', 'workflow_setup', 'tool', 'mcp_server'].map(k => <option key={k}>{k}</option>)}</select>

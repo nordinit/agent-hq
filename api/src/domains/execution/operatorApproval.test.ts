@@ -13,6 +13,7 @@ import skillsRouter from '../../routes/skills';
 import workflowsRouter from '../../routes/workflows';
 import routingRouter from '../../routes/routing';
 import setupRouter from '../../routes/setup';
+import executionRouter from '../../routes/execution';
 import { requirePublishedProfile } from './authority';
 
 describe('operator edits approve what they change', () => {
@@ -40,6 +41,7 @@ describe('operator edits approve what they change', () => {
     app.use('/api/v1/workflows', workflowsRouter);
     app.use('/api/v1/routing', routingRouter);
     app.use('/api/v1/setup', setupRouter);
+    app.use('/api/v1/execution', executionRouter);
     await new Promise<void>((resolve) => {
       server = app.listen(0, '127.0.0.1', () => {
         base = `http://127.0.0.1:${(server.address() as { port: number }).port}/api/v1`;
@@ -111,6 +113,32 @@ describe('operator edits approve what they change', () => {
     expect(await refusal(id)).toMatch(/Execution profile changed/);
     const revisions = await getDb().all("SELECT created_by FROM executable_revisions WHERE resource_kind = 'agent_runtime' AND resource_id = ?", id);
     expect(revisions).toEqual([{ created_by: 'operator' }]);
+  });
+
+  it('lists an agent-key change with what changed, and only the operator can approve it', async () => {
+    const id = await createAgent();
+    expect((await call('PUT', `/agents/${id}`, { job_instructions: 'Changed by an agent.' }, 'agent')).status).toBe(200);
+
+    const listed = await call('GET', `/execution/approvals?agent_id=${id}`);
+    expect(listed.status).toBe(200);
+    const [pending] = listed.body.agents;
+    expect(pending.profiles).toEqual([expect.objectContaining({
+      resource_kind: 'agent_runtime',
+      state: 'changed_since_approval',
+      changes: [expect.objectContaining({ path: 'job_instructions', before: 'Build it.', after: 'Changed by an agent.' })],
+    })]);
+    const approval = { agent_id: id, profiles: [{ resource_kind: 'agent_runtime', resource_id: id, digest: pending.profiles[0].digest }] };
+
+    // An agent may not approve changes, even one whose key can edit agents.
+    const byAgent = await call('POST', '/execution/approvals', approval, 'agent');
+    expect(byAgent.status).toBe(403);
+    expect(await refusal(id)).toMatch(/Execution profile changed/);
+
+    expect((await call('POST', '/execution/approvals', { agent_id: id })).status).toBe(400);
+    const approved = await call('POST', '/execution/approvals', approval);
+    expect(approved.status).toBe(200);
+    expect(await refusal(id)).toBeNull();
+    expect((await call('GET', `/execution/approvals?agent_id=${id}`)).body.agents).toEqual([]);
   });
 
   it('keeps agents approved when the operator edits or assigns a skill', async () => {

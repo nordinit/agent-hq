@@ -53,6 +53,9 @@ now one consolidated schema; start 0.2.0 on a fresh database.
   runtime profile is a published revision bound to that agent. Edits made with the operator token
   publish and bind the new revision as they save; edits made with an agent's MCP key wait for
   review. Onboarding grants `host.execute` to the starter agents it creates and says so first.
+- A task Agent HQ refuses to start says why: the board shows **Can't start**, the task page gives the
+  reason, and **Approvals** lists each waiting change next to the approved setup, for the operator
+  to approve.
 - Dependencies are updated so that `npm audit` reports no known vulnerabilities in the API or UI.
 
 [Unreleased]: https://github.com/nordinit/agent-hq/compare/v0.2.0...HEAD

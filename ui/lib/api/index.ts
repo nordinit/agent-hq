@@ -2,6 +2,7 @@ export { apiFetch, getApiBase } from './http';
 export * from './types';
 export * from './dispatchContext';
 export * from './context';
+export * from './approvals';
 
 import { agentsClient } from './agents';
 import { dispatchContextClient } from './dispatchContext';
@@ -18,6 +19,7 @@ import { tasksClient } from './tasks';
 import { teamsClient } from './teams';
 import { workflowsClient } from './workflows';
 import { telemetryClient } from './telemetry';
+import { approvalsClient } from './approvals';
 
 export const api = {
   ...agentsClient,
@@ -35,4 +37,5 @@ export const api = {
   ...dispatchContextClient,
   ...contextClient,
   ...telemetryClient,
+  ...approvalsClient,
 };

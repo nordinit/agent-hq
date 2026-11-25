@@ -118,6 +118,23 @@ export interface InstanceRuntimeView {
   };
 }
 
+/** A launch Agent HQ refused because the agent may not run here or its setup is not approved. */
+export interface LaunchHold {
+  task_id: number;
+  agent_id: number;
+  agent_name: string | null;
+  resource_kind: 'agent_runtime' | 'workflow_setup';
+  resource_id: number;
+  reason_code: 'host_execute_missing' | 'tools_execute_missing' | 'not_assigned' | 'not_approved' | 'changed_since_approval' | 'dependency_changed' | 'integrity_failed' | 'other';
+  /** Plain-language reason. */
+  reason: string;
+  /** The refusal message itself. */
+  detail: string;
+  attempts: number;
+  first_refused_at: string;
+  last_refused_at: string;
+}
+
 export interface RuntimeRecovery {
   id: number; agent_id: number; state: 'recovering' | 'attention';
   started_at: string; deadline_at: string; attempts: number; last_error: string;
@@ -940,6 +957,7 @@ export interface TaskStatusOwner {
 
 export interface Task {
   runtime_recovery?: RuntimeRecovery | null;
+  launch_hold?: LaunchHold | null;
   id: number;
   title: string;
   description: string;

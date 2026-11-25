@@ -2,6 +2,7 @@ import { getDb } from '../../db/client';
 import { activeProjectPredicate, hideArchivedProjectsCondition } from '../../lib/projectArchive';
 import { listTaskStatusOwners } from './statusOwners';
 import { getTaskMcpRecovery } from '../../lib/mcpRecovery';
+import { getTaskLaunchHold } from '../execution/launchHolds';
 import { evaluateTaskIntegrity } from '../../lib/taskRelease';
 import { listConfiguredTerminalStatuses } from './terminality';
 import { parseCustomFields, resolveTaskFieldSchema } from './fields';
@@ -147,6 +148,7 @@ export async function enrichTask(task: TaskRecord): Promise<TaskRecord> {
   return {
     ...publicTask,
     runtime_recovery: await getTaskMcpRecovery(db, task),
+    launch_hold: await getTaskLaunchHold(db, id),
     ...await evaluateTaskIntegrity({ ...canonicalTask, ...unifiedCustomFields } as { status?: string | null; task_type?: string | null }, db),
     latest_task_outcome: latestTaskOutcome,
     changed_files: changedFiles,

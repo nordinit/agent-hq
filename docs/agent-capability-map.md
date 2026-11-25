@@ -11,7 +11,20 @@ Agent HQ starts an agent's runtime only when two things are true:
 
 Changes you make in the UI, or with the operator token from the CLI or API, are approved when you save them: creating or editing an agent, its skills, a skill it uses, its team, its credentials, a workflow's repository or environment setup, a routing rule, or a tool or MCP server assignment. Changes made with an agent's MCP key are never approved this way and wait for review. A save approves only what was already approved before it: if something else changed the agent since its last approval, your edit leaves that change waiting for review rather than approving it on your behalf.
 
-To review a change that is waiting, open **Review and approve executable revisions** on this page. Choose the kind (`agent_runtime` for the agent itself, with the agent's ID), select **Snapshot draft for review**, check the snapshot, confirm, then **Publish reviewed revision** and **Bind to this agent**.
+### When a task can't start
+
+When Agent HQ refuses to start an agent, no run exists, so the reason goes on the task instead. The task card shows **Can't start**, and the task page says why: the agent isn't allowed to run on this machine, its setup was never approved, or its setup (or the workflow's setup) changed after it was approved. The task also gets one note saying so, and another only if the reason changes. Agent HQ keeps trying about every 12 seconds and starts the task on the first check after the problem is fixed.
+
+**Review and approve** on the task opens **Approvals** (also in the sidebar). It lists every agent that can't start, or whose approved setup changed, with:
+
+- the tasks it couldn't start and why;
+- what changed since the last approval, shown as the approved value next to the current one (secrets and credentials show only that they changed);
+- for a setup that was never approved, what you would approve;
+- **Allow it to run on this machine**, when the agent lacks `host.execute`. This adds the permission to the agent's current permissions; it never replaces them.
+
+**Approve** approves exactly what the page showed you. If the setup changes again before you select it, nothing is approved and the page asks you to review the new change. Only the operator can approve here; an agent's key can't.
+
+**Review and approve executable revisions** on this page still works on one revision at a time, by kind and ID, for tools and MCP servers as well.
 
 ## Agent resolution
 

@@ -9,29 +9,12 @@ import { invokePublishedTool } from '../domains/execution/invoke';
 import { fetchAgentTools } from '../runtimes/toolInjection';
 import { executionReadiness } from '../domains/execution/readiness';
 import { fetchEffectiveAgentMcpRows } from '../domains/teams/effectiveCapabilities';
+import { reviewSnapshot } from '../domains/execution/review';
+import { approveReviewed, listPendingApprovals } from '../domains/execution/pendingApprovals';
+import { OPERATOR_ACTOR } from '../lib/operatorActor';
 const router = Router();
 const kind = z.enum(['tool', 'mcp_server', 'agent_runtime', 'workflow_setup']);
 const actor = (req: Request) => req.mcpIdentity?.auditActor ?? 'operator';
-function reviewSnapshot(value: any, key = ''): any {
-    if(value&&typeof value==='object'&&typeof value.$secret_ref==='string')return {$secret_ref:value.$secret_ref,digest:value.digest};
-    if (/(?:secret|token|password|credential|auth_header|api_key)/i.test(key))
-        return '[redacted]';
-    if (['env', 'headers'].includes(key) && value && typeof value === 'object')
-        return Object.fromEntries(Object.entries(value).map(([k,v]) => [k,v&&typeof v==='object'&&'$secret_ref' in v?reviewSnapshot(v):'[redacted; digest bound]']));
-    if (Array.isArray(value))
-        return value.map(v => reviewSnapshot(v));
-    if (value && typeof value === 'object')
-        return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, reviewSnapshot(v, k)]));
-    if (key === 'implementation_body' && typeof value === 'string') {
-        try {
-            return JSON.stringify(reviewSnapshot(JSON.parse(value)));
-        }
-        catch {
-            return value;
-        }
-    }
-    return value;
-}
 const handle = (fn: (req: Request, res: Response) => Promise<unknown>) => (req: Request, res: Response) => { void fn(req, res).catch(e => res.status(e instanceof z.ZodError ? 400 : e.status ?? 500).json({ code: e.code ?? 'execution_request_failed', error: e instanceof z.ZodError ? 'Invalid execution request.' : e.status ? e.message : 'Execution request failed.' })); };
 router.get('/presets', (_req, res) => res.json({ presets: ACCESS_PRESETS, automatic_grants: false }));
 router.get('/operations', handle(async (req, res) => {
@@ -40,6 +23,28 @@ router.get('/operations', handle(async (req, res) => {
     res.json({ operations: operations.slice(offset, offset + limit), total: operations.length, limit, offset, has_more: offset + limit < operations.length });
 }));
 router.get('/readiness', handle(async (req, res) => res.json(await executionReadiness(getDb(), await resolveTenantIdFromRequest(getDb(), req)))));
+// Agents that cannot start or whose setup changed since approval, with what changed.
+router.get('/approvals', handle(async (req, res) => {
+    const { agent_id } = z.object({ agent_id: z.coerce.number().int().positive().optional() }).strict().parse(req.query);
+    const db = getDb();
+    res.json({ agents: await listPendingApprovals(db, await resolveTenantIdFromRequest(db, req), { agentId: agent_id }) });
+}));
+// Approves exactly what the operator reviewed; a setup that changed since then is refused with 409.
+router.post('/approvals', handle(async (req, res) => {
+    if (req.apiCredential !== 'operator')
+        return res.status(403).json({ code: 'operator_required', error: 'Only the operator can approve from the approvals list.' });
+    const body = z.object({
+        agent_id: z.number().int().positive(),
+        grant_host_execute: z.boolean().default(false),
+        profiles: z.array(z.object({ resource_kind: z.enum(['agent_runtime', 'workflow_setup']), resource_id: z.number().int().positive(), digest: z.string().regex(/^[a-f0-9]{64}$/) }).strict()).max(50).default([]),
+    }).strict().parse(req.body);
+    if (!body.grant_host_execute && body.profiles.length === 0)
+        return res.status(400).json({ code: 'nothing_to_approve', error: 'Choose a setup to approve or grant host.execute.' });
+    const db = getDb();
+    return res.json(await approveReviewed(db, await resolveTenantIdFromRequest(db, req), OPERATOR_ACTOR, {
+        agentId: body.agent_id, grantHostExecute: body.grant_host_execute, profiles: body.profiles,
+    }));
+}));
 router.get('/revisions', handle(async (req, res) => {
     const tenant = await resolveTenantIdFromRequest(getDb(), req);
     const filter = z.object({ resource_kind: kind.optional(), resource_id: z.coerce.number().int().positive().optional(), limit: z.coerce.number().int().min(1).max(100).default(25) }).strict().parse(req.query);

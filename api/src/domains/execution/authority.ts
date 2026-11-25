@@ -5,9 +5,14 @@ import { fetchEffectiveAgentToolRows, fetchEffectiveAgentMcpRows } from '../team
 import { sealExecutableSecrets, resolveExecutableSecrets } from './secrets';
 export type ExecutableKind = 'tool' | 'mcp_server' | 'agent_runtime' | 'workflow_setup';
 type Row = Record<string, unknown>;
+/** Why a launch or call was refused, for the task page and the approvals list. */
+export type ExecutionDeniedReason = 'host_execute_missing' | 'tools_execute_missing' | 'not_assigned' | 'not_approved' | 'changed_since_approval' | 'dependency_changed' | 'integrity_failed' | 'other';
 export class ExecutionDenied extends Error {
     status = 403;
     code = 'execution_denied';
+    constructor(message?: string, readonly reason: ExecutionDeniedReason = 'other') {
+        super(message);
+    }
 }
 export function stable(value: unknown): string {
     if (Array.isArray(value))
@@ -104,7 +109,21 @@ export async function requireAgentExecutionCapability(db: Db, agentId: number, c
         enabled: number;
     }>('SELECT enabled FROM agent_mcp_capability_policies WHERE agent_id=? AND capability_key=?', agentId, capability);
     if (Number(row?.enabled) !== 1)
-        throw new ExecutionDenied(`Agent #${agentId} requires explicit ${capability}.`);
+        throw new ExecutionDenied(`Agent #${agentId} requires explicit ${capability}.`, capability === 'host.execute' ? 'host_execute_missing' : 'tools_execute_missing');
+}
+/**
+ * The published revision bound to an enabled agent for a resource, directly or through one of its
+ * teams; a direct binding wins. Checks no execution capability: approvedExecutable does.
+ */
+export async function findBoundRevision(db: Db, tenantId: number, agentId: number, kind: ExecutableKind, resourceId: number, revisionId?: string): Promise<Row | undefined> {
+    return db.get<Row>(`SELECT r.*, b.subject_kind AS bound_subject_kind, b.expires_at AS bound_expires_at FROM executable_revisions r JOIN execution_bindings b ON b.revision_id=r.id AND b.tenant_id=r.tenant_id
+    JOIN agents a ON a.id=? AND a.tenant_id=r.tenant_id AND a.enabled=1
+    WHERE r.tenant_id=? AND r.resource_kind=? AND r.resource_id=? AND r.published_at IS NOT NULL AND r.revoked_at IS NULL
+      AND b.enabled=1 AND (b.expires_at IS NULL OR b.expires_at>now()) AND (?::text IS NULL OR r.id=?)
+      AND ((b.subject_kind='agent' AND b.subject_id=a.id) OR (b.subject_kind='team' AND EXISTS(
+        SELECT 1 FROM team_members tm JOIN teams te ON te.id=tm.team_id AND te.tenant_id=r.tenant_id
+        WHERE tm.agent_id=a.id AND tm.team_id=b.subject_id AND tm.enabled=1 AND te.enabled=1 AND te.deleted_at IS NULL)))
+    ORDER BY CASE WHEN b.subject_kind='agent' THEN 0 ELSE 1 END,b.id LIMIT 1`, agentId, tenantId, kind, resourceId, revisionId ?? null, revisionId ?? null);
 }
 /** Always reload publication/binding state; no cached authorization survives revocation. */
 export async function approvedExecutable(db: Db, tenantId: number, agentId: number, kind: ExecutableKind, resourceId: number, revisionId?: string): Promise<Row> {
@@ -116,29 +135,22 @@ export async function approvedExecutable(db: Db, tenantId: number, agentId: numb
         const candidates = kind === 'tool' ? await fetchEffectiveAgentToolRows(db, agentId) : await fetchEffectiveAgentMcpRows(db, agentId);
         const candidate = candidates.find(row => Number(kind === 'tool' ? row.id : row.mcp_server_id) === resourceId);
         if (!candidate)
-            throw new ExecutionDenied('Executable or effective assignment is disabled or removed.');
+            throw new ExecutionDenied('Executable or effective assignment is disabled or removed.', 'not_assigned');
         const overrides = decode(candidate.overrides) as Row | null;
         const filters = ['tool_allowlist', 'enforce_tool_allowlist', 'allowed_tools', 'allowedTools', 'allowed_tool_names', 'allowedToolNames', 'toolAllowlist', 'mcp_tool_allowlist', 'mcpToolAllowlist', 'include_tools', 'includeTools'];
         if (overrides && typeof overrides === 'object' && Object.keys(overrides).some(key => !filters.includes(key)))
             throw new ExecutionDenied('Executable overrides must be published as a new revision.');
     }
-    const row = await db.get<Row>(`SELECT r.* FROM executable_revisions r JOIN execution_bindings b ON b.revision_id=r.id AND b.tenant_id=r.tenant_id
-    JOIN agents a ON a.id=? AND a.tenant_id=r.tenant_id AND a.enabled=1
-    WHERE r.tenant_id=? AND r.resource_kind=? AND r.resource_id=? AND r.published_at IS NOT NULL AND r.revoked_at IS NULL
-      AND b.enabled=1 AND (b.expires_at IS NULL OR b.expires_at>now()) AND (?::text IS NULL OR r.id=?)
-      AND ((b.subject_kind='agent' AND b.subject_id=a.id) OR (b.subject_kind='team' AND EXISTS(
-        SELECT 1 FROM team_members tm JOIN teams te ON te.id=tm.team_id AND te.tenant_id=r.tenant_id
-        WHERE tm.agent_id=a.id AND tm.team_id=b.subject_id AND tm.enabled=1 AND te.enabled=1 AND te.deleted_at IS NULL)))
-    ORDER BY CASE WHEN b.subject_kind='agent' THEN 0 ELSE 1 END,b.id LIMIT 1`, agentId, tenantId, kind, resourceId, revisionId ?? null, revisionId ?? null);
+    const row = await findBoundRevision(db, tenantId, agentId, kind, resourceId, revisionId);
     if (!row)
-        throw new ExecutionDenied('No active grant for this published executable revision.');
+        throw new ExecutionDenied('No active grant for this published executable revision.', 'not_approved');
     if (executableDigest(decode(row.snapshot)) !== row.digest)
-        throw new ExecutionDenied('Published executable integrity check failed.');
+        throw new ExecutionDenied('Published executable integrity check failed.', 'integrity_failed');
     try {
         checkDependencyPins((decode(row.snapshot) as any).dependency_pins);
     }
     catch {
-        throw new ExecutionDenied('Published executable dependency changed or is unavailable.');
+        throw new ExecutionDenied('Published executable dependency changed or is unavailable.', 'dependency_changed');
     }
     return { ...row, snapshot: decode(row.snapshot) };
 }
@@ -171,6 +183,6 @@ export async function requirePublishedProfile(db: Db, agentId: number, kind: 'ag
     const revision = await approvedExecutable(db, Number(agent.tenant_id), agentId, kind, resourceId);
     const current = await resourceSnapshot(db, Number(agent.tenant_id), kind, resourceId);
     if (executableDigest(current) !== revision.digest)
-        throw new ExecutionDenied('Execution profile changed; publish and bind the new revision before launching.');
+        throw new ExecutionDenied('Execution profile changed; publish and bind the new revision before launching.', 'changed_since_approval');
     return revision;
 }
