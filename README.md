@@ -1,12 +1,16 @@
 # Agent HQ
 
+![Agent HQ: a task is routed to a builder agent, passes an evidence gate, goes to a reviewer agent, and is done](docs/assets/agent-hq-social-preview.svg)
+
+[![CI](https://github.com/nordinit/agent-hq/actions/workflows/ci.yml/badge.svg)](https://github.com/nordinit/agent-hq/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/@nordinit/agent-hq)](https://www.npmjs.com/package/@nordinit/agent-hq)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 **Agent HQ is an open-source control plane for AI agents doing real work.**
 
 Route tasks to agents, enforce evidence gates, track runs, and automatically move work forward based on agent outcomes and external events.
 
 Agent HQ sits between your planning system and your AI agent runtimes. It gives every agent run structured context, deterministic workflow rules, verifiable handoffs, and operator visibility.
-
-![Agent HQ overview](docs/assets/agent-hq-social-preview.svg)
 
 ---
 
@@ -736,4 +740,6 @@ Task types, fields, statuses, outcomes, assignment rules, transitions, gates, an
 - CLI: [`cli/README.md`](cli/README.md)
 - Security: [`SECURITY.md`](SECURITY.md)
 - Contributing: [`CONTRIBUTING.md`](CONTRIBUTING.md)
+- Code of conduct: [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md)
+- Changelog: [`CHANGELOG.md`](CHANGELOG.md)
 - License: [`LICENSE`](LICENSE)
