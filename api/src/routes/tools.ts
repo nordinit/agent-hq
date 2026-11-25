@@ -7,6 +7,7 @@ import { resolveTenantIdFromRequest } from '../lib/tenantContext';
 import { isPostgresUniqueViolation } from '../lib/postgresErrors';
 
 import { requireNumericId } from '../lib/routeParams';
+import { OperatorApproval } from '../domains/execution/operatorApproval';
 
 const router = Router();
 // Rejects a non-numeric :id with a 404 before it reaches the database. Must be per-router:
@@ -130,6 +131,8 @@ router.post('/', async (req: Request, res: Response) => {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, tenantId, name, slug, description ?? '', implementation_type, implementation_body ?? '', input_schema ? JSON.stringify(input_schema) : '{}', permissions ?? 'read_only', tags ? JSON.stringify(tags) : '[]', enabled !== undefined ? (enabled ? 1 : 0) : 1);
 
+    // A tool the operator creates is published as created; assigning it binds it.
+    await (await OperatorApproval.begin(req, db, tenantId)).markCreated({ tools: [Number(result.lastInsertId)] }).finish();
     const created = await db.get(`SELECT * FROM tools WHERE id = ?`, result.lastInsertId);
     return res.status(201).json(created);
   } catch (err: any) {
@@ -156,6 +159,7 @@ router.put('/:id', async (req: Request, res: Response) => {
       input_schema, permissions, tags, enabled,
     } = req.body;
 
+    const approval = await OperatorApproval.begin(req, db, tenantId, { tools: [Number(req.params.id)] });
     await db.run(`
       UPDATE tools SET
         name = ?,
@@ -171,6 +175,7 @@ router.put('/:id', async (req: Request, res: Response) => {
       WHERE id = ? AND tenant_id = ?
     `, name ?? existing.name, slug ?? existing.slug, description ?? existing.description, implementation_type ?? existing.implementation_type, implementation_body ?? existing.implementation_body, input_schema !== undefined ? JSON.stringify(input_schema) : existing.input_schema, permissions ?? existing.permissions, tags !== undefined ? JSON.stringify(tags) : existing.tags, enabled !== undefined ? (enabled ? 1 : 0) : existing.enabled, req.params.id, tenantId);
 
+    await approval.finish();
     const updated = await db.get(`SELECT * FROM tools WHERE id = ? AND tenant_id = ?`, req.params.id, tenantId);
     return res.json(updated);
   } catch (err: any) {
@@ -362,6 +367,8 @@ agentToolsRouter.post('/', async (req: Request, res: Response) => {
       INSERT INTO agent_tool_assignments (agent_id, tool_id, overrides, enabled)
       VALUES (?, ?, ?, ?)
     `, agentId, tool_id, overrides ? JSON.stringify(overrides) : '{}', enabled !== undefined ? (enabled ? 1 : 0) : 1);
+    // The operator giving an agent a tool binds the tool's approved revision to the agent.
+    await (await OperatorApproval.begin(req, db, tenantId)).assign({ kind: 'agent', id: Number(agentId) }, 'tool', Number(tool_id)).finish();
 
     const created = await db.get(`
       SELECT ata.id as assignment_id,

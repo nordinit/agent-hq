@@ -8,6 +8,7 @@ import { getWorkflowDetail, getWorkflowMetrics, listWorkflowJobs, listWorkflows 
 import { resolveTenantIdFromRequest } from '../lib/tenantContext';
 import { columnExists as sharedColumnExists } from "../db/introspection";
 import { parseIdParam } from '../lib/routeParams';
+import { OperatorApproval } from '../domains/execution/operatorApproval';
 
 export { checkWorkflowCompletion };
 
@@ -113,7 +114,10 @@ router.post('/', async (req: Request, res: Response) => {
     if (Number.isInteger(projectId) && projectId > 0) {
       if (!await requireProjectVisibleForTenant(db, projectId, tenantId)) return res.status(404).json({ error: 'Project not found' });
     }
-    return res.status(201).json(await createWorkflow(db, { ...(req.body as Partial<Workflow>), tenant_id: tenantId } as Partial<Workflow>, extractActor(req)));
+    const created = await createWorkflow(db, { ...(req.body as Partial<Workflow>), tenant_id: tenantId } as Partial<Workflow>, extractActor(req));
+    // A workflow the operator creates starts with an approved setup; routing an agent to it binds it.
+    await (await OperatorApproval.begin(req, db, tenantId)).markCreated({ workflows: [Number((created as { id?: unknown }).id)] }).finish();
+    return res.status(201).json(created);
   } catch (err) {
     const typedErr = err as Error & { status?: number; body?: Record<string, unknown> };
     return res.status(typedErr.status ?? 500).json(typedErr.body ?? { error: typedErr.message });
@@ -132,7 +136,11 @@ router.put('/:id', async (req: Request, res: Response) => {
       const projectId = Number(body.project_id);
       if (!await requireProjectVisibleForTenant(db, projectId, tenantId)) return res.status(404).json({ error: 'Project not found' });
     }
-    return res.json(await updateWorkflow(db, Number(req.params.id), body, extractActor(req)));
+    // The workflow's repository and environment setup are approved per agent; an operator's edit re-approves them.
+    const approval = await OperatorApproval.begin(req, db, tenantId, { workflows: [Number(req.params.id)] });
+    const updated = await updateWorkflow(db, Number(req.params.id), body, extractActor(req));
+    await approval.finish();
+    return res.json(updated);
   } catch (err) {
     const typedErr = err as Error & { status?: number; body?: Record<string, unknown> };
     return res.status(typedErr.status ?? 500).json(typedErr.body ?? { error: typedErr.message });

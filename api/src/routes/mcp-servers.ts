@@ -5,6 +5,7 @@ import { isPostgresUniqueViolation } from '../lib/postgresErrors';
 import { redactMcpServerRow, restoreMaskedEnvValues } from '../lib/secretMasking';
 
 import { requireNumericId } from '../lib/routeParams';
+import { OperatorApproval } from '../domains/execution/operatorApproval';
 
 const router = Router();
 // Rejects a non-numeric :id with a 404 before it reaches the database. Must be per-router:
@@ -77,6 +78,8 @@ router.post('/', async (req: Request, res: Response) => {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, tenantId, name.trim(), slug.trim(), typeof description === 'string' ? description.trim() : '', transport === 'stdio' ? 'stdio' : 'stdio', command.trim(), normalizeJsonText(args, '[]'), normalizeJsonText(env, '{}'), typeof cwd === 'string' && cwd.trim() ? cwd.trim() : null, enabled !== undefined ? (enabled ? 1 : 0) : 1);
 
+    // An MCP server the operator creates is published as created; assigning it binds it.
+    await (await OperatorApproval.begin(req, db, tenantId)).markCreated({ mcpServers: [Number(result.lastInsertId)] }).finish();
     const created = await db.get('SELECT * FROM mcp_servers WHERE id = ?', result.lastInsertId);
     return res.status(201).json(redactMcpServerRow(created as Record<string, unknown>));
   } catch (err: any) {
@@ -108,6 +111,7 @@ router.put('/:id', async (req: Request, res: Response) => {
     // A value submitted as the mask this API returned for it means "unchanged".
     const nextEnv = env !== undefined ? restoreMaskedEnvValues(env, existing.env) : undefined;
 
+    const approval = await OperatorApproval.begin(req, db, tenantId, { mcpServers: [Number(req.params.id)] });
     await db.run(`
       UPDATE mcp_servers
       SET name = ?,
@@ -123,6 +127,7 @@ router.put('/:id', async (req: Request, res: Response) => {
       WHERE id = ? AND tenant_id = ?
     `, typeof name === 'string' ? name.trim() : existing.name, typeof slug === 'string' ? slug.trim() : existing.slug, typeof description === 'string' ? description.trim() : existing.description, transport === 'stdio' ? 'stdio' : existing.transport, typeof command === 'string' ? command.trim() : existing.command, args !== undefined ? normalizeJsonText(args, '[]') : existing.args, nextEnv !== undefined ? normalizeJsonText(nextEnv, '{}') : existing.env, cwd !== undefined ? (typeof cwd === 'string' && cwd.trim() ? cwd.trim() : null) : existing.cwd, enabled !== undefined ? (enabled ? 1 : 0) : existing.enabled, req.params.id, tenantId);
 
+    await approval.finish();
     const updated = await db.get('SELECT * FROM mcp_servers WHERE id = ? AND tenant_id = ?', req.params.id, tenantId);
     return res.json(redactMcpServerRow(updated as Record<string, unknown>));
   } catch (err: any) {
@@ -192,6 +197,8 @@ agentMcpServersRouter.post('/', async (req: Request, res: Response) => {
       INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id, overrides, enabled)
       VALUES (?, ?, ?, ?)
     `, agentId, mcp_server_id, normalizeJsonText(overrides, '{}'), enabled !== undefined ? (enabled ? 1 : 0) : 1);
+    // The operator giving an agent an MCP server binds the server's approved revision to the agent.
+    await (await OperatorApproval.begin(req, db, tenantId)).assign({ kind: 'agent', id: Number(agentId) }, 'mcp_server', Number(mcp_server_id)).finish();
 
     const created = await db.get(`
       SELECT ama.id AS assignment_id,

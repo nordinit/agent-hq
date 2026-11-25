@@ -57,6 +57,7 @@ import { resolveTenantIdFromRequest } from '../lib/tenantContext';
 import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../db/introspection";
 
 import { requireNumericId } from '../lib/routeParams';
+import { OperatorApproval } from '../domains/execution/operatorApproval';
 
 const router = Router();
 // Rejects a non-numeric :id with a 404 before it reaches the database. Must be per-router:
@@ -1073,6 +1074,7 @@ router.post('/provision-full', async (req: Request, res: Response) => {
           };
         }
 
+        const routedWorkflowIds = new Set<number>();
         const workflowRoutingSql = `
           INSERT INTO workflow_task_routing_rules (tenant_id, workflow_id, task_type, status, agent_id, priority)
           VALUES (?, ?, ?, ?, ?, ?)
@@ -1095,6 +1097,7 @@ router.post('/provision-full', async (req: Request, res: Response) => {
           for (const workflowId of targetWorkflowIds) {
             const result = await db.run(workflowRoutingSql, tenantId, workflowId, rule.task_type, rule.status, agentId, rule.priority ?? 0);
             createdRoutingRuleIds.push(Number(result.lastInsertId));
+            routedWorkflowIds.add(workflowId);
           }
         }
         report.routing = {
@@ -1135,8 +1138,16 @@ router.post('/provision-full', async (req: Request, res: Response) => {
           throw new Error((await skillResult).error ?? `${runtimeType} skill materialization failed`);
         }
 
-        // Provisioning creates drafts/assignments. New identities receive no execution
-        // authority or automatic publication; activation follows explicit review.
+        // Provisioning with the operator token approves the new agent's runtime profile and binds
+        // the approved revisions of the workflows, tools and MCP servers it was given. Provisioning
+        // with an MCP key leaves all of it for review. Neither grants execution authority: the
+        // agent still needs an explicit host.execute grant.
+        const approval = (await OperatorApproval.begin(req, db, tenantId)).markCreated({ agents: [agentId!] });
+        const subject = { kind: 'agent' as const, id: agentId! };
+        for (const workflowId of routedWorkflowIds) approval.assign(subject, 'workflow_setup', workflowId);
+        for (const toolId of toolIds) approval.assign(subject, 'tool', Number(toolId));
+        for (const mcpServerId of mcpServerIds) approval.assign(subject, 'mcp_server', Number(mcpServerId));
+        const approvalResult = await approval.finish();
         const mcpResult = {count:0,path:null,warnings:['MCP activation is held for executable publication, binding and explicit execution grants.']};
 
         report.capabilities = {
@@ -1147,7 +1158,8 @@ router.post('/provision-full', async (req: Request, res: Response) => {
             skill_materialization_count: (await skillResult).count,
             mcp_materialization_count: mcpResult.count,
             mcp_materialization_path: mcpResult.path ?? null,
-            execution_held_for_approval:true,
+            execution_held_for_approval: !approval.active,
+            approved_revisions: approvalResult.approved.map(({ kind, id, revision_id }) => ({ kind, id, revision_id })),
             tool_assignment_ids: createdToolAssignmentIds,
             mcp_assignment_ids: createdMcpAssignmentIds,
           },
@@ -1672,6 +1684,9 @@ router.post('/', async (req: Request, res: Response) => {
           maxRetries: max_retries ?? 3,
           sortRules: normalizeJsonArray(sort_rules),
         });
+    // An agent the operator creates starts with an approved runtime profile. It still needs an
+    // explicit host.execute grant before it can launch.
+    await (await OperatorApproval.begin(req, db, tenantId)).markCreated({ agents: [createdAgentId] }).finish();
 
     const agent = await selectAgentWithProject(db, createdAgentId, true) as Record<string, unknown>;
     if ((agent.runtime_type as string | null) === 'openclaw' && (agent.workspace_path as string | null)) {
@@ -1951,6 +1966,7 @@ router.put('/:id', async (req: Request, res: Response) => {
     }
     updateValues.push(req.params.id);
 
+    const approval = await OperatorApproval.begin(req, db, tenantId, { agents: [Number(agent.id)] });
     await db.run(`UPDATE agents SET ${updateClauses.join(', ')} WHERE id = ? AND tenant_id = ?`, ...updateValues, tenantId);
 
     // Track job_instructions changes for prompt effectiveness analytics (#586)
@@ -1968,10 +1984,12 @@ router.put('/:id', async (req: Request, res: Response) => {
       } catch { /* non-fatal */ }
     }
 
+    // An operator's edit approves the agent's new runtime profile; an MCP key's edit waits for review.
+    await approval.finish();
     const updated = await selectAgentWithProject(db, req.params.id, true) as Record<string, unknown>;
 
-    // Configuration edits remain drafts. Dispatch or an explicitly authorized sync
-    // materializes approved profiles; saving an agent never restarts a gateway.
+    // Saving an agent never restarts a gateway. Dispatch or an explicitly authorized sync
+    // materializes approved profiles.
     return res.json(parseAgentRuntimeConfig(updated));
   } catch (err) {
     return res.status(500).json({ error: String(err) });
@@ -2521,7 +2539,9 @@ router.post('/:id/skills', async (req: Request, res: Response) => {
     }
 
     const nextSkillNames = [...skillNames, skillName].sort((a, b) => a.localeCompare(b));
+    const approval = await OperatorApproval.begin(req, db, tenantId, { agents: [Number(agent.id)] });
     await db.run(`UPDATE agents SET skill_names = ? WHERE id = ?`, JSON.stringify(nextSkillNames), req.params.id);
+    await approval.finish();
 
     return res.status(201).json({
       ok: true,
@@ -2561,7 +2581,9 @@ router.delete('/:id/skills/:skillName', async (req: Request, res: Response) => {
     }
 
     const nextSkillNames = skillNames.filter((name) => name !== skillName);
+    const approval = await OperatorApproval.begin(req, db, tenantId, { agents: [Number(agent.id)] });
     await db.run(`UPDATE agents SET skill_names = ? WHERE id = ?`, JSON.stringify(nextSkillNames), req.params.id);
+    await approval.finish();
 
     return res.json({
       ok: true,

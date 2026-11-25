@@ -5,6 +5,7 @@ import { resolveTenantIdFromRequest } from '../lib/tenantContext';
 import { normalizeSkillPackagePath, parseSkillPackageFiles, type SkillPackageFile } from '../lib/skillPackage';
 import { isPostgresUniqueViolation } from '../lib/postgresErrors';
 import { isSafeSkillName, SKILL_NAME_RULE } from '../lib/skillNames';
+import { OperatorApproval } from '../domains/execution/operatorApproval';
 
 const router = Router();
 
@@ -121,11 +122,14 @@ router.post('/migrate-from-fs', async (req: Request, res: Response) => {
       } catch (error) {
         return res.status(400).json({ error: String((error as Error).message ?? error), skill: name });
       }
+      // Agents may already name a skill before it exists; importing it changes their runtime profile.
+      const approval = await OperatorApproval.begin(req, db, tenantId, { skills: [name] });
       const result = await db.run(insertSql, tenantId, name, item?.description ?? '', item?.content ?? '');
       if (result.changes > 0) {
         imported.push(name);
         if (result.lastInsertId === null) throw new Error(`Could not resolve the new skill id for ${name}`);
         await upsertSkillFiles(db, tenantId, result.lastInsertId, files);
+        await approval.finish();
       } else {
         skipped.push(name);
       }
@@ -196,7 +200,9 @@ router.put('/:name/file/*', async (req: Request, res: Response) => {
       SELECT id FROM skills WHERE tenant_id = ? AND name = ? LIMIT 1
     `, tenantId, name);
     if (!skill) return res.status(404).json({ error: 'Skill not found' });
+    const approval = await OperatorApproval.begin(req, db, tenantId, { skills: [name] });
     await upsertSkillFiles(db, tenantId, Number(skill.id), [{ path: relativePath, content: req.body.content }]);
+    await approval.finish();
     return res.json({ ok: true, name, file: relativePath });
   } catch (err) {
     return res.status((err as any)?.status ?? 500).json({ error: String((err as any)?.message ?? err) });
@@ -210,6 +216,7 @@ router.delete('/:name/file/*', async (req: Request, res: Response) => {
     const name = normalizeName(req.params.name);
     const relativePath = normalizeSkillPackagePath((req.params as Record<string, string>)[0]);
     if (!relativePath || relativePath === 'SKILL.md') return res.status(400).json({ error: 'A supplemental skill file path is required' });
+    const approval = await OperatorApproval.begin(req, db, tenantId, { skills: [name] });
     const result = await db.run(`
       DELETE FROM skill_files
       WHERE tenant_id = ?
@@ -217,6 +224,7 @@ router.delete('/:name/file/*', async (req: Request, res: Response) => {
         AND skill_id = (SELECT id FROM skills WHERE tenant_id = ? AND name = ? LIMIT 1)
     `, tenantId, relativePath, tenantId, name);
     if (result.changes === 0) return res.status(404).json({ error: 'Skill package file not found' });
+    await approval.finish();
     return res.json({ ok: true, name, file: relativePath });
   } catch (err) {
     return res.status((err as any)?.status ?? 500).json({ error: String((err as any)?.message ?? err) });
@@ -239,6 +247,7 @@ router.post('/', async (req: Request, res: Response) => {
     } catch (error) {
       return res.status(400).json({ error: String((error as Error).message ?? error) });
     }
+    const approval = await OperatorApproval.begin(req, db, tenantId, { skills: [name] });
     const created = await db.withTransaction(async (tx) => {
       const result = await tx.run(`
         INSERT INTO skills (tenant_id, name, description, content, source)
@@ -248,6 +257,7 @@ router.post('/', async (req: Request, res: Response) => {
       await upsertSkillFiles(tx, tenantId, result.lastInsertId, files);
       return await tx.get(`SELECT * FROM skills WHERE id = ? AND tenant_id = ?`, result.lastInsertId, tenantId);
     });
+    await approval.finish();
     return res.status(201).json({ ...(created as object), files: ['SKILL.md', ...files.map((file) => file.path).sort()] });
   } catch (err) {
     if (constraintIsTenantNameConflict(err)) return res.status(409).json({ error: 'A skill with this name already exists' });
@@ -265,11 +275,13 @@ router.put('/:name', async (req: Request, res: Response) => {
     const { description, content, source } = req.body as { content?: string; description?: string; source?: string };
     if (content === undefined && description === undefined && source === undefined) return res.status(400).json({ error: 'No fields to update' });
     const sourceValue = source === 'system' || source === 'workspace' || source === 'atlas' ? source : existing.source;
+    const approval = await OperatorApproval.begin(req, db, tenantId, { skills: [name] });
     await db.run(`
       UPDATE skills
       SET description = ?, content = ?, source = ?, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
       WHERE tenant_id = ? AND name = ?
     `, description ?? existing.description, content ?? existing.content, sourceValue, tenantId, name);
+    await approval.finish();
     const updated = await db.get(`SELECT * FROM skills WHERE tenant_id = ? AND name = ?`, tenantId, name);
     const filesBySkill = await skillFilesBySkillId(db, tenantId);
     return res.json({ ...(updated as object), files: ['SKILL.md', ...(filesBySkill.get(Number(existing.id)) ?? [])] });
@@ -283,8 +295,10 @@ router.delete('/:name', async (req: Request, res: Response) => {
     const db = getDb();
     const tenantId = await resolveTenantIdFromRequest(db, req);
     const name = normalizeName(req.params.name);
+    const approval = await OperatorApproval.begin(req, db, tenantId, { skills: [name] });
     const result = await db.run(`DELETE FROM skills WHERE tenant_id = ? AND name = ?`, tenantId, name);
     if (result.changes === 0) return res.status(404).json({ error: 'Skill not found' });
+    await approval.finish();
     return res.json({ ok: true, name });
   } catch (err) {
     return res.status((err as any)?.status ?? 500).json({ error: String((err as any)?.message ?? err) });

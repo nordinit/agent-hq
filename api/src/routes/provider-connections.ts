@@ -9,6 +9,7 @@ import {
 } from '../domains/providers/runtimeAdapters';
 
 import { requireNumericId } from '../lib/routeParams';
+import { OperatorApproval } from '../domains/execution/operatorApproval';
 import { resolveRuntimeAgentSlug } from '../lib/sessionKeys';
 import { redactSensitiveRuntimeText } from '../runtimes/sensitiveText';
 
@@ -164,6 +165,8 @@ router.post('/', async (req: Request, res: Response) => {
       WHERE tenant_id = ? AND runtime_type = ? AND provider_slug = ? AND auth_mode = ? AND external_ref = ?
     `, tenantId, runtime, provider, authMode, externalRef) as { id: number } | undefined;
     let id: number;
+    // Agents' runtime profiles record a version of the connection row they launch with.
+    const approval = await OperatorApproval.begin(req, db, tenantId, { providerConnections: existing ? [existing.id] : [] });
     if (existing) {
       await db.run(`
         UPDATE provider_connections
@@ -181,6 +184,7 @@ router.post('/', async (req: Request, res: Response) => {
       `, tenantId, provider, authMode, runtime, externalRef, displayName || match.displayName, JSON.stringify(mergedMetadata));
       id = Number(result.lastInsertId);
     }
+    await approval.finish();
     const row = await db.get('SELECT * FROM provider_connections WHERE id = ? AND tenant_id = ?', id, tenantId) as ConnectionRow;
     res.status(existing ? 200 : 201).json(serialize(row));
   } catch (error) {
@@ -229,11 +233,13 @@ router.post('/:id/validate', async (req: Request, res: Response) => {
     const match = discovered.find(connection => connection.externalRef === row.external_ref);
     const status = match ? 'connected' : 'failed';
     const validationError = match ? null : 'The runtime no longer reports this credential reference. Re-authenticate in the runtime.';
+    const approval = await OperatorApproval.begin(req, db, tenantId, { providerConnections: [row.id] });
     await db.run(`
       UPDATE provider_connections
       SET status = ?, last_validated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), validation_error = ?, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
       WHERE id = ? AND tenant_id = ?
     `, status, validationError, row.id, tenantId);
+    await approval.finish();
     res.status(match ? 200 : 409).json({ ok: Boolean(match), status, error: validationError });
   } catch (error) {
     res.status(500).json({ error: String(error) });
@@ -250,10 +256,12 @@ router.delete('/:id', async (req: Request, res: Response) => {
       return;
     }
     const agentColumns = (await sharedTableColumns(db, 'agents')).map((name) => ({ name }));
+    const approval = await OperatorApproval.begin(req, db, tenantId, { providerConnections: [existing.id] });
     if (agentColumns.some(column => column.name === 'provider_connection_id')) {
       await db.run('UPDATE agents SET provider_connection_id = NULL WHERE provider_connection_id = ? AND tenant_id = ?', existing.id, tenantId);
     }
     await db.run('DELETE FROM provider_connections WHERE id = ? AND tenant_id = ?', existing.id, tenantId);
+    await approval.finish();
     res.json({ ok: true });
   } catch (error) {
     res.status(500).json({ error: String(error) });

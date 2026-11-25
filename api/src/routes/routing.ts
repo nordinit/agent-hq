@@ -15,6 +15,7 @@ import {
 } from '../domains/workflow-definitions/config';
 import { getNeedsAttentionEligibleStatuses, setNeedsAttentionEligibleStatuses } from '../lib/reconcilerConfig';
 import { resolveTenantIdFromRequest } from '../lib/tenantContext';
+import { OperatorApproval } from '../domains/execution/operatorApproval';
 import { columnExists as sharedColumnExists } from "../db/introspection";
 import {
   attachAuditActor,
@@ -150,6 +151,17 @@ async function withRequestTenant<T extends Record<string, unknown>>(req: Request
   const db = getDb();
   const tenantId = await resolveTenantIdFromRequest(db, req);
   return attachAuditActor({ ...input, tenant_id: tenantId }, requestAuditActor(req));
+}
+
+/**
+ * Routing an agent to a workflow with the operator token binds the workflow's approved setup to the
+ * agent, so the agent can launch on that workflow's tasks. Runs inside the write's transaction, so a
+ * dry run rolls it back with the rule.
+ */
+async function approveRoutedSetup<T>(req: Request, tx: Db, tenantId: number, rule: T): Promise<T> {
+  const approval = await OperatorApproval.begin(req, tx, tenantId);
+  await (await approval.assignRoutes([rule as Record<string, unknown>])).finish();
+  return rule;
 }
 
 async function routeTableHasColumn(table: string, column: string): Promise<boolean> {
@@ -485,7 +497,7 @@ router.get(['/rules/:id', '/assignment-rules/:id'], getAssignmentRuleHandler);
 const createAssignmentRuleHandler = async (req: Request, res: Response) => {
   try {
     const input = await withRequestTenant(req, mergeRoutingInputs(req.query, req.body));
-    return res.status(isDryRunInput(input) ? 200 : 201).json(await dryRunConfigWrite(getDb(), 'create', 'workflow_task_routing_rules', input, async (tx) => await auditedRoutingWrite(tx, { table: 'workflow_task_routing_rules', action: 'created', input }, (t) => createRoutingRule(t, input))));
+    return res.status(isDryRunInput(input) ? 200 : 201).json(await dryRunConfigWrite(getDb(), 'create', 'workflow_task_routing_rules', input, async (tx) => await auditedRoutingWrite(tx, { table: 'workflow_task_routing_rules', action: 'created', input }, async (t) => approveRoutedSetup(req, t, input.tenant_id, await createRoutingRule(t, input)))));
   } catch (err) {
     const status = typeof (err as { status?: unknown })?.status === 'number' ? Number((err as { status?: number }).status) : 500;
     const message = err instanceof Error ? err.message : String(err);
@@ -498,7 +510,7 @@ router.post(['/rules', '/assignment-rules'], createAssignmentRuleHandler);
 const updateAssignmentRuleHandler = async (req: Request, res: Response) => {
   try {
     const input = await withRequestTenant(req, { ...mergeRoutingInputs(req.query, req.body), id: req.params.id });
-    return res.json(await dryRunConfigWrite(getDb(), 'update', 'workflow_task_routing_rules', input, async (tx) => await auditedRoutingWrite(tx, { table: 'workflow_task_routing_rules', action: 'updated', input, id: input.id }, (t) => updateRoutingRule(t, input))));
+    return res.json(await dryRunConfigWrite(getDb(), 'update', 'workflow_task_routing_rules', input, async (tx) => await auditedRoutingWrite(tx, { table: 'workflow_task_routing_rules', action: 'updated', input, id: input.id }, async (t) => approveRoutedSetup(req, t, input.tenant_id, await updateRoutingRule(t, input)))));
   } catch (err) {
     const status = typeof (err as { status?: unknown })?.status === 'number' ? Number((err as { status?: number }).status) : 500;
     const message = err instanceof Error ? err.message : String(err);

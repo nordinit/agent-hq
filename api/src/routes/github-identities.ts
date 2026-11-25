@@ -23,6 +23,7 @@ import { resolveGitHubIdentity } from '../lib/githubIdentity';
 import { resolveTenantIdFromRequest } from '../lib/tenantContext';
 
 import { requireNumericId } from '../lib/routeParams';
+import { OperatorApproval } from '../domains/execution/operatorApproval';
 
 const router = Router();
 // Rejects a non-numeric :id with a 404 before it reaches the database. Must be per-router:
@@ -157,6 +158,8 @@ router.put('/:id(\\d+)', async (req: Request, res: Response) => {
 
     const validLanes = ['dev', 'qa', 'release', 'shared'];
 
+    // Agents' runtime profiles record a version of the identity row they launch with.
+    const approval = await OperatorApproval.begin(req, db, tenantId, { githubIdentities: [Number(req.params.id)] });
     await db.run(`
       UPDATE github_identities SET
         github_username = ?,
@@ -170,6 +173,7 @@ router.put('/:id(\\d+)', async (req: Request, res: Response) => {
       WHERE id = ?
         AND tenant_id = ?
     `, github_username ?? existing.github_username, token ?? existing.token, git_author_name ?? existing.git_author_name, git_author_email ?? existing.git_author_email, (lane && validLanes.includes(lane)) ? lane : existing.lane, notes ?? existing.notes, enabled !== undefined ? (enabled ? 1 : 0) : existing.enabled, req.params.id, tenantId);
+    await approval.finish();
 
     const updated = await db.get('SELECT * FROM github_identities WHERE id = ? AND tenant_id = ?', req.params.id, tenantId) as Record<string, unknown>;
     updated.token = updated.token ? `***${(updated.token as string).slice(-4)}` : null;
@@ -215,6 +219,7 @@ router.post('/:id(\\d+)/validate', async (req: Request, res: Response) => {
 
     const token = identity.token as string;
     if (!token) return res.status(400).json({ error: 'No token stored for this identity' });
+    const approval = await OperatorApproval.begin(req, db, tenantId, { githubIdentities: [Number(req.params.id)] });
 
     const resp = await fetch('https://api.github.com/user', {
       headers: {
@@ -232,6 +237,7 @@ router.post('/:id(\\d+)/validate', async (req: Request, res: Response) => {
         WHERE id = ?
           AND tenant_id = ?
       `, `HTTP ${resp.status}: ${body.slice(0, 500)}`, req.params.id, tenantId);
+      await approval.finish();
 
       return res.json({
         valid: false,
@@ -248,6 +254,7 @@ router.post('/:id(\\d+)/validate', async (req: Request, res: Response) => {
       WHERE id = ?
         AND tenant_id = ?
     `, req.params.id, tenantId);
+    await approval.finish();
 
     return res.json({
       valid: true,

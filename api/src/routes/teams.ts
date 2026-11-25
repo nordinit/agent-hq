@@ -19,6 +19,7 @@ import { fetchEffectiveAgentMcpRows, fetchEffectiveAgentToolRows, resolveEffecti
 import { applyTeamRouting, planTeamRoutingApplication } from '../domains/teams/routingTemplates';
 import { requestAuditActor } from '../domains/routing/audit';
 import { redactMcpServerRow } from '../lib/secretMasking';
+import { OperatorApproval } from '../domains/execution/operatorApproval';
 
 const router = Router();
 router.param('id', requireNumericId);
@@ -196,6 +197,8 @@ router.patch('/:id', async (req: Request, res: Response) => {
       enabled: body.enabled === undefined ? existing.enabled : (body.enabled ? 1 : 0),
     };
 
+    // A team's goal, charter, skills and context version are part of each member's runtime profile.
+    const approval = await OperatorApproval.begin(req, db, tenantId, { teams: [Number(req.params.id)] });
     const updated = await db.run(`
       UPDATE teams
       SET name = ?, slug = ?, description = ?, goal = ?, charter = ?, project_id = ?,
@@ -207,6 +210,7 @@ router.patch('/:id', async (req: Request, res: Response) => {
       next.skill_names, next.enabled, req.params.id, tenantId, expectedVersion ?? null, expectedVersion ?? null,
     );
     if (!updated.changes) return res.status(409).json({ error: 'Team changed. Refresh and preview again.' });
+    await approval.finish();
 
     return res.json(await db.get('SELECT * FROM teams WHERE id = ?', req.params.id));
   } catch (err) {
@@ -227,12 +231,14 @@ router.delete('/:id', async (req: Request, res: Response) => {
     const db = getDb();
     const tenantId = await resolveTenantIdFromRequest(db, req);
     await requireTeam(req.params.id, tenantId);
+    const approval = await OperatorApproval.begin(req, db, tenantId, { teams: [Number(req.params.id)] });
     await db.run(`
       UPDATE teams
       SET deleted_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'),
           updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
       WHERE id = ? AND tenant_id = ?
     `, req.params.id, tenantId);
+    await approval.finish();
     return res.json({ ok: true, id: Number(req.params.id) });
   } catch (err) {
     return fail(res, err);
@@ -275,6 +281,8 @@ router.post('/:id/members', async (req: Request, res: Response) => {
     );
     if (!agent) return res.status(404).json({ error: 'Agent not found' });
 
+    // Membership bumps the team's context version, which is part of every member's runtime profile.
+    const approval = await OperatorApproval.begin(req, db, tenantId, { teams: [Number(req.params.id)], agents: [Number(agent_id)] });
     const result = await db.run(`
       INSERT INTO team_members
         (team_id, agent_id, member_role, responsibilities, is_lead, is_primary, sort_order, enabled)
@@ -288,6 +296,7 @@ router.post('/:id/members', async (req: Request, res: Response) => {
       enabled === undefined ? 1 : (enabled ? 1 : 0),
     );
     await bumpContextVersion(Number(req.params.id));
+    await approval.finish();
 
     return res.status(201).json(await db.get('SELECT * FROM team_members WHERE id = ?', result.lastInsertId));
   } catch (err) {
@@ -314,6 +323,7 @@ router.patch('/:id/members/:agentId', async (req: Request, res: Response) => {
     if (!existing) return res.status(404).json({ error: 'Team member not found' });
 
     const body = req.body as Record<string, unknown>;
+    const approval = await OperatorApproval.begin(req, db, tenantId, { teams: [Number(req.params.id)], agents: [Number(req.params.agentId)] });
     await db.run(`
       UPDATE team_members
       SET member_role = ?, responsibilities = ?, is_lead = ?, is_primary = ?, sort_order = ?, enabled = ?,
@@ -329,6 +339,7 @@ router.patch('/:id/members/:agentId', async (req: Request, res: Response) => {
       req.params.id, req.params.agentId,
     );
     await bumpContextVersion(Number(req.params.id));
+    await approval.finish();
 
     return res.json(await db.get(
       `SELECT * FROM team_members WHERE team_id = ? AND agent_id = ?`,
@@ -347,12 +358,14 @@ router.delete('/:id/members/:agentId', async (req: Request, res: Response) => {
     const db = getDb();
     const tenantId = await resolveTenantIdFromRequest(db, req);
     await requireTeam(req.params.id, tenantId);
+    const approval = await OperatorApproval.begin(req, db, tenantId, { teams: [Number(req.params.id)], agents: [Number(req.params.agentId)] });
     const result = await db.run(
       `DELETE FROM team_members WHERE team_id = ? AND agent_id = ?`,
       req.params.id, req.params.agentId,
     );
     if (!result.changes) return res.status(404).json({ error: 'Team member not found' });
     await bumpContextVersion(Number(req.params.id));
+    await approval.finish();
     return res.json({ ok: true });
   } catch (err) {
     return fail(res, err);
@@ -392,6 +405,8 @@ router.post('/:id/tools', async (req: Request, res: Response) => {
       INSERT INTO team_tool_assignments (team_id, tool_id, overrides, enabled)
       VALUES (?, ?, ?, ?)
     `, req.params.id, tool_id, normalizeJsonObject(overrides, '{}'), enabled === undefined ? 1 : (enabled ? 1 : 0));
+    // The operator giving a team a tool binds the tool's approved revision to the team.
+    await (await OperatorApproval.begin(req, db, tenantId)).assign({ kind: 'team', id: Number(req.params.id) }, 'tool', Number(tool_id)).finish();
 
     return res.status(201).json(await db.get('SELECT * FROM team_tool_assignments WHERE id = ?', result.lastInsertId));
   } catch (err) {
@@ -452,6 +467,7 @@ router.post('/:id/mcp-servers', async (req: Request, res: Response) => {
       INSERT INTO team_mcp_assignments (team_id, mcp_server_id, overrides, enabled)
       VALUES (?, ?, ?, ?)
     `, req.params.id, mcp_server_id, normalizeJsonObject(overrides, '{}'), enabled === undefined ? 1 : (enabled ? 1 : 0));
+    await (await OperatorApproval.begin(req, db, tenantId)).assign({ kind: 'team', id: Number(req.params.id) }, 'mcp_server', Number(mcp_server_id)).finish();
 
     return res.status(201).json(await db.get('SELECT * FROM team_mcp_assignments WHERE id = ?', result.lastInsertId));
   } catch (err) {
@@ -693,9 +709,16 @@ workflowTeamRouter.post('/apply-routing', async (req: Request, res: Response) =>
     // Batch id is derived from the request, not the clock, so a retry of the same apply is
     // traceable as one operator action.
     const batchId = `team-routing-${workflowId}-${tenantId}-${actor.actor}`;
-    return res.json(await applyTeamRouting(db, {
+    const applied = await applyTeamRouting(db, {
       workflowId, tenantId, batchId, actor: actor.actor, actorKind: actor.actorKind,
-    }));
+    });
+    // The operator applying a team's routing binds the workflow's approved setup to the routed agents.
+    const routed = await db.all<Record<string, unknown>>(
+      'SELECT agent_id, workflow_id, enabled FROM workflow_task_routing_rules WHERE workflow_id = ? AND enabled = 1 AND agent_id IS NOT NULL',
+      workflowId,
+    );
+    await (await (await OperatorApproval.begin(req, db, tenantId)).assignRoutes(routed)).finish();
+    return res.json(applied);
   } catch (err) {
     return fail(res, err);
   }
