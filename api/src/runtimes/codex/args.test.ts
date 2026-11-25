@@ -158,6 +158,33 @@ describe('buildCodexArgs', () => {
     expect(new Set(disabled).size).toBe(disabled.length);
   });
 
+  it('turns the skill listing on for assigned skills and disables every other SKILL.md', () => {
+    const args = buildCodexArgs({
+      config: normalizeCodexRuntimeConfig({}),
+      skillListing: {
+        disabledSkillPaths: ['/Users/a/.agents/skills/pdf/SKILL.md', '/Users/a/.agents/skills/pdf/SKILL.md', '/r/"q"/SKILL.md'],
+      },
+    });
+    expect(args).toEqual(expect.arrayContaining(['-c', 'skills.include_instructions=true']));
+    expect(args).not.toContain('skills.include_instructions=false');
+    expect(args).toEqual(expect.arrayContaining(['-c', 'skills.bundled.enabled=false']));
+    expect(args).toEqual(expect.arrayContaining([
+      '-c',
+      'skills.config=[{path="/Users/a/.agents/skills/pdf/SKILL.md",enabled=false},{path="/r/\\"q\\"/SKILL.md",enabled=false}]',
+    ]));
+  });
+
+  it('keeps the listing off and adds no skill entries without assigned skills', () => {
+    for (const skillListing of [undefined, null]) {
+      const args = buildCodexArgs({ config: normalizeCodexRuntimeConfig({}), skillListing });
+      expect(args).toEqual(expect.arrayContaining(['-c', 'skills.include_instructions=false']));
+      expect(args.some((arg) => arg.startsWith('skills.config='))).toBe(false);
+    }
+    const empty = buildCodexArgs({ config: normalizeCodexRuntimeConfig({}), skillListing: { disabledSkillPaths: [] } });
+    expect(empty).toEqual(expect.arrayContaining(['-c', 'skills.include_instructions=true']));
+    expect(empty.some((arg) => arg.startsWith('skills.config='))).toBe(false);
+  });
+
   it('normalizes only the canonical OpenAI provider prefix', () => {
     expect(normalizeCodexModel(' openai/gpt-5.5 ')).toBe('gpt-5.5');
     expect(normalizeCodexModel('gpt-5.5')).toBe('gpt-5.5');

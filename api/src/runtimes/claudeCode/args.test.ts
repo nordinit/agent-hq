@@ -94,10 +94,23 @@ describe('BASE_CLAUDE_ARGS', () => {
       '',
       '--settings',
       CLAUDE_BOUNDARY_SETTINGS,
-      '--disable-slash-commands',
       '--no-chrome',
       '--strict-mcp-config',
     ]);
+  });
+
+  it('pins the skill boundary: only Agent HQ plugin skills can be listed', () => {
+    // Verified on 2.1.332 by capturing the Messages request: bundled skills and
+    // the plugin-authoring built-in plugin are the only ambient skill sources
+    // left once --setting-sources '' drops user and project skills.
+    expect(JSON.parse(CLAUDE_BOUNDARY_SETTINGS)).toEqual({
+      disableAllHooks: true,
+      disableBundledSkills: true,
+      enabledPlugins: { 'cc-plugin-plugin-authoring@builtin': false },
+      extraKnownMarketplaces: {},
+    });
+    // --disable-slash-commands removes the Skill tool and every skill.
+    expect(BASE_CLAUDE_ARGS).not.toContain('--disable-slash-commands');
   });
 
   it('never carries the prompt — `-` selects stdin', () => {
@@ -113,7 +126,7 @@ describe('buildClaudeArgs — minimal argv', () => {
 
   it('does not mutate BASE_CLAUDE_ARGS across calls', () => {
     buildClaudeArgs(input({ config: config({ effort: 'xhigh' }) }));
-    expect([...BASE_CLAUDE_ARGS]).toHaveLength(12);
+    expect([...BASE_CLAUDE_ARGS]).toHaveLength(11);
     expect(buildClaudeArgs(input())).toEqual(BYPASS_HEAD);
   });
 
@@ -508,5 +521,47 @@ describe('buildClaudeArgs — resuming a session', () => {
   it('opens a new session when not resuming', () => {
     expect(buildClaudeArgs(input({ resume: false }))).toEqual(BYPASS_HEAD);
     expect(buildClaudeArgs(input())).toEqual(BYPASS_HEAD);
+  });
+});
+
+describe('buildClaudeArgs — assigned skills', () => {
+  const PLUGIN_DIR = '/work/casper/.agent-hq/claude-plugin';
+
+  it('loads the skills plugin and adds the Skill tool under dontAsk', () => {
+    const args = buildClaudeArgs(input({
+      config: config({ permissionMode: 'allowlist', allowedTools: ['Read', 'Bash'] }),
+      mcpAllowedToolNames: ['mcp__crm__get'],
+      skillPluginDir: PLUGIN_DIR,
+    }));
+    expect(args).toEqual([
+      ...allowlistHead('Read,Bash,Skill', 'Read,Bash,Skill,mcp__crm__get'),
+      '--plugin-dir',
+      PLUGIN_DIR,
+    ]);
+  });
+
+  it('adds the Skill tool to the bypass tool set too', () => {
+    expect(buildClaudeArgs(input({ skillPluginDir: PLUGIN_DIR }))).toEqual([
+      ...bypassHead('Skill'),
+      '--plugin-dir',
+      PLUGIN_DIR,
+    ]);
+  });
+
+  it('leaves both out when no skills are assigned', () => {
+    expect(buildClaudeArgs(input({ skillPluginDir: null }))).toEqual(BYPASS_HEAD);
+    expect(buildClaudeArgs(input({ skillPluginDir: '  ' }))).toEqual(BYPASS_HEAD);
+  });
+
+  it('does not duplicate a Skill tool the operator already listed', () => {
+    const args = buildClaudeArgs(input({
+      config: config({ permissionMode: 'allowlist', allowedTools: ['Skill', 'Read'] }),
+      skillPluginDir: PLUGIN_DIR,
+    }));
+    expect(args).toEqual([
+      ...allowlistHead('Skill,Read'),
+      '--plugin-dir',
+      PLUGIN_DIR,
+    ]);
   });
 });

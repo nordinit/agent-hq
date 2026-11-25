@@ -3,6 +3,7 @@ import {
   CODEX_DISABLED_AMBIENT_FEATURES,
   CODEX_FAST_MODE_FEATURE,
   CODEX_POLICY_CONFIG_OVERRIDES,
+  CODEX_SKILL_LISTING_KEY,
 } from './policy';
 
 function tomlString(value: string): string {
@@ -64,7 +65,17 @@ export function buildCodexArgs(input: CodexArgsInput): string[] {
   args.push('-c', `shell_environment_policy.inherit=${tomlString('core')}`);
   args.push('-c', 'shell_environment_policy.ignore_default_excludes=false');
   for (const [key, value] of CODEX_POLICY_CONFIG_OVERRIDES) {
+    if (key === CODEX_SKILL_LISTING_KEY && input.skillListing) {
+      args.push('-c', `${key}=true`);
+      continue;
+    }
     args.push('-c', `${key}=${value}`);
+  }
+  // Codex has no per-root switch, so each unassigned SKILL.md is disabled by path.
+  const disabledSkillPaths = [...new Set(input.skillListing?.disabledSkillPaths ?? [])];
+  if (disabledSkillPaths.length > 0) {
+    const entries = disabledSkillPaths.map((skillPath) => `{path=${tomlString(skillPath)},enabled=false}`);
+    args.push('-c', `skills.config=[${entries.join(',')}]`);
   }
 
   const effort = normalizeCodexReasoningEffort(input.reasoningEffort) ?? config.reasoningEffort;

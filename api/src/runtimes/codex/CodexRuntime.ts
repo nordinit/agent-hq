@@ -60,6 +60,7 @@ import {
   normalizeCodexModel,
   normalizeCodexReasoningEffort,
 } from './args';
+import { buildCodexSkillFence } from './skillFence';
 import {
   codexAuthReady,
   prepareCodexAuthProfiles,
@@ -315,12 +316,14 @@ export class CodexRuntime implements AgentRuntime {
       await this.persistNativeSessionId(db, instanceId, config.resumeSessionId);
     }
 
+    const childEnv = this.buildEnv(params, config, cwd, codexHome);
     const argv = buildCodexArgs({
       config,
       model: params.model ?? null,
       reasoningEffort: params.thinking ?? null,
       fastMode: params.fastMode ?? null,
       configProfile: runtimeProfile.name,
+      skillListing: this.resolveSkillListing(params, cwd, codexHome, childEnv.HOME, instanceId),
     });
     let child: ChildProcessWithoutNullStreams;
     try {
@@ -349,7 +352,7 @@ export class CodexRuntime implements AgentRuntime {
       }
       child = spawn(executable.path, argv, {
         cwd,
-        env: this.buildEnv(params, config, cwd, codexHome),
+        env: childEnv,
         stdio: ['pipe', 'pipe', 'pipe'],
         ...localProcessSpawnOptions(),
       });
@@ -926,6 +929,30 @@ export class CodexRuntime implements AgentRuntime {
       // still owns after an API restart.
       return null;
     }
+  }
+
+  /**
+   * Assigned skills reach Codex through its own skill listing. Everything else
+   * Codex would list is disabled by path; when that set cannot be enumerated
+   * the listing stays off instead of exposing ambient skills.
+   */
+  private resolveSkillListing(
+    params: DispatchParams,
+    cwd: string,
+    codexHome: string,
+    homeDir: string | undefined,
+    instanceId: number | null | undefined,
+  ): { disabledSkillPaths: string[] } | null {
+    const assignedSkillNames = (params.runtimeBoundary?.tools.skills ?? []).map((skill) => skill.name);
+    if (assignedSkillNames.length === 0) return null;
+    const fence = buildCodexSkillFence({ cwd, codexHome, homeDir, assignedSkillNames });
+    if (!fence.complete) {
+      console.warn(
+        `[CodexRuntime] #${instanceId ?? '?'}: too many unassigned skills under ${fence.roots.join(', ')} to disable; the skill listing stays off`,
+      );
+      return null;
+    }
+    return { disabledSkillPaths: fence.disabledSkillPaths };
   }
 
   private buildEnv(

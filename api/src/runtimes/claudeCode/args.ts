@@ -28,12 +28,29 @@ import { NO_ALLOWED_MCP_TOOLS_SENTINEL, type ClaudeArgsInput } from './types';
  * `--strict-mcp-config` separately owns the MCP boundary. Managed organization
  * policy remains authoritative by Claude Code design and cannot be bypassed by
  * a child-process caller.
+ *
+ * Skills: the only skills a run may see are the ones Agent HQ assigned, which
+ * arrive as the session-only `agent-hq` plugin (`--plugin-dir`). Ambient
+ * user/project skills are already excluded by `--setting-sources ''`; the CLI's
+ * bundled skills (dataviz, claude-api, loop, ...) are excluded by
+ * `disableBundledSkills`; and `cc-plugin-plugin-authoring` is the one built-in
+ * plugin that contributes a model-visible skill. Verified on 2.1.332 by
+ * capturing the Messages request: with these settings the skill listing holds
+ * exactly the `agent-hq:<name>` entries.
  */
 export const CLAUDE_BOUNDARY_SETTINGS = JSON.stringify({
   disableAllHooks: true,
-  enabledPlugins: {},
+  disableBundledSkills: true,
+  enabledPlugins: { 'cc-plugin-plugin-authoring@builtin': false },
   extraKnownMarketplaces: {},
 });
+
+/**
+ * The CLI tool that loads a listed skill into the turn. It exists only when
+ * slash commands are enabled (`--disable-slash-commands` removes it and every
+ * skill), and it is added to `--tools` only for runs with assigned skills.
+ */
+export const CLAUDE_SKILL_TOOL = 'Skill';
 
 /**
  * The invariant prefix every Agent HQ claude-code run starts with.
@@ -52,7 +69,6 @@ export const BASE_CLAUDE_ARGS: readonly string[] = [
   '',
   '--settings',
   CLAUDE_BOUNDARY_SETTINGS,
-  '--disable-slash-commands',
   '--no-chrome',
   '--strict-mcp-config',
 ];
@@ -87,7 +103,13 @@ export function buildClaudeArgs(input: ClaudeArgsInput): string[] {
   // under a chosen id. Exactly one applies, never both.
   args.push(input.resume ? '--resume' : '--session-id', input.sessionId);
 
-  const builtInTools = dedupe(compact(config.allowedTools));
+  // Assigned skills are a session-only plugin; the Skill tool is how the model
+  // loads one. Without assigned skills neither is present.
+  const skillPluginDir = (input.skillPluginDir ?? '').trim();
+  const builtInTools = dedupe([
+    ...compact(config.allowedTools),
+    ...(skillPluginDir ? [CLAUDE_SKILL_TOOL] : []),
+  ]);
 
   if (config.permissionMode === 'bypass') {
     args.push('--dangerously-skip-permissions');
@@ -129,6 +151,8 @@ export function buildClaudeArgs(input: ClaudeArgsInput): string[] {
   // `--strict-mcp-config` is in the invariant prefix, including for a run with
   // zero assignments. Omitting it when no file exists would re-enable ambient
   // user/project/plugin MCP servers.
+
+  if (skillPluginDir) args.push('--plugin-dir', skillPluginDir);
 
   for (const dir of compact(input.addDirs)) args.push('--add-dir', dir);
 

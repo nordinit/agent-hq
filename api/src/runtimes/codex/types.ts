@@ -74,6 +74,12 @@ export interface CodexArgsInput {
   fastMode?: boolean | null;
   /** Internal Codex v2 profile selected for this dispatch. */
   configProfile?: string | null;
+  /**
+   * Turn on Codex's skill listing for a run with assigned skills. Every other
+   * SKILL.md Codex would list (see skillFence.ts) is disabled by path. Omitted
+   * or null keeps the listing off.
+   */
+  skillListing?: { disabledSkillPaths: readonly string[] } | null;
 }
 
 export interface CodexMcpMaterialization {

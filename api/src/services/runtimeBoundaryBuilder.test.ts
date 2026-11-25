@@ -134,6 +134,25 @@ describe('buildRuntimeBoundaryV1', () => {
       .not.toBe(fingerprintRuntimeBoundaryV1(omitted));
   });
 
+  it('records the Skill tool exactly when skills are assigned, matching the argv', () => {
+    const skills = [{ name: 'proposal-rules', revision: 'sha256:abc' }];
+    const withSkills = buildRuntimeBoundaryV1(input({ skills }));
+    const normalized = normalizeClaudeCodeRuntimeConfig({ allowedTools: ['Bash', 'Read'] });
+    const argv = buildClaudeArgs({
+      config: normalized,
+      sessionId: 'boundary-skill-test',
+      skillPluginDir: '/work/agent/task-906/.agent-hq/claude-plugin',
+    });
+    const argvBuiltIns = argv[argv.indexOf('--tools') + 1]
+      .split(',')
+      .filter(Boolean)
+      .sort((left, right) => left.localeCompare(right));
+
+    expect(withSkills.tools.builtIn).toEqual(['Bash', 'Read', 'Skill']);
+    expect(withSkills.tools.builtIn).toEqual(argvBuiltIns);
+    expect(buildRuntimeBoundaryV1(input()).tools.builtIn).toEqual(['Bash', 'Read']);
+  });
+
   it('snapshots Codex built-ins and ambient feature policy from shared driver constants', () => {
     const runtimeConfig = { model: 'openai/gpt-5.5' };
     const boundary = buildRuntimeBoundaryV1(input({

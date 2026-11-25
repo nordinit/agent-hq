@@ -42,9 +42,11 @@ export type ClaudePermissionMode = (typeof CLAUDE_PERMISSION_MODES)[number];
  *
  * Verified against Claude Code 2.1.224 by reading the `system/init` event's
  * `tools` array: every name below resolves. Note that unknown tool names are
- * SILENTLY DROPPED by the CLI (`TodoWrite`, `BashOutput`, `KillShell`,
- * `SlashCommand` and `Skill` all vanish without error), so never add a name here
- * without confirming it appears in that array first. Note also that `Glob` and
+ * SILENTLY DROPPED by the CLI (`TodoWrite`, `BashOutput`, `KillShell` and
+ * `SlashCommand` vanish without error), so never add a name here without
+ * confirming it appears in that array first. `Skill` is real but exists only
+ * while slash commands are enabled; the adapter adds it for runs with assigned
+ * skills (see `CLAUDE_SKILL_TOOL` in args.ts). Note also that `Glob` and
  * `Grep` are real but are NOT part of the CLI's own `--tools default` set, which
  * is precisely why this list is explicit rather than delegated to `default`.
  */
@@ -169,6 +171,12 @@ export interface ClaudeArgsInput {
   appendSystemPromptFilePath?: string | null;
   /** Extra directories to grant tool access to. */
   addDirs?: string[];
+  /**
+   * The run's Agent HQ skills plugin (`.claude-plugin/plugin.json` plus
+   * `skills/<name>/SKILL.md`), passed as `--plugin-dir`. Set only when skills
+   * are assigned; it also adds the `Skill` tool.
+   */
+  skillPluginDir?: string | null;
 }
 
 // ── Error classification ─────────────────────────────────────────────────────

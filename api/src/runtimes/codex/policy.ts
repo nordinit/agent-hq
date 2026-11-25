@@ -110,13 +110,19 @@ export const CODEX_DISABLED_AMBIENT_FEATURES = [
  * - skills.include_instructions / skills.bundled.enabled: 0.164 injects skills
  *   from the host-wide ~/.agents/skills root plus bundled system skills
  *   (imagegen, skill-installer, ...). 0.146 under this policy injected none.
+ *   Bundled skills stay off. The listing stays off for runs without assigned
+ *   skills; buildCodexArgs turns it on for runs with them and disables every
+ *   unassigned SKILL.md by path (skillFence.ts), so the model sees exactly the
+ *   assigned skills (verified on 0.167.2 with `codex debug prompt-input`).
  * - web_search: pinned off as defense in depth (0.146 exposed a web_search tool
  *   despite standalone_web_search being disabled). 0.164 deprecates the
  *   web_search_cached/web_search_request features in favour of this key.
  */
+export const CODEX_SKILL_LISTING_KEY = 'skills.include_instructions' as const;
+
 export const CODEX_POLICY_CONFIG_OVERRIDES: ReadonlyArray<readonly [string, string]> = [
   ['agents.enabled', 'false'],
-  ['skills.include_instructions', 'false'],
+  [CODEX_SKILL_LISTING_KEY, 'false'],
   ['skills.bundled.enabled', 'false'],
   ['web_search', '"disabled"'],
 ];
@@ -129,4 +135,4 @@ export const CODEX_POLICY_CONFIG_OVERRIDES: ReadonlyArray<readonly [string, stri
  */
 export const CODEX_MCP_TOOLS_APPROVAL_MODE = 'approve' as const;
 
-export const CODEX_RUNTIME_POLICY_REVISION = 'codex-local-tools-v3-0164' as const;
+export const CODEX_RUNTIME_POLICY_REVISION = 'codex-local-tools-v4-assigned-skills' as const;

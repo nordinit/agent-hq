@@ -25,7 +25,7 @@ import {
 import {
   resolveTransportMode,
 } from './contracts';
-import { getSkillMaterializationAdapter } from '../runtimes/skillMaterialization';
+import { claudeCodeSkillPluginDir, getSkillMaterializationAdapter } from '../runtimes/skillMaterialization';
 import { syncAssignedMcpForAgent } from '../runtimes/mcpMaterialization';
 import { getDb } from '../db/client';
 import { loadTaskRecurrenceMetadata } from '../domains/tasks/recurrence';
@@ -1128,7 +1128,7 @@ export function generateClaudeMd(params: {
   if (skillNames.length === 0) {
     skillsSection = '_No skills assigned to this job._';
   } else {
-    const skillsDir = path.join(workingDirectory, '.claude', 'skills');
+    const skillsDir = path.join(claudeCodeSkillPluginDir(workingDirectory), 'skills');
     const lines = skillNames.map(name => {
       const skillMd = path.join(skillsDir, name, 'SKILL.md');
       return `- **${name}**: \`${skillMd}\``;

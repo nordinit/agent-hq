@@ -23,8 +23,9 @@
  * # Current adapters
  *
  *   openclaw     → OpenClawSkillAdapter   — copies into workspace `skills/`
- *   claude-code  → ClaudeCodeSkillAdapter — symlinks into workspace `.claude/skills/`
- *                                            + CLAUDE.md skill section
+ *   claude-code  → ClaudeCodeSkillAdapter — symlinks into the workspace `agent-hq` plugin
+ *                                            (`.agent-hq/claude-plugin/skills/`), loaded
+ *                                            with `--plugin-dir` and the Skill tool
  *   codex        → CodexSkillAdapter      — copies into workspace `.agents/skills/`
  *   hermes       → HermesSkillAdapter     — copies concrete skill artifacts into the
  *                                            Hermes profile/workspace contract
@@ -82,8 +83,7 @@ export interface MaterializationContext {
   tenantId?: number | null;
 
   /**
-   * Optional Remote Gateway URL — forwarded to generateClaudeMd() for runtimes that
-   * consume CLAUDE.md orientation files.
+   * Optional Remote Gateway URL for runtimes whose skill projection mentions it.
    */
   hooksUrl?: string | null;
 
@@ -507,35 +507,115 @@ export class OpenClawSkillAdapter extends FilesystemSkillAdapter {
 
 // ── ClaudeCodeSkillAdapter ────────────────────────────────────────────────────
 
+/** Name of the session-only plugin that carries a Claude Code agent's assigned skills. */
+export const CLAUDE_CODE_SKILL_PLUGIN_NAME = 'agent-hq';
+
 /**
- * ClaudeCodeSkillAdapter — filesystem-based adapter for Claude Code agents.
+ * Where the Claude Code skills plugin lives for a workspace. The runtime passes
+ * this directory as `--plugin-dir`, so skills are listed to the model as
+ * `agent-hq:<name>` and loaded through the Skill tool.
+ */
+export function claudeCodeSkillPluginDir(workingDirectory: string): string {
+  return path.join(workingDirectory, '.agent-hq', 'claude-plugin');
+}
+
+export function claudeCodeSkillPluginManifestPath(workingDirectory: string): string {
+  return path.join(claudeCodeSkillPluginDir(workingDirectory), '.claude-plugin', 'plugin.json');
+}
+
+const LEGACY_CLAUDE_SKILL_SECTION_START = '<!-- atlas-skills-start -->';
+const LEGACY_CLAUDE_SKILL_SECTION_END = '<!-- atlas-skills-end -->';
+
+/**
+ * ClaudeCodeSkillAdapter — Claude Code's native skill delivery.
  *
- * Functionally identical to OpenClawSkillAdapter today. Separated so
- * Claude Code–specific materialization can diverge (e.g. if it gains a
- * different skills consumption mechanism).
+ * Runs launch with `--setting-sources ''`, so the CLI never reads the
+ * workspace's `.claude/skills` or `CLAUDE.md`. A session-only plugin is the one
+ * skill source that still loads: assigned skills are symlinked into
+ * `<workspace>/.agent-hq/claude-plugin/skills/<name>`, next to a generated
+ * `.claude-plugin/plugin.json`. The model sees each skill's name and
+ * description in its skill listing and loads the full SKILL.md with the Skill
+ * tool when a task matches.
+ *
+ * The old projection (`.claude/skills` symlinks plus a CLAUDE.md "Available
+ * Skills" section) is removed on every materialize so a workspace never keeps
+ * two copies that disagree.
  */
 export class ClaudeCodeSkillAdapter extends FilesystemSkillAdapter {
   readonly adapterName = 'claude-code';
 
   protected override getSkillsDir(workingDirectory: string): string {
-    return path.join(workingDirectory, '.claude', 'skills');
+    return path.join(claudeCodeSkillPluginDir(workingDirectory), 'skills');
   }
 
   override async materialize(context: MaterializationContext): Promise<MaterializationResult> {
     const result = await super.materialize(context);
+    if (!result.ok || !context.workingDirectory) return result;
 
-    if (context.workingDirectory) {
-      try {
-        writeClaudeCodeSkillSection(context);
-      } catch (err) {
-        result.warnings.push(
-          `[claude-code] failed to write CLAUDE.md skill section: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
+    try {
+      writeClaudeCodeSkillPluginManifest(context.workingDirectory);
+    } catch (err) {
+      result.ok = false;
+      result.error = `[claude-code] failed to write the skills plugin manifest: ${err instanceof Error ? err.message : String(err)}`;
+      return result;
+    }
+
+    try {
+      removeLegacyClaudeCodeSkillProjection(context.workingDirectory);
+    } catch (err) {
+      result.warnings.push(
+        `[claude-code] failed to remove the legacy .claude/skills projection: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
 
     return result;
   }
+}
+
+function writeClaudeCodeSkillPluginManifest(workingDirectory: string): void {
+  const manifestPath = claudeCodeSkillPluginManifestPath(workingDirectory);
+  const manifest = `${JSON.stringify({
+    name: CLAUDE_CODE_SKILL_PLUGIN_NAME,
+    description: 'Skills assigned to this agent by Agent HQ. Generated on every dispatch; do not edit.',
+    version: '1.0.0',
+  }, null, 2)}\n`;
+  fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
+  let existing: string | null = null;
+  try { existing = fs.readFileSync(manifestPath, 'utf-8'); } catch { /* not written yet */ }
+  if (existing !== manifest) fs.writeFileSync(manifestPath, manifest, 'utf-8');
+}
+
+/**
+ * Remove what earlier releases wrote for Claude Code: symlinks under
+ * `.claude/skills` (the adapter only ever created symlinks there, so real
+ * directories are left alone) and the marked skill section in `CLAUDE.md`.
+ * A `CLAUDE.md` that held nothing but that section is deleted.
+ */
+function removeLegacyClaudeCodeSkillProjection(workingDirectory: string): void {
+  const legacySkillsDir = path.join(workingDirectory, '.claude', 'skills');
+  let entries: string[] = [];
+  try { entries = fs.readdirSync(legacySkillsDir); } catch { /* nothing to remove */ }
+  for (const entry of entries) {
+    const linkPath = path.join(legacySkillsDir, entry);
+    try {
+      if (fs.lstatSync(linkPath).isSymbolicLink()) fs.unlinkSync(linkPath);
+    } catch { /* already gone */ }
+  }
+  if (entries.length > 0) {
+    try { fs.rmdirSync(legacySkillsDir); } catch { /* not empty, or already gone */ }
+  }
+
+  const claudeMdPath = path.join(workingDirectory, 'CLAUDE.md');
+  let existing: string;
+  try { existing = fs.readFileSync(claudeMdPath, 'utf-8'); } catch { return; }
+  const startIdx = existing.indexOf(LEGACY_CLAUDE_SKILL_SECTION_START);
+  const endIdx = existing.indexOf(LEGACY_CLAUDE_SKILL_SECTION_END);
+  if (startIdx === -1 || endIdx === -1 || endIdx < startIdx) return;
+  const before = existing.slice(0, startIdx).replace(/\n+$/, '');
+  const after = existing.slice(endIdx + LEGACY_CLAUDE_SKILL_SECTION_END.length).replace(/^\n+/, '');
+  const remaining = [before, after].filter((part) => part.trim()).join('\n\n');
+  if (!remaining.trim()) fs.rmSync(claudeMdPath, { force: true });
+  else fs.writeFileSync(claudeMdPath, remaining.endsWith('\n') ? remaining : `${remaining}\n`, 'utf-8');
 }
 
 // ── CodexSkillAdapter ────────────────────────────────────────────────────────
@@ -769,75 +849,6 @@ export class PromptInjectionSkillAdapter implements SkillMaterializationAdapter 
     // Nothing to clean up for prompt-injection mode
     return emptyResult();
   }
-}
-
-// ── Claude Code skill section writer ─────────────────────────────────────────
-
-/**
- * writeClaudeCodeSkillSection — write or update the "## Available Skills" section
- * in `{workingDirectory}/CLAUDE.md`.
- *
- * If CLAUDE.md does not exist, it is created with only the skills section.
- * If it already exists, the section between the skill markers is replaced.
- * This is intentionally narrow: only the skill section is touched; the rest
- * of the file is preserved verbatim.
- *
- * Marker lines (must appear as whole lines, no inline content):
- *   <!-- atlas-skills-start -->
- *   <!-- atlas-skills-end -->
- *
- * If neither marker exists in an existing file, the section is appended.
- */
-function writeClaudeCodeSkillSection(context: MaterializationContext): void {
-  const { workingDirectory, skillNames } = context;
-  const claudeMdPath = path.join(workingDirectory, 'CLAUDE.md');
-
-  const section = buildSkillSection(skillNames);
-
-  if (!fs.existsSync(claudeMdPath)) {
-    fs.mkdirSync(workingDirectory, { recursive: true });
-    fs.writeFileSync(claudeMdPath, section, 'utf-8');
-    return;
-  }
-
-  const existing = fs.readFileSync(claudeMdPath, 'utf-8');
-  const START = '<!-- atlas-skills-start -->';
-  const END = '<!-- atlas-skills-end -->';
-
-  const startIdx = existing.indexOf(START);
-  const endIdx = existing.indexOf(END);
-
-  if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
-    // Replace existing section
-    const before = existing.slice(0, startIdx);
-    const after = existing.slice(endIdx + END.length);
-    fs.writeFileSync(claudeMdPath, `${before}${section}${after}`, 'utf-8');
-  } else {
-    // Append section (markers not present — preserve existing content)
-    const separator = existing.endsWith('\n') ? '\n' : '\n\n';
-    fs.writeFileSync(claudeMdPath, `${existing}${separator}${section}`, 'utf-8');
-  }
-}
-
-function buildSkillSection(skillNames: string[]): string {
-  const lines: string[] = [];
-  lines.push('<!-- atlas-skills-start -->');
-  lines.push('## Available Skills');
-  lines.push('');
-
-  if (skillNames.length === 0) {
-    lines.push('_No skills assigned to this agent._');
-  } else {
-    lines.push('The following skills are available in `.claude/skills/<name>/SKILL.md`.');
-    lines.push('Read the relevant skill file before starting any task that matches its description.');
-    lines.push('');
-    for (const name of skillNames) {
-      lines.push(`- **${name}** — \`.claude/skills/${name}/SKILL.md\``);
-    }
-  }
-
-  lines.push('<!-- atlas-skills-end -->');
-  return lines.join('\n') + '\n';
 }
 
 // ── Adapter factory ───────────────────────────────────────────────────────────

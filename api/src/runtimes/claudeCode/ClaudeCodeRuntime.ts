@@ -59,6 +59,7 @@ import {
 import { normalizeClaudeCodeRuntimeConfig } from './config';
 import { prepareClaudeCodeAuthProfiles, resolveEffectiveClaudeConfigHome } from './auth';
 import { buildClaudeArgs } from './args';
+import { resolveClaudeCodeSkillPluginDir } from './skillPlugin';
 import { resolveResumableSessionId } from './resume';
 import { classifyClaudeRun } from './errors';
 import { ClaudeStreamAccumulator, NdjsonDecoder, mcpToolName } from './streamJson';
@@ -247,6 +248,10 @@ export class ClaudeCodeRuntime implements AgentRuntime {
         mcpConfigPath: mcp.configPath,
         mcpAllowedToolNames: [...mcp.allowedToolNames, ...requiredMcpToolNames],
         addDirs: [],
+        skillPluginDir: resolveClaudeCodeSkillPluginDir(
+          cwd,
+          (params.runtimeBoundary?.tools.skills ?? []).map((skill) => skill.name),
+        ),
       });
 
       childEnv = this.buildEnv(params, config, cwd, claudeConfigHome);

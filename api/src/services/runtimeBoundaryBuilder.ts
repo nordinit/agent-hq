@@ -10,6 +10,7 @@ import {
   type RuntimeSkillAssignmentV1,
 } from '../runtimes/runtimeBoundary';
 import { normalizeClaudeCodeRuntimeConfig } from '../runtimes/claudeCode/config';
+import { CLAUDE_SKILL_TOOL } from '../runtimes/claudeCode/args';
 import type { ClaudeCodeRuntimeConfig } from '../runtimes/claudeCode/types';
 import {
   CODEX_BUILT_IN_TOOLS,
@@ -205,13 +206,18 @@ function runtimeConfigRecord(value: unknown): Record<string, unknown> | null {
 function effectiveBuiltInTools(
   runtimeType: string,
   config: Record<string, unknown> | null,
+  hasAssignedSkills: boolean,
 ): string[] {
   if (runtimeType === 'codex') return sortedStrings(CODEX_BUILT_IN_TOOLS);
   if (runtimeType === 'claude-code') {
     const toolPolicy = config && Object.prototype.hasOwnProperty.call(config, 'allowedTools')
       ? { allowedTools: config.allowedTools } as ClaudeCodeRuntimeConfig
       : undefined;
-    return sortedStrings(normalizeClaudeCodeRuntimeConfig(toolPolicy).allowedTools);
+    // buildClaudeArgs adds the Skill tool exactly when skills are assigned.
+    return sortedStrings([
+      ...normalizeClaudeCodeRuntimeConfig(toolPolicy).allowedTools,
+      ...(hasAssignedSkills ? [CLAUDE_SKILL_TOOL] : []),
+    ]);
   }
   return sortedStrings(Array.isArray(config?.allowedTools) ? config.allowedTools : []);
 }
@@ -341,7 +347,7 @@ export function buildRuntimeBoundaryV1(params: BuildRuntimeBoundaryV1Input): Run
       ?? (params.taskId != null ? ['agent_hq_post_task_outcome', 'agent_hq_start_task_run'] : []),
   );
   const evidenceRequirements = sortedStrings(params.evidenceRequirements ?? []);
-  const builtIn = effectiveBuiltInTools(params.runtimeType, config);
+  const builtIn = effectiveBuiltInTools(params.runtimeType, config, (params.skills ?? []).length > 0);
   const configRevisionMaterial = params.runtimeType === 'codex'
     ? {
         config: sanitizeRuntimeConfigForRevision(config),
