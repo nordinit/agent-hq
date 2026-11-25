@@ -537,7 +537,9 @@ export default function WorkflowDetailPage() {
   ];
 
   return (
-    <div className={`flex flex-col ${tab === 'tasks' ? 'md:h-full md:overflow-hidden p-4 md:p-6' : 'space-y-6'}`}>
+    // The app shell gives /workflows/<id> the full height and no scrolling of its own, so the board
+    // can fill the screen. Every other tab scrolls here instead, or its lower half is cut off.
+    <div className={`flex flex-col p-4 md:p-6 ${tab === 'tasks' ? 'md:h-full md:overflow-hidden' : 'min-h-0 flex-1 space-y-6 overflow-y-auto'}`}>
       {/* Breadcrumb */}
       <div className={`flex items-center gap-2 text-sm text-slate-500 ${tab === 'tasks' ? 'mb-4 flex-shrink-0' : ''}`}>
         <Link href="/workflows" className="hover:text-white transition-colors flex items-center gap-1">
