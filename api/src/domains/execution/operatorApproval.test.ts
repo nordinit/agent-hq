@@ -1,4 +1,7 @@
 import express from 'express';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import type { Server } from 'http';
 import { setupTestDb, teardownTestDb } from '../../db/testDb';
 import { getDb } from '../../db/client';
@@ -138,7 +141,7 @@ describe('operator edits approve what they change', () => {
 
   it('grants host.execute to the starter agents onboarding creates, and says so in the preview', async () => {
     await saveRuntimeConnectionConfig(getDb(), { kind: 'openclaw', endpoint: 'ws://127.0.0.1:17601', authToken: 'test' });
-    const payload = { template_key: 'development', project_name: 'Acme', workflow_name: 'Delivery' };
+    const payload = { runtime_type: 'openclaw', template_key: 'development', project_name: 'Acme', workflow_name: 'Delivery' };
 
     const preview = await call('POST', '/setup/starter-plan/preview', payload);
     expect(preview.status).toBe(200);
@@ -167,5 +170,38 @@ describe('operator edits approve what they change', () => {
       "SELECT capability_key FROM agent_mcp_capability_policies WHERE agent_id = ? AND enabled = 1 AND capability_key IN ('host.execute','tasks.read_active_context')", agentIds[0],
     );
     expect(capabilities.map((row) => row.capability_key).sort()).toEqual(['host.execute', 'tasks.read_active_context']);
+  });
+
+  it('approves Claude Code starter agents together with the login they run with', async () => {
+    const saved = { PATH: process.env.PATH, CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR };
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-hq-starter-claude-'));
+    try {
+      fs.mkdirSync(path.join(root, 'bin'));
+      fs.writeFileSync(path.join(root, 'bin', 'claude'), '#!/bin/sh\nexit 1\n');
+      fs.chmodSync(path.join(root, 'bin', 'claude'), 0o755);
+      fs.mkdirSync(path.join(root, 'home'));
+      fs.writeFileSync(path.join(root, 'home', '.credentials.json'), '{"placeholder":true}');
+      process.env.PATH = path.join(root, 'bin');
+      process.env.CLAUDE_CONFIG_DIR = path.join(root, 'home');
+
+      const applied = await call('POST', '/setup/starter-plan/apply', { template_key: 'development', project_name: 'Acme' });
+      expect(applied.status).toBe(201);
+      expect(applied.body.execution_access.pending).toEqual([]);
+      const agentIds = [...new Set(Object.values(applied.body.agent_ids as Record<string, number>))];
+      for (const agentId of agentIds) expect(await refusal(agentId)).toBeNull();
+      const revision = await getDb().get<{ snapshot: string | Record<string, any> }>(
+        "SELECT snapshot FROM executable_revisions WHERE resource_kind = 'agent_runtime' AND resource_id = ?", agentIds[0],
+      );
+      const snapshot = typeof revision!.snapshot === 'string' ? JSON.parse(revision!.snapshot) : revision!.snapshot;
+      expect(snapshot.referenced_content.credential_references).toEqual([
+        expect.objectContaining({ kind: 'provider_connections', id: applied.body.provider_connection_id }),
+      ]);
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value == null) delete process.env[key];
+        else process.env[key] = value;
+      }
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });

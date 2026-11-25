@@ -39,6 +39,9 @@ now one consolidated schema; start 0.2.0 on a fresh database.
   between installs as a JSON manifest, with a preview before import.
 - **CLI.** `npx @nordinit/agent-hq start` runs Agent HQ with Docker Compose and PostgreSQL 17, or
   natively with `--no-docker`.
+- **Guided onboarding.** The setup wizard and `agent-hq onboard` create a project, workflows,
+  starter agents, and routing from a template. Starter agents run on Claude Code (recommended),
+  Codex, or OpenClaw; Claude Code and Codex agents use the CLI's own login on this machine.
 
 ### Security
 

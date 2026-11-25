@@ -67,3 +67,16 @@ test('onboarding wizard does not automatically refetch templates after catalog f
   assert.match(wizardSource, /templates\.length === 0 && !templatesLoading && !templateError/);
   assert.match(wizardSource, /onClick=\{\(\) => void loadStarterTemplates\(\)\}/);
 });
+
+test('onboarding wizard recommends Claude Code and also offers Codex and OpenClaw', () => {
+  assert.match(agentsApiSource, /getStarterRuntimes:\s*\(\)\s*=>\s*apiFetch<StarterRuntimesResponse>\('\/api\/v1\/setup\/starter-runtimes'\)/);
+  assert.match(apiTypesSource, /export type StarterRuntimeType = 'claude-code' \| 'codex' \| 'openclaw'/);
+  assert.match(apiTypesSource, /runtime_type\?: StarterRuntimeType/);
+  assert.match(wizardSource, /useState<StarterRuntimeType>\('claude-code'\)/);
+  assert.match(wizardSource, /Choose where your agents run/);
+  assert.match(wizardSource, /option\.recommended &&/);
+  assert.match(wizardSource, /runtime_type: runtimeType/);
+  // The provider and gateway steps are OpenClaw's; Claude Code and Codex use the CLI's own login.
+  assert.match(wizardSource, /runtimeType === 'openclaw'\s*\n\s*\? \['personalize', 'project-setup', 'runtime', 'provider', 'gateway', 'agent', 'done'\]\s*\n\s*: \['personalize', 'project-setup', 'runtime', 'agent', 'done'\]/);
+  assert.match(wizardSource, /Runs on \{starterPlan\.runtime\.label\}/);
+});

@@ -77,6 +77,7 @@ describe('starter template setup API', () => {
     const { server, baseUrl } = await startServer();
     try {
       const payload = {
+        runtime_type: 'openclaw',
         template_key: 'development',
         project_name: 'Acme App',
         workflow_name: 'Delivery',
@@ -170,7 +171,7 @@ describe('starter template setup API', () => {
       const applyRes = await fetch(`${baseUrl}/api/v1/setup/starter-plan/apply`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ template_key: 'development', project_name: 'Blocked' }),
+        body: JSON.stringify({ runtime_type: 'openclaw', template_key: 'development', project_name: 'Blocked' }),
       });
       expect(applyRes.status).toBe(422);
       const body = await applyRes.json() as Record<string, any>;
@@ -190,6 +191,7 @@ describe('starter template setup API', () => {
     const { server, baseUrl } = await startServer();
     try {
       const payload = {
+        runtime_type: 'openclaw',
         template_keys: ['development', 'ops', 'lead-generation'],
         project_name: 'Growth Ops',
         owners: {
@@ -344,6 +346,7 @@ describe('starter template setup API', () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          runtime_type: 'openclaw',
           template_keys: ['ops'],
           project_name: 'Ops Registry',
           owners: {

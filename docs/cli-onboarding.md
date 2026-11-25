@@ -35,7 +35,7 @@ when a user intentionally bypasses starter setup.
 
 | Path | Purpose | Prompt budget | Generated scope |
 |---|---|---:|---|
-| `starter` | Recommended first setup. | 8-14 prompts | Providers, OpenClaw runtime, one project, selected Development/Ops/Lead Generation workflows, starter agents/roles, owner-based routing, model defaults, verification preview. |
+| `starter` | Recommended first setup. | 8-14 prompts | Agent runtime (Claude Code recommended, or Codex or OpenClaw), providers and gateway for OpenClaw, one project, selected Development/Ops/Lead Generation workflows, starter agents/roles, owner-based routing, model defaults, verification preview. |
 | `manual/skip` | Bypass starter records. | 1 prompt | Marks onboarding complete for operators who will configure records later through supported APIs/UI. |
 
 Template selection prompt:
@@ -62,8 +62,8 @@ The wizard always follows this order. Modes may skip individual prompts inside a
 section, but they should not reorder sections.
 
 1. **Instance**
-2. **Providers**
-3. **Runtimes**
+2. **Runtimes**
+3. **Providers** (OpenClaw only)
 4. **Project / Workflow**
 5. **Agents**
 6. **Generated Routing**
@@ -99,9 +99,36 @@ Behavior:
 - Generate an instance id or use the API-created id once the local API is
   available.
 
-### 2. Providers
+### 2. Runtimes
+
+Purpose: choose where the starter agents run.
+
+Prompts and defaults:
+
+| Prompt | Starter default |
+|---|---|
+| Where should your agents run? | Claude Code (recommended), or the first runtime that is ready |
+| Check again? (Claude Code or Codex not installed or not logged in) | yes |
+| OpenClaw gateway endpoint and token (OpenClaw only) | detected local gateway |
+
+Behavior:
+
+- List Claude Code, Codex, and OpenClaw with each one's state on the machine where Agent HQ
+  runs: ready, not installed, not logged in, or set up next (OpenClaw).
+- For Claude Code and Codex, show the commands that fix the state (install, then
+  `claude auth login` or `codex login`) and check again on request. Detection runs only fixed
+  version and login-status checks; it never starts an agent.
+- The Docker images contain neither CLI, and a container cannot use the host's logins. When the
+  API runs in Docker, say so and suggest `agent-hq start --no-docker` or OpenClaw.
+- For OpenClaw, continue with the provider and gateway steps, and repair the OpenClaw plugin
+  configuration when safe.
+- Do not silently grant broad tool permissions. Show the plugin/tool policy being applied.
+
+### 3. Providers
 
 Purpose: collect enough model-provider access for the generated agents to run.
+This section runs only when the starter agents use OpenClaw. Claude Code and Codex agents use the
+CLI's own login, which onboarding records as their provider connection.
 
 Prompts and defaults for the starter experience:
 
@@ -119,28 +146,6 @@ Provider requirements:
 - Secrets must not be printed after entry.
 - If the provider flow is skipped, continue only when the selected mode allows
   an unverified setup. Starter should warn and mark verification incomplete.
-
-### 3. Runtimes
-
-Purpose: choose the execution backends agents will use.
-
-Prompts and defaults:
-
-| Prompt | Starter default |
-|---|---|
-| Runtime for local agents | OpenClaw |
-| Install or repair OpenClaw integration? | yes |
-| Enable Agent HQ capability tools plugin? | yes |
-| Allow local worktree execution? | yes |
-| Additional runtime | skip |
-
-Behavior:
-
-- Verify required binaries and versions.
-- Repair OpenClaw plugin configuration when safe.
-- Do not silently grant broad tool permissions. Show the plugin/tool policy
-  being applied.
-- Full mode may add Claude Code, Hermes, webhook, or custom runtimes.
 
 ### 4. Project / Workflow
 
@@ -301,7 +306,8 @@ Verification checks:
 - API starts and responds.
 - UI starts and serves the expected port.
 - Database is reachable.
-- Provider gate passes for at least one connected provider.
+- Provider gate passes for at least one connected provider (for Claude Code and
+  Codex, the CLI login recorded as a provider connection).
 - Runtime adapter health check passes.
 - Agent HQ capability tools plugin is available when OpenClaw is selected.
 - Generated project, workflow, agents, assignment rules, transitions, evidence
@@ -424,15 +430,11 @@ UI port? [3500]
 API port? [3501]
 Data directory? [~/.agent-hq]
 
-Providers
-Primary provider? [OpenAI]
-Connect OpenAI now? [Y/n] y
-OpenAI connected as alex@example.com.
-
-Runtimes
-Use OpenClaw for local agents? [Y/n] y
-OpenClaw found.
-Enable Agent HQ capability tools plugin? [Y/n] y
+Where should your agents run?
+  1. Claude Code (recommended) - Ready: Claude Code is installed and logged in.
+  2. Codex - Not installed: Codex is not installed on this machine.
+  3. OpenClaw - Set up next: Connect a model provider and an OpenClaw gateway in the next steps.
+Select where agents run [1] 1
 
 Workflow
 Starter templates? [development] development,ops
@@ -460,8 +462,7 @@ Apply this setup? [Y/n] y
 
 Applying setup...
 ✓ database ready
-✓ provider connected
-✓ OpenClaw plugin enabled
+✓ Claude Code login recorded
 ✓ project created
 ✓ workflow created
 ✓ agents created

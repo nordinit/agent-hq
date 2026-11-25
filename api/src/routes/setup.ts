@@ -18,6 +18,7 @@ import {
   listStarterTemplates,
   type StarterPlanInput,
 } from '../lib/starterTemplates';
+import { detectStarterRuntimes } from '../lib/starterRuntimes';
 
 const router = Router();
 
@@ -203,6 +204,16 @@ router.post('/runtime/config', async (req: Request, res: Response) => {
 // ─── Starter template setup ──────────────────────────────────────────────────
 router.get('/templates', (_req: Request, res: Response) => {
   res.json({ templates: listStarterTemplates() });
+});
+
+// Which runtimes the starter agents can use here: Claude Code (recommended), Codex, or OpenClaw.
+// Runs only fixed version and login-status checks; it never starts an agent.
+router.get('/starter-runtimes', async (_req: Request, res: Response) => {
+  try {
+    res.json({ ok: true, ...(await detectStarterRuntimes(getDb())) });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
+  }
 });
 
 router.post('/starter-plan/preview', async (req: Request, res: Response) => {

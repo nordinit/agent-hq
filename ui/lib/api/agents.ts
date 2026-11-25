@@ -1,5 +1,5 @@
 import { apiFetch } from './http';
-import type { Agent, AgentDoc, AgentMcpAssignment, AgentMcpPermissionPolicy, AgentMcpToolAllowlistPolicy, AgentToolAssignment, ClaudeMdResult, DeleteAgentResponse, GatewayConfig, GatewayRestartResponse, GatewayRuntimeHint, GatewayStatus, GatewayPairResponse, McpCatalog, McpServer, ProvisionResult, ProvisionStatus, RuntimeConfigResponse, SetupStatus, SkillDetail, SkillEntry, StarterPlanApplyResponse, StarterPlanInput, StarterPlanPreviewResponse, StarterTemplateCatalogResponse, Tool } from './types';
+import type { Agent, AgentDoc, AgentMcpAssignment, AgentMcpPermissionPolicy, AgentMcpToolAllowlistPolicy, AgentToolAssignment, ClaudeMdResult, DeleteAgentResponse, GatewayConfig, GatewayRestartResponse, GatewayRuntimeHint, GatewayStatus, GatewayPairResponse, McpCatalog, McpServer, ProvisionResult, ProvisionStatus, RuntimeConfigResponse, SetupStatus, SkillDetail, SkillEntry, StarterPlanApplyResponse, StarterPlanInput, StarterPlanPreviewResponse, StarterRuntimesResponse, StarterTemplateCatalogResponse, Tool } from './types';
 
 const encodeSkillFilePath = (filePath: string): string =>
   filePath.split('/').map(encodeURIComponent).join('/');
@@ -13,6 +13,7 @@ completeOnboarding: () =>
 skipOnboarding: () =>
   apiFetch<{ ok: boolean; onboarding_completed: boolean }>('/api/v1/setup/onboarding/skip', { method: 'POST' }),
 getStarterTemplates: () => apiFetch<StarterTemplateCatalogResponse>('/api/v1/setup/templates'),
+getStarterRuntimes: () => apiFetch<StarterRuntimesResponse>('/api/v1/setup/starter-runtimes'),
 previewStarterPlan: (data: StarterPlanInput) =>
   apiFetch<StarterPlanPreviewResponse>('/api/v1/setup/starter-plan/preview', { method: 'POST', body: JSON.stringify(data) }),
 applyStarterPlan: (data: StarterPlanInput) =>

@@ -497,6 +497,37 @@ export interface StarterPlanInput {
   workflow_names?: Record<string, string>;
   owners?: Partial<Record<StarterOwnerRole, string>>;
   routing_plan?: StarterRoutePlan[];
+  /** The runtime the starter agents use. The API uses Claude Code when it is omitted. */
+  runtime_type?: StarterRuntimeType;
+}
+
+export type StarterRuntimeType = 'claude-code' | 'codex' | 'openclaw';
+
+export interface StarterRuntimeOption {
+  type: StarterRuntimeType;
+  label: string;
+  description: string;
+  recommended: boolean;
+  status: 'ready' | 'not_installed' | 'not_logged_in' | 'needs_setup';
+  /** Plain-language state of this runtime on the machine Agent HQ runs on. */
+  message: string;
+  /** Commands that fix the state, in order. */
+  fix: string[];
+  login: {
+    runtime_type: 'claude-code' | 'codex';
+    provider_slug: string;
+    auth_mode: 'subscription';
+    external_ref: string;
+    display_name: string;
+  } | null;
+}
+
+export interface StarterRuntimesResponse {
+  ok: true;
+  recommended: StarterRuntimeType;
+  /** The recommended runtime when it is ready, otherwise the first ready one. */
+  suggested: StarterRuntimeType;
+  options: StarterRuntimeOption[];
 }
 
 export interface StarterAgentPlan {
@@ -505,7 +536,7 @@ export interface StarterAgentPlan {
   name: string;
   job_title: string;
   role: string;
-  runtime_type: 'openclaw';
+  runtime_type: StarterRuntimeType;
   preferred_provider: string;
   model: string | null;
   skill_names: string[];
@@ -555,6 +586,8 @@ export interface StarterSetupPlan {
   agents: StarterAgentPlan[];
   routes: StarterRoutePlan[];
   model_routing: StarterModelRoutingPlan[];
+  /** The runtime the starter agents use, and its state on this machine. */
+  runtime: StarterRuntimeOption;
   compatibility: {
     ok: boolean;
     runtime: string | null;
@@ -596,6 +629,8 @@ export interface StarterPlanApplyResponse {
   agent_ids: Record<string, number>;
   route_ids: number[];
   model_routing_ids: number[];
+  /** The Claude Code or Codex login the starter agents run with. */
+  provider_connection_id: number | null;
   execution_access: {
     host_execute_agent_ids: number[];
     approved_revisions: number;

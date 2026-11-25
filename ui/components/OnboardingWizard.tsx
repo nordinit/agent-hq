@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { api, GatewayRuntimeHint, GatewayStatus, StarterOwnerRole, StarterPlanInput, StarterSetupPlan, StarterTemplateCatalogEntry, StarterTemplateKey } from '@/lib/api';
+import { api, GatewayRuntimeHint, GatewayStatus, StarterOwnerRole, StarterPlanInput, StarterRuntimeOption, StarterRuntimeType, StarterSetupPlan, StarterTemplateCatalogEntry, StarterTemplateKey } from '@/lib/api';
 import { beginGettingStartedGuide } from '@/lib/gettingStarted';
 import ProviderSetupStep from '@/components/ProviderSetupStep';
 import {
@@ -35,10 +35,32 @@ export function markOnboarded() {
 }
 
 // ─── Step types ────────────────────────────────────────────────────────────────
-// provider step is inserted between project-setup and agent (per spec §2.1)
-type Step = 'personalize' | 'project-setup' | 'provider' | 'gateway' | 'agent' | 'done';
-const STEPS: Step[] = ['personalize', 'project-setup', 'provider', 'gateway', 'agent', 'done'];
-const STEP_LABELS = ['You', 'Templates', 'Providers', 'Runtime', 'Review', 'Done'];
+// The runtime step comes after the templates. Claude Code and Codex agents use the CLI's own login,
+// so the provider and gateway steps appear only for OpenClaw.
+type Step = 'personalize' | 'project-setup' | 'runtime' | 'provider' | 'gateway' | 'agent' | 'done';
+const STEP_LABELS: Record<Step, string> = {
+  personalize: 'You',
+  'project-setup': 'Templates',
+  runtime: 'Runtime',
+  provider: 'Providers',
+  gateway: 'Gateway',
+  agent: 'Review',
+  done: 'Done',
+};
+
+function onboardingStepsFor(runtimeType: StarterRuntimeType, blankOnly: boolean): Step[] {
+  if (blankOnly) return ['personalize', 'project-setup', 'agent', 'done'];
+  return runtimeType === 'openclaw'
+    ? ['personalize', 'project-setup', 'runtime', 'provider', 'gateway', 'agent', 'done']
+    : ['personalize', 'project-setup', 'runtime', 'agent', 'done'];
+}
+
+const RUNTIME_STATUS_LABELS: Record<StarterRuntimeOption['status'], { label: string; className: string }> = {
+  ready: { label: 'Ready', className: 'border-green-500/30 bg-green-500/10 text-green-300' },
+  not_installed: { label: 'Not installed', className: 'border-slate-600 bg-slate-900 text-slate-400' },
+  not_logged_in: { label: 'Not logged in', className: 'border-amber-500/30 bg-amber-500/10 text-amber-300' },
+  needs_setup: { label: 'Set up next', className: 'border-slate-600 bg-slate-900 text-slate-400' },
+};
 
 interface TemplatePresentation {
   label: string;
@@ -182,11 +204,11 @@ interface Props {
 }
 
 // ─── Progress indicator ────────────────────────────────────────────────────────
-function StepDots({ current }: { current: Step }) {
-  const currentIdx = STEPS.indexOf(current);
+function StepDots({ current, steps }: { current: Step; steps: Step[] }) {
+  const currentIdx = steps.indexOf(current);
   return (
     <div className="flex items-center gap-2 mb-8">
-      {STEPS.map((s, i) => {
+      {steps.map((s, i) => {
         const isPast = i < currentIdx;
         const isCurrent = i === currentIdx;
         return (
@@ -208,12 +230,12 @@ function StepDots({ current }: { current: Step }) {
                   isCurrent ? 'text-amber-400' : isPast ? 'text-green-400' : 'text-slate-600'
                 }`}
               >
-                {STEP_LABELS[i]}
+                {STEP_LABELS[s]}
               </span>
             </div>
-            {i < STEPS.length - 1 && (
+            {i < steps.length - 1 && (
               <div
-                className={`h-px w-10 mb-4 transition-colors duration-300 ${
+                className={`h-px ${steps.length > 6 ? 'w-5' : 'w-10'} mb-4 transition-colors duration-300 ${
                   isPast ? 'bg-green-500/60' : 'bg-slate-700'
                 }`}
               />
@@ -258,6 +280,13 @@ export default function OnboardingWizard({ onClose }: Props) {
   const [gatewayDetails, setGatewayDetails] = useState<string | null>(null);
   const [gatewayLoaded, setGatewayLoaded] = useState(false);
 
+  // Runtime step — Claude Code (recommended), Codex, or OpenClaw
+  const [runtimeType, setRuntimeType] = useState<StarterRuntimeType>('claude-code');
+  const [runtimeChosen, setRuntimeChosen] = useState(false);
+  const [runtimeOptions, setRuntimeOptions] = useState<StarterRuntimeOption[]>([]);
+  const [runtimeLoading, setRuntimeLoading] = useState(false);
+  const [runtimeError, setRuntimeError] = useState<string | null>(null);
+
   // Step 5 — starter plan preview/apply
   const [agentError, setAgentError] = useState<string | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -276,6 +305,9 @@ export default function OnboardingWizard({ onClose }: Props) {
     [templates, selectedTemplateKeys],
   );
   const selectedOwnerRoles = useMemo(() => uniqueOwnerRoles(selectedTemplates), [selectedTemplates]);
+  const blankOnly = selectedTemplateKeys.length === 1 && selectedTemplateKeys[0] === 'blank';
+  const steps = useMemo(() => onboardingStepsFor(runtimeType, blankOnly), [runtimeType, blankOnly]);
+  const selectedRuntime = runtimeOptions.find(option => option.type === runtimeType) ?? null;
 
   // ── Manual setup: skip the guided wizard entirely ───────────────────────────
   // Marks onboarding complete server-side, dropping the user into an empty
@@ -333,7 +365,41 @@ export default function OnboardingWizard({ onClose }: Props) {
       setStep('agent');
       return;
     }
-    setStep('provider');
+    setStep('runtime');
+  }
+
+  // ── Runtime step: see which runtimes this machine can run ─────────────────
+  const loadStarterRuntimes = useCallback(async () => {
+    setRuntimeLoading(true);
+    setRuntimeError(null);
+    try {
+      const result = await api.getStarterRuntimes();
+      setRuntimeOptions(result.options);
+      if (!runtimeChosen) setRuntimeType(result.suggested);
+    } catch (err) {
+      setRuntimeError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRuntimeLoading(false);
+    }
+  }, [runtimeChosen]);
+
+  function chooseRuntime(type: StarterRuntimeType) {
+    setRuntimeType(type);
+    setRuntimeChosen(true);
+    setRuntimeError(null);
+    setStarterPlan(null);
+  }
+
+  function handleRuntimeNext() {
+    if (runtimeType === 'openclaw') {
+      setStep('provider');
+      return;
+    }
+    if (selectedRuntime?.status !== 'ready') {
+      setRuntimeError(`${selectedRuntime?.label ?? 'This runtime'} is not ready yet. Run the commands shown, then select Check again.`);
+      return;
+    }
+    setStep('agent');
   }
 
   const starterPlanPayload = useCallback((): StarterPlanInput => {
@@ -342,8 +408,9 @@ export default function OnboardingWizard({ onClose }: Props) {
       template_keys: selectedTemplateKeys,
       project_name: projectName.trim(),
       owners,
+      runtime_type: runtimeType,
     };
-  }, [owners, projectName, selectedTemplateKeys]);
+  }, [owners, projectName, runtimeType, selectedTemplateKeys]);
 
   function toggleTemplate(key: StarterTemplateKey) {
     setProjectSetupError(null);
@@ -518,6 +585,12 @@ export default function OnboardingWizard({ onClose }: Props) {
   }, [step, gatewayLoaded]);
 
   useEffect(() => {
+    if (step === 'runtime' && runtimeOptions.length === 0 && !runtimeLoading && !runtimeError) {
+      void loadStarterRuntimes();
+    }
+  }, [loadStarterRuntimes, runtimeError, runtimeLoading, runtimeOptions.length, step]);
+
+  useEffect(() => {
     if (step === 'project-setup' && templates.length === 0 && !templatesLoading && !templateError) {
       void loadStarterTemplates();
     }
@@ -580,7 +653,7 @@ export default function OnboardingWizard({ onClose }: Props) {
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/70 px-4 py-4 backdrop-blur-sm sm:items-center">
       <div className="relative max-h-[calc(100vh-2rem)] w-full max-w-lg overflow-y-auto rounded-2xl border border-slate-700 bg-slate-900 p-8 shadow-2xl">
         {/* Progress indicator */}
-        <StepDots current={step} />
+        <StepDots current={step} steps={steps} />
 
         {/* ══════════════════════════════════════════════════════════════════════
             STEP 1 — PERSONALIZATION
@@ -816,12 +889,118 @@ export default function OnboardingWizard({ onClose }: Props) {
         )}
 
         {/* ══════════════════════════════════════════════════════════════════════
+            STEP 3 — RUNTIME: where the starter agents run
+        ══════════════════════════════════════════════════════════════════════ */}
+        {step === 'runtime' && (
+          <div className="space-y-6">
+            <div>
+              <h2 className="text-xl font-bold text-white mb-1">
+                Choose where your agents run
+              </h2>
+              <p className="text-slate-400 text-sm leading-relaxed">
+                Your starter agents all use one runtime. Claude Code is recommended: each agent runs Claude Code on this machine with your own Claude login. You can change an agent&apos;s runtime later.
+              </p>
+            </div>
+
+            {runtimeLoading && runtimeOptions.length === 0 && (
+              <div className="flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-800/40 p-4 text-sm text-slate-400">
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Checking which runtimes are installed...
+              </div>
+            )}
+
+            <div className="space-y-3" role="radiogroup" aria-label="Agent runtime">
+              {runtimeOptions.map(option => {
+                const selected = option.type === runtimeType;
+                const status = RUNTIME_STATUS_LABELS[option.status];
+                return (
+                  <div
+                    key={option.type}
+                    role="radio"
+                    aria-checked={selected}
+                    tabIndex={0}
+                    onClick={() => chooseRuntime(option.type)}
+                    onKeyDown={event => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        chooseRuntime(option.type);
+                      }
+                    }}
+                    className={`cursor-pointer rounded-xl border p-4 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/40 ${
+                      selected ? 'border-amber-400/60 bg-amber-400/10' : 'border-slate-700 bg-slate-800/40 hover:border-slate-500'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <TerminalSquare className={`h-4 w-4 ${selected ? 'text-amber-300' : 'text-slate-400'}`} />
+                          <span className="text-sm font-semibold text-white">{option.label}</span>
+                          {option.recommended && (
+                            <span className="rounded-md bg-amber-400/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-300">
+                              Recommended
+                            </span>
+                          )}
+                        </div>
+                        <p className="mt-1 text-xs leading-5 text-slate-400">{option.description}</p>
+                      </div>
+                      <span className={`shrink-0 rounded-md border px-2 py-0.5 text-[11px] font-medium ${status.className}`}>
+                        {status.label}
+                      </span>
+                    </div>
+                    <p className="mt-2 text-xs leading-5 text-slate-300">{option.message}</p>
+                    {option.fix.length > 0 && (
+                      <div className="mt-2 space-y-1">
+                        {option.fix.map(command => (
+                          <code key={command} className="block rounded-md bg-slate-950 px-2 py-1 font-mono text-[11px] text-slate-200">
+                            {command}
+                          </code>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            {runtimeError && (
+              <div className="flex items-start gap-2 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-300">
+                <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+                <span>{runtimeError}</span>
+              </div>
+            )}
+
+            <div className="flex gap-3">
+              <button
+                onClick={() => setStep('project-setup')}
+                className="flex items-center gap-1.5 px-4 py-3 rounded-xl border border-slate-600 text-slate-300 hover:text-white hover:border-slate-500 text-sm font-medium transition-colors"
+              >
+                <ArrowLeft className="w-4 h-4" /> Back
+              </button>
+              <button
+                onClick={() => void loadStarterRuntimes()}
+                disabled={runtimeLoading}
+                className="flex items-center gap-1.5 px-4 py-3 rounded-xl border border-slate-600 text-slate-300 hover:text-white hover:border-slate-500 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <RefreshCw className={`w-4 h-4 ${runtimeLoading ? 'animate-spin' : ''}`} /> Check again
+              </button>
+              <button
+                onClick={handleRuntimeNext}
+                disabled={runtimeLoading || runtimeOptions.length === 0}
+                className="flex-1 flex items-center justify-center gap-2 bg-amber-400 hover:bg-amber-300 disabled:cursor-not-allowed disabled:opacity-50 text-slate-900 font-semibold py-3 rounded-xl transition-colors"
+              >
+                Continue <ArrowRight className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ══════════════════════════════════════════════════════════════════════
             STEP 3 — PROVIDER SETUP (gate: at least one connected provider)
         ══════════════════════════════════════════════════════════════════════ */}
         {step === 'provider' && (
           <ProviderSetupStep
             onGatePassed={handleProviderGatePassed}
-            onBack={() => setStep('project-setup')}
+            onBack={() => setStep('runtime')}
           />
         )}
 
@@ -1078,10 +1257,23 @@ export default function OnboardingWizard({ onClose }: Props) {
                         <Bot className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" />
                         <div className="min-w-0">
                           <p className="text-sm font-medium text-slate-200">{agent.name}</p>
-                          <p className="mt-1 text-xs leading-5 text-slate-500">{agent.job_title} · {agent.owner_role} · {agent.preferred_provider}{agent.model ? ` / ${agent.model}` : ''}</p>
+                          <p className="mt-1 text-xs leading-5 text-slate-500">{agent.job_title} · {agent.owner_role} · {starterPlan.runtime?.label ?? agent.runtime_type}{agent.model ? ` / ${agent.model}` : ''}</p>
                         </div>
                       </div>
                     ))
+                  )}
+                  {starterPlan.agents.length > 0 && starterPlan.runtime && (
+                    <div className="flex items-start gap-3 rounded-lg border border-slate-600 bg-slate-900/70 p-3">
+                      <TerminalSquare className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" />
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-slate-200">Runs on {starterPlan.runtime.label}</p>
+                        <p className="mt-1 text-xs leading-5 text-slate-400">
+                          {starterPlan.runtime.login
+                            ? `Uses ${starterPlan.runtime.login.display_name}. The CLI picks the model unless you set one on the agent.`
+                            : starterPlan.runtime.message}
+                        </p>
+                      </div>
+                    </div>
                   )}
                   {starterPlan.execution_access?.summary && (
                     <div className={`flex items-start gap-3 rounded-lg border p-3 ${
@@ -1150,7 +1342,7 @@ export default function OnboardingWizard({ onClose }: Props) {
 
             <div className="flex gap-3">
               <button
-                onClick={() => setStep('gateway')}
+                onClick={() => setStep(blankOnly ? 'project-setup' : runtimeType === 'openclaw' ? 'gateway' : 'runtime')}
                 disabled={applyLoading}
                 className="flex items-center gap-1.5 px-4 py-3 rounded-xl border border-slate-600 text-slate-300 hover:text-white hover:border-slate-500 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50"
               >
@@ -1214,6 +1406,14 @@ export default function OnboardingWizard({ onClose }: Props) {
                   <CheckCircle2 className="w-4 h-4 text-green-400 shrink-0" />
                   <span className="text-slate-300">
                     <span className="text-white font-medium">{appliedPlan.agents.length}</span> starter agents created
+                  </span>
+                </div>
+              )}
+              {appliedPlan && appliedPlan.agents.length > 0 && appliedPlan.runtime && (
+                <div className="flex items-center gap-2 text-sm">
+                  <TerminalSquare className="w-4 h-4 text-green-400 shrink-0" />
+                  <span className="text-slate-300">
+                    Agents run on <span className="text-white font-medium">{appliedPlan.runtime.label}</span>
                   </span>
                 </div>
               )}

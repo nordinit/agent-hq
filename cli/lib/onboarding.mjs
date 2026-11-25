@@ -198,6 +198,74 @@ async function chooseProvider(io) {
   }
 }
 
+const AGENT_RUNTIME_STATUS = {
+  ready: 'Ready',
+  not_installed: 'Not installed',
+  not_logged_in: 'Not logged in',
+  needs_setup: 'Set up next',
+};
+
+/**
+ * Where the starter agents run: Claude Code (recommended), Codex, or OpenClaw. Returns the chosen
+ * option, `{ skip: true }`, or null when this API cannot report its runtimes.
+ */
+async function chooseAgentRuntime(apiBase, io, fetchImpl) {
+  const runtimes = await apiJson(apiBase, '/setup/starter-runtimes', undefined, fetchImpl).catch(() => null);
+  if (!runtimes?.options?.length) return null;
+  const options = runtimes.options;
+  const suggested = Math.max(0, options.findIndex(option => option.type === runtimes.suggested)) + 1;
+  while (true) {
+    console.log('\nWhere should your agents run?');
+    options.forEach((option, index) => {
+      const recommended = option.recommended ? ' (recommended)' : '';
+      console.log(`  ${index + 1}. ${option.label}${recommended} - ${AGENT_RUNTIME_STATUS[option.status] || option.status}: ${option.message}`);
+    });
+    console.log('  s. Skip agent setup');
+    const answer = (await io.ask('Select where agents run', String(suggested))).toLowerCase();
+    if (answer === 's' || answer === 'skip') return { skip: true };
+    const index = Number(answer);
+    if (Number.isInteger(index) && index >= 1 && index <= options.length) return options[index - 1];
+    const byType = options.find(option => option.type === answer);
+    if (byType) return byType;
+    warn('Choose a number, claude-code, codex, openclaw, or skip.');
+  }
+}
+
+/** Shows what to run until Claude Code or Codex is installed and logged in, or the operator stops. */
+async function waitForCliRuntime(apiBase, option, io, fetchImpl) {
+  let current = option;
+  for (let attempt = 0; current.status !== 'ready'; attempt += 1) {
+    warn(current.message);
+    for (const command of current.fix || []) console.log(`    ${command}`);
+    if (attempt >= 5 || !await io.confirm(`Check ${current.label} again?`, true)) return null;
+    const refreshed = await apiJson(apiBase, '/setup/starter-runtimes', undefined, fetchImpl);
+    current = refreshed.options.find(item => item.type === option.type) || current;
+  }
+  success(current.message);
+  return current;
+}
+
+/** Records the CLI login as a provider connection, for when no starter setup records it. */
+async function registerCliLogin(apiBase, option, fetchImpl) {
+  if (!option.login) return null;
+  return apiJson(apiBase, '/provider-connections', {
+    method: 'POST',
+    body: JSON.stringify({
+      provider_slug: option.login.provider_slug,
+      runtime_type: option.login.runtime_type,
+      auth_mode: option.login.auth_mode,
+      external_ref: option.login.external_ref,
+      display_name: option.login.display_name,
+    }),
+  }, fetchImpl);
+}
+
+async function completeOnboarding(apiBase, fetchImpl, context) {
+  await apiJson(apiBase, '/setup/onboarding/complete', { method: 'POST' }, fetchImpl).catch(error => {
+    warn(`${context}, but full onboarding completion is not ready yet: ${error.message}`);
+  });
+}
+
 async function chooseRuntime(io) {
   while (true) {
     printRuntimeMenu();
@@ -540,6 +608,9 @@ function printStarterPlan(plan) {
   if (plan.agents.length === 0) {
     console.log('  - none');
   } else {
+    if (plan.runtime) {
+      console.log(`  Runtime: ${plan.runtime.label}${plan.runtime.login ? `, using ${plan.runtime.login.display_name}` : ''}`);
+    }
     for (const agent of plan.agents) {
       console.log(`  - ${agent.owner_role}: ${agent.name} (${agent.runtime_type}, ${agent.preferred_provider}${agent.model ? `, ${agent.model}` : ''})`);
     }
@@ -654,6 +725,7 @@ async function runStarterTemplateSetup(apiBase, io, fetchImpl, flags = {}) {
     project_name: projectName,
     ...(workflowName ? { workflow_name: workflowName } : {}),
     owners,
+    ...(flags.runtimeType ? { runtime_type: flags.runtimeType } : {}),
   };
   let plan = await previewStarterPlan(apiBase, payload, fetchImpl);
   printStarterPlan(plan);
@@ -693,24 +765,45 @@ export async function runInit(flags = {}, deps = {}) {
     if (flags.skipProvider) {
       return await skipOnboarding(apiBase, fetchImpl);
     }
+    const interactive = !deps.nonInteractive && !flags.nonInteractive;
+
+    // Claude Code and Codex agents run the CLI with its own login, so they need no model provider
+    // or gateway setup here. OpenClaw continues with the provider and gateway questions below.
+    if (interactive) {
+      const agentRuntime = await chooseAgentRuntime(apiBase, io, fetchImpl);
+      if (agentRuntime?.skip) {
+        warn('Agent setup skipped. Run `agent-hq init` again to set up agents.');
+        return null;
+      }
+      if (agentRuntime && agentRuntime.type !== 'openclaw') {
+        const ready = await waitForCliRuntime(apiBase, agentRuntime, io, fetchImpl);
+        if (!ready) {
+          warn(`${agentRuntime.label} is not ready. Run \`agent-hq init\` again once it is installed and logged in.`);
+          return null;
+        }
+        const applied = await runStarterTemplateSetup(apiBase, io, fetchImpl, { ...flags, runtimeType: ready.type });
+        if (!applied || applied.skipped) await registerCliLogin(apiBase, ready, fetchImpl);
+        await completeOnboarding(apiBase, fetchImpl, `${ready.label} is ready`);
+        return applied ?? ready;
+      }
+      if (agentRuntime) flags = { ...flags, runtimeType: 'openclaw' };
+    }
 
     const list = await fetchProviders(apiBase, fetchImpl);
     const connected = (list.providers || []).filter(item => item.status === 'connected');
     if (connected.length > 0) {
       success(`Provider already connected: ${connected.map(item => `${item.display_name || item.slug} (${item.slug})`).join(', ')}`);
-      if (!deps.nonInteractive && !flags.nonInteractive) {
+      if (interactive) {
         const runtimeResult = await connectRuntime(apiBase, io, fetchImpl);
         if (runtimeResult || flags.template) {
           await runStarterTemplateSetup(apiBase, io, fetchImpl, flags);
         }
       }
-      await apiJson(apiBase, '/setup/onboarding/complete', { method: 'POST' }, fetchImpl).catch(error => {
-        warn(`Provider gate passed, but full onboarding completion is not ready yet: ${error.message}`);
-      });
+      await completeOnboarding(apiBase, fetchImpl, 'Provider gate passed');
       return list;
     }
 
-    if (deps.nonInteractive || flags.nonInteractive) {
+    if (!interactive) {
       throw new Error('No connected providers found. Run `agent-hq init` interactively or pass --skip-provider for minimal install.');
     }
 
@@ -737,9 +830,7 @@ export async function runInit(flags = {}, deps = {}) {
       await runStarterTemplateSetup(apiBase, io, fetchImpl, flags);
     }
 
-    await apiJson(apiBase, '/setup/onboarding/complete', { method: 'POST' }, fetchImpl).catch(error => {
-      warn(`Provider connected, but full onboarding completion is not ready yet: ${error.message}`);
-    });
+    await completeOnboarding(apiBase, fetchImpl, 'Provider connected');
     return row;
   } catch (error) {
     console.error(`\x1b[31m✗\x1b[0m ${error instanceof Error ? error.message : String(error)}`);

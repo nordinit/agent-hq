@@ -115,7 +115,8 @@ export function sensitiveOperation(method: string, p: string, body: Record<strin
         return method === 'GET' ? read(['tools.read'], 'registry') : { requirements: ['host.configure', 'tools.publish', 'host.execute'], effect: 'host_configuration' };
     if (/\/provision(?:-full)?$|\/mcp\/sync$|\/mcp-recovery\/retry$/.test(p))
         return { requirements: ['host.configure', 'host.execute'], effect: 'host_execution' };
-    if (/^\/runtime-drivers\/diagnose$|^\/setup\/runtime\/(?:test|detect|status)$|^\/settings\/gateway\/(?:restart|pair|status)$/.test(p))
+    // Starter runtime detection and plan preview run the Claude Code / Codex login-status check.
+    if (/^\/runtime-drivers\/diagnose$|^\/setup\/runtime\/(?:test|detect|status)$|^\/setup\/(?:starter-runtimes|starter-plan\/preview)$|^\/settings\/gateway\/(?:restart|pair|status)$/.test(p))
         return { requirements: ['host.execute'], effect: 'host_execution' };
     if (/^\/agents\/local-mlx\/status$/.test(p))
         return read(['host.execute']);

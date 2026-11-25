@@ -122,7 +122,7 @@ agent-hq token      # print the operator token
 
 To run the API and UI as native Node processes against your own PostgreSQL server, use `agent-hq start --no-docker` with `DATABASE_URL` set. See [`cli/README.md`](cli/README.md).
 
-`agent-hq onboard` connects a model provider and a runtime and creates starter records through the API. The starter agents it creates are allowed to run on this machine; an agent you add later needs the `host.execute` permission on its Capability map first (see [`docs/agent-capability-map.md`](docs/agent-capability-map.md#letting-an-agent-run)). `agent-hq init` writes a first-install setup plan to `~/.agent-hq/config.json` (`--dry-run` prints it without writing). The design contract for the guided setup is [`docs/cli-onboarding.md`](docs/cli-onboarding.md); not all of it is implemented yet.
+`agent-hq onboard` asks where your agents run — Claude Code (recommended), Codex, or OpenClaw — and creates starter records through the API. Claude Code and Codex agents use that CLI's own login, so it must be installed and logged in on the machine where Agent HQ runs; the Docker images don't include either CLI, so use `agent-hq start --no-docker` for them. OpenClaw also asks for a model provider and a gateway. The starter agents it creates are allowed to run on this machine; an agent you add later needs the `host.execute` permission on its Capability map first (see [`docs/agent-capability-map.md`](docs/agent-capability-map.md#letting-an-agent-run)). `agent-hq init` writes a first-install setup plan to `~/.agent-hq/config.json` (`--dry-run` prints it without writing). The design contract for the guided setup is [`docs/cli-onboarding.md`](docs/cli-onboarding.md); not all of it is implemented yet.
 
 ---
 
@@ -312,7 +312,7 @@ Agents are runtime-agnostic. Each agent record names one of the supported runtim
 | `hermes` | Runs the Hermes CLI as a local process; see [`docs/hermes-runtime.md`](docs/hermes-runtime.md) |
 | `webhook` | POSTs the task to a URL you configure, with an optional abort URL |
 
-There is no runtime plugin interface. To connect an agent system that is not listed, use the `webhook` runtime, or implement the `AgentRuntime` interface in `api/src/runtimes/` and register it in `api/src/runtimes/index.ts`. The default install and the onboarding flow assume OpenClaw.
+There is no runtime plugin interface. To connect an agent system that is not listed, use the `webhook` runtime, or implement the `AgentRuntime` interface in `api/src/runtimes/` and register it in `api/src/runtimes/index.ts`. Onboarding recommends Claude Code for the starter agents and also supports Codex and OpenClaw. An agent created through the API without a `runtime_type` uses OpenClaw.
 
 Each dispatched agent run receives:
 

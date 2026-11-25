@@ -359,3 +359,112 @@ test('init surfaces provider validation failures without completing onboarding',
   );
   assert.equal(requests.some(request => request.url.endsWith('/api/v1/setup/onboarding/complete')), false);
 });
+
+function starterRuntimes(claudeStatus) {
+  const claudeReady = claudeStatus === 'ready';
+  return {
+    ok: true,
+    recommended: 'claude-code',
+    suggested: 'claude-code',
+    options: [
+      {
+        type: 'claude-code', label: 'Claude Code', recommended: true, status: claudeStatus,
+        message: claudeReady ? 'Claude Code is installed and logged in. The starter agents will use this login.' : 'Claude Code is installed but not logged in.',
+        fix: claudeReady ? [] : ['claude auth login'],
+        login: claudeReady ? { runtime_type: 'claude-code', provider_slug: 'anthropic', auth_mode: 'subscription', external_ref: 'claude-code:default', display_name: 'Claude subscription (Claude Code default profile)' } : null,
+      },
+      { type: 'codex', label: 'Codex', recommended: false, status: 'not_installed', message: 'Codex is not installed on this machine.', fix: ['npm install -g @openai/codex', 'codex login'], login: null },
+      { type: 'openclaw', label: 'OpenClaw', recommended: false, status: 'needs_setup', message: 'Connect a model provider and an OpenClaw gateway in the next steps.', fix: [], login: null },
+    ],
+  };
+}
+
+test('init recommends Claude Code and sets up starter agents on it without a provider or gateway step', async () => {
+  const requests = [];
+  const fetchImpl = async (url, init = {}) => {
+    requests.push({ url, init });
+    if (url.endsWith('/api/v1/setup/starter-runtimes')) return jsonResponse(200, starterRuntimes('ready'));
+    if (url.endsWith('/api/v1/setup/templates')) {
+      return jsonResponse(200, { templates: [{ key: 'development', label: 'Development', description: 'MVP', fully_implemented: true, owner_roles: ['implementation'] }] });
+    }
+    if (url.endsWith('/api/v1/setup/starter-plan/preview') && init.method === 'POST') {
+      const body = JSON.parse(init.body);
+      assert.equal(body.runtime_type, 'claude-code');
+      return jsonResponse(200, {
+        ok: true,
+        plan: {
+          template: { key: 'development', label: 'Development' },
+          templates: [{ key: 'development', label: 'Development' }],
+          project: { name: body.project_name },
+          workflow: { name: body.workflow_name, workflow_type: 'dev' },
+          workflows: [{ template: { key: 'development', label: 'Development' }, workflow: { name: body.workflow_name, workflow_type: 'dev' } }],
+          agents: [{ owner_role: 'implementation', name: body.owners.implementation, runtime_type: 'claude-code', preferred_provider: 'anthropic', model: null }],
+          runtime: starterRuntimes('ready').options[0],
+          routes: [],
+          model_routing: [],
+          compatibility: { ok: true, runtime: 'claude-code', errors: [], warnings: [] },
+          preview: { changes: [] },
+          execution_access: { host_execute: true, summary: 'Each starter agent gets the host.execute permission.' },
+          editable: { advanced_path: '/routing' },
+        },
+      });
+    }
+    if (url.endsWith('/api/v1/setup/starter-plan/apply') && init.method === 'POST') {
+      assert.equal(JSON.parse(init.body).runtime_type, 'claude-code');
+      return jsonResponse(201, { ok: true, project_id: 12, workflow_id: 34, provider_connection_id: 5, execution_access: { host_execute_agent_ids: [1], approved_revisions: 2, pending: [] } });
+    }
+    if (url.endsWith('/api/v1/setup/onboarding/complete')) return jsonResponse(200, { ok: true, onboarding_completed: true });
+    throw new Error(`Unexpected request: ${url}`);
+  };
+
+  const printed = [];
+  const originalLog = console.log;
+  console.log = (...args) => { printed.push(args.join(' ')); };
+  await runInit(
+    { apiUrl: 'http://agent-hq.test' },
+    { io: makeIo(['', 'y', 'development', 'Acme App', 'Delivery', 'Dev Owner', 'n', 'y']), fetch: fetchImpl, noExit: true, openBrowser() {} },
+  ).finally(() => { console.log = originalLog; });
+
+  const output = printed.join('\n');
+  assert.match(output, /Where should your agents run\?\n {2}1\. Claude Code \(recommended\) - Ready: /);
+  assert.match(output, /2\. Codex - Not installed: Codex is not installed on this machine\./);
+  assert.match(output, /Runtime: Claude Code, using Claude subscription \(Claude Code default profile\)/);
+  assert.equal(requests.some(request => request.url.endsWith('/api/v1/setup/starter-plan/apply')), true);
+  assert.equal(requests.some(request => request.url.endsWith('/api/v1/setup/onboarding/complete')), true);
+  // No model provider or OpenClaw gateway questions for a Claude Code setup.
+  assert.equal(requests.some(request => /\/api\/v1\/(providers|setup\/runtime\/)/.test(request.url)), false);
+});
+
+test('init shows what to run until Claude Code is logged in, and records the login when no starter setup is applied', async () => {
+  const requests = [];
+  let checks = 0;
+  const fetchImpl = async (url, init = {}) => {
+    requests.push({ url, init });
+    if (url.endsWith('/api/v1/setup/starter-runtimes')) {
+      checks += 1;
+      return jsonResponse(200, starterRuntimes(checks === 1 ? 'not_logged_in' : 'ready'));
+    }
+    if (url.endsWith('/api/v1/provider-connections') && init.method === 'POST') {
+      assert.deepEqual(JSON.parse(init.body), {
+        provider_slug: 'anthropic', runtime_type: 'claude-code', auth_mode: 'subscription',
+        external_ref: 'claude-code:default', display_name: 'Claude subscription (Claude Code default profile)',
+      });
+      return jsonResponse(201, { id: 5, status: 'connected' });
+    }
+    if (url.endsWith('/api/v1/setup/onboarding/complete')) return jsonResponse(200, { ok: true, onboarding_completed: true });
+    throw new Error(`Unexpected request: ${url}`);
+  };
+
+  const printed = [];
+  const originalLog = console.log;
+  console.log = (...args) => { printed.push(args.join(' ')); };
+  await runInit(
+    { apiUrl: 'http://agent-hq.test' },
+    { io: makeIo(['1', 'y', 'n']), fetch: fetchImpl, noExit: true, openBrowser() {} },
+  ).finally(() => { console.log = originalLog; });
+
+  assert.equal(checks, 2);
+  assert.match(printed.join('\n'), /Claude Code is installed but not logged in\.\n {4}claude auth login/);
+  assert.equal(requests.some(request => request.url.endsWith('/api/v1/provider-connections')), true);
+  assert.equal(requests.some(request => request.url.endsWith('/api/v1/setup/onboarding/complete')), true);
+});

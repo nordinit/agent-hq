@@ -7,6 +7,14 @@ import {
 import { seedWorkflowTaskPolicy, seedWorkflowTypeTaskStatuses } from '../domains/routing/policy/seed';
 import { readRuntimeConnectionConfig } from './runtimeOnboarding';
 import {
+  RECOMMENDED_STARTER_RUNTIME,
+  STARTER_RUNTIME_TYPES,
+  detectStarterRuntime,
+  isStarterRuntimeType,
+  type StarterRuntimeOption,
+  type StarterRuntimeType,
+} from './starterRuntimes';
+import {
   STARTER_WORKFLOW_TYPE_SEEDS,
   STARTER_WORKFLOW_OUTCOME_SEEDS,
   STARTER_FIELD_SCHEMA_SEEDS,
@@ -39,6 +47,8 @@ export type StarterPlanInput = {
   workflow_names?: Record<string, string>;
   owners?: Partial<Record<StarterOwnerRole, string>>;
   routing_plan?: StarterRoutePlanInput[];
+  /** The runtime the starter agents use. Claude Code when omitted. */
+  runtime_type?: string;
 };
 
 export type StarterRoutePlanInput = {
@@ -67,7 +77,7 @@ export type StarterAgentPlan = {
   name: string;
   job_title: string;
   role: string;
-  runtime_type: 'openclaw';
+  runtime_type: StarterRuntimeType;
   preferred_provider: string;
   model: string | null;
   skill_names: string[];
@@ -117,6 +127,8 @@ export type StarterSetupPlan = {
   agents: StarterAgentPlan[];
   routes: StarterRoutePlan[];
   model_routing: StarterModelRoutingPlan[];
+  /** The runtime the starter agents use, and its state on this machine. */
+  runtime: StarterRuntimeOption;
   compatibility: {
     ok: boolean;
     runtime: string | null;
@@ -468,6 +480,12 @@ export type StarterPlanOptions = {
 export const STARTER_HOST_EXECUTION_SUMMARY = 'Applying this setup lets each starter agent run on this machine: it gets the host.execute permission, so it can start its runtime and run commands here, and its setup is approved as created. Changes you make to it later are approved when you save them. You can remove the permission on the agent\'s Capability map.';
 const STARTER_HOST_EXECUTION_WITHHELD = 'The starter agents will not be able to run until the operator grants host.execute on each agent\'s Capability map and approves its setup.';
 
+function starterRuntimeTypeFor(input: StarterPlanInput): StarterRuntimeType {
+  if (input.runtime_type === undefined || input.runtime_type === null || input.runtime_type === '') return RECOMMENDED_STARTER_RUNTIME;
+  if (isStarterRuntimeType(input.runtime_type)) return input.runtime_type;
+  throw Object.assign(new Error(`runtime_type must be one of: ${STARTER_RUNTIME_TYPES.join(', ')}`), { status: 400 });
+}
+
 export async function buildStarterSetupPlan(db: Db, tenantId: number, input: StarterPlanInput = {}, options: StarterPlanOptions = {}): Promise<StarterSetupPlan> {
   const templateKeys = normalizeTemplateKeys(input);
   const templates = templateKeys.map((key) => STARTER_TEMPLATE_CATALOG.find((entry) => entry.key === key)!);
@@ -475,22 +493,35 @@ export async function buildStarterSetupPlan(db: Db, tenantId: number, input: Sta
   const projectName = normalizeNonEmptyText(input.project_name, 'Agent HQ Project');
   const owners = ownerMap(input);
 
-  const runtime = await readRuntimeConnectionConfig(db);
-  const provider = await connectedProviderForPlan(tenantId);
-  const model = defaultAgentModelForProvider(provider);
+  const runtimeType = starterRuntimeTypeFor(input);
+  const runtime = await detectStarterRuntime(db, runtimeType);
   const requiresAgents = templates.some((template) => template.key !== 'blank');
   const compatibilityErrors: string[] = [];
   const compatibilityWarnings: string[] = [];
+  let provider: string | null;
+  let model: string | null;
 
-  if (requiresAgents && runtime?.kind !== 'openclaw') {
-    compatibilityErrors.push('Starter agents require a configured OpenClaw runtime. Configure runtime before applying this template.');
-  }
-  if (requiresAgents && !provider) {
-    compatibilityErrors.push('Starter agents require at least one connected provider.');
-  }
-  if (requiresAgents) {
-    const providerError = await validateAgentProviderSelection(tenantId, provider, model);
-    if (providerError) compatibilityErrors.push(providerError);
+  if (runtimeType === 'openclaw') {
+    provider = await connectedProviderForPlan(tenantId);
+    model = defaultAgentModelForProvider(provider);
+    if (requiresAgents && (await readRuntimeConnectionConfig(db))?.kind !== 'openclaw') {
+      compatibilityErrors.push('Starter agents require a configured OpenClaw runtime. Configure runtime before applying this template.');
+    }
+    if (requiresAgents && !provider) {
+      compatibilityErrors.push('Starter agents require at least one connected provider.');
+    }
+    if (requiresAgents) {
+      const providerError = await validateAgentProviderSelection(tenantId, provider, model);
+      if (providerError) compatibilityErrors.push(providerError);
+    }
+  } else {
+    // A Claude Code or Codex agent runs the CLI with the operator's own login, which is its model
+    // provider, and leaves the model to the CLI's default.
+    provider = runtime.login?.provider_slug ?? (runtimeType === 'codex' ? 'openai-codex' : 'anthropic');
+    model = null;
+    if (requiresAgents && runtime.status !== 'ready') {
+      compatibilityErrors.push(runtime.fix.length ? `${runtime.message} Run: ${runtime.fix.join(', then ')}.` : runtime.message);
+    }
   }
 
   const ownerRoles = Array.from(new Set(templates.flatMap((template) => template.owner_roles)));
@@ -503,7 +534,7 @@ export async function buildStarterSetupPlan(db: Db, tenantId: number, input: Sta
           name: owners[ownerRole],
           job_title: details.job_title,
           role: details.role,
-          runtime_type: 'openclaw' as const,
+          runtime_type: runtimeType,
           preferred_provider: provider ?? 'anthropic',
           model,
           skill_names: [...details.skill_names],
@@ -552,6 +583,7 @@ export async function buildStarterSetupPlan(db: Db, tenantId: number, input: Sta
     ...agents.map((agent) => ({ action: 'create' as const, resource: 'agent', name: agent.name, reason: `${agent.owner_role} owner mapping` })),
     ...(routes.length ? [{ action: 'create' as const, resource: 'routing', name: `${routes.length} route rules`, reason: 'owner answers converted into starter routing rules' }] : []),
     ...(modelRouting.length ? [{ action: 'create' as const, resource: 'model_policy', name: `${modelRouting.length} model routing defaults`, reason: 'provider-compatible default model policy' }] : []),
+    ...(agents.length && runtime.login ? [{ action: 'create' as const, resource: 'provider_connection', name: runtime.login.display_name, reason: `the starter agents run ${runtime.label} with this login` }] : []),
   ];
   const grantsHostExecution = Boolean(options.approver) && agents.length > 0;
   if (grantsHostExecution) {
@@ -572,9 +604,10 @@ export async function buildStarterSetupPlan(db: Db, tenantId: number, input: Sta
     agents,
     routes,
     model_routing: modelRouting,
+    runtime,
     compatibility: {
       ok: compatibilityErrors.length === 0,
-      runtime: runtime?.kind ?? null,
+      runtime: runtimeType,
       provider,
       errors: compatibilityErrors,
       warnings: compatibilityWarnings,
@@ -756,7 +789,41 @@ async function ensureStarterWorkflowTypeRegistry(db: Db, tenantId: number, workf
   }
 }
 
-async function insertAgent(db: Db, tenantId: number, projectId: number, projectName: string, agent: StarterAgentPlan): Promise<number> {
+/**
+ * Records the CLI login the starter agents run with as a provider connection, so a Codex agent uses
+ * that login instead of an empty per-agent profile. An existing connection is reused unchanged:
+ * rewriting it would change the version other agents' approved setups recorded.
+ */
+async function ensureStarterLoginConnection(db: Db, tenantId: number, runtime: StarterRuntimeOption): Promise<number | null> {
+  const login = runtime.login;
+  if (!login) return null;
+  const existing = await db.get<{ id: number; status: string }>(`
+    SELECT id, status FROM provider_connections
+    WHERE tenant_id = ? AND runtime_type = ? AND provider_slug = ? AND auth_mode = ? AND external_ref = ?
+  `, tenantId, login.runtime_type, login.provider_slug, login.auth_mode, login.external_ref);
+  if (existing) {
+    if (existing.status !== 'connected') {
+      await db.run(`
+        UPDATE provider_connections
+        SET status = 'connected', validation_error = NULL,
+            last_validated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'),
+            updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
+        WHERE id = ? AND tenant_id = ?
+      `, existing.id, tenantId);
+    }
+    return Number(existing.id);
+  }
+  const result = await db.run(`
+    INSERT INTO provider_connections (
+      tenant_id, provider_slug, auth_mode, runtime_type, external_ref, display_name,
+      status, metadata, last_validated_at, validation_error
+    ) VALUES (?, ?, ?, ?, ?, ?, 'connected', ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), NULL)
+  `, tenantId, login.provider_slug, login.auth_mode, login.runtime_type, login.external_ref, login.display_name,
+  JSON.stringify({ credential_owner: login.runtime_type, created_by: 'starter_setup' }));
+  return Number(result.lastInsertId);
+}
+
+async function insertAgent(db: Db, tenantId: number, projectId: number, projectName: string, agent: StarterAgentPlan, providerConnectionId: number | null): Promise<number> {
   const sessionKey = buildCanonicalAgentMainSessionKey({
     projectName,
     projectSlug: slugifySessionKeyPart(projectName, 'project'),
@@ -767,10 +834,11 @@ async function insertAgent(db: Db, tenantId: number, projectId: number, projectN
     INSERT INTO agents (
       tenant_id, name, role, session_key, workspace_path, status, runtime_type, runtime_config,
       project_id, preferred_provider, model, system_role, enabled, job_title,
-      job_instructions, skill_names, timeout_seconds, stall_threshold_min, max_retries, sort_rules
+      job_instructions, skill_names, timeout_seconds, stall_threshold_min, max_retries, sort_rules,
+      provider_connection_id
     )
-    VALUES (?, ?, ?, ?, '', 'idle', ?, NULL, ?, ?, ?, NULL, 1, ?, ?, ?, 900, 30, 3, '[]')
-  `, tenantId, agent.name, agent.role, sessionKey, agent.runtime_type, projectId, agent.preferred_provider, agent.model, agent.job_title, `Starter owner role: ${agent.owner_role}`, JSON.stringify(agent.skill_names));
+    VALUES (?, ?, ?, ?, '', 'idle', ?, NULL, ?, ?, ?, NULL, 1, ?, ?, ?, 900, 30, 3, '[]', ?)
+  `, tenantId, agent.name, agent.role, sessionKey, agent.runtime_type, projectId, agent.preferred_provider, agent.model, agent.job_title, `Starter owner role: ${agent.owner_role}`, JSON.stringify(agent.skill_names), providerConnectionId);
   return Number(result.lastInsertId);
 }
 
@@ -821,6 +889,7 @@ export async function applyStarterSetupPlan(db: Db, tenantId: number, input: Sta
   agent_ids: Record<string, number>;
   route_ids: number[];
   model_routing_ids: number[];
+  provider_connection_id: number | null;
   execution_access: {
     host_execute_agent_ids: number[];
     approved_revisions: number;
@@ -841,10 +910,11 @@ export async function applyStarterSetupPlan(db: Db, tenantId: number, input: Sta
     const workflowIds: Record<string, number> = {};
     const agentIdsByOwner = new Map<string, number>();
     const agentIds: Record<string, number> = {};
+    const providerConnectionId = plan.agents.length ? await ensureStarterLoginConnection(db, tenantId, plan.runtime) : null;
 
     for (const agent of plan.agents) {
       const key = agent.owner_name.trim().toLowerCase();
-      const id = agentIdsByOwner.get(key) ?? (await insertAgent(db, tenantId, projectId, plan.project.name, agent));
+      const id = agentIdsByOwner.get(key) ?? (await insertAgent(db, tenantId, projectId, plan.project.name, agent, providerConnectionId));
       agentIdsByOwner.set(key, id);
       agentIds[agent.owner_role] = id;
     }
@@ -891,6 +961,7 @@ export async function applyStarterSetupPlan(db: Db, tenantId: number, input: Sta
       agent_ids: agentIds,
       route_ids: routeIds,
       model_routing_ids: modelRoutingIds,
+      provider_connection_id: providerConnectionId,
       execution_access: {
         host_execute_agent_ids: hostExecuteAgentIds,
         approved_revisions: approval.approved.length,
