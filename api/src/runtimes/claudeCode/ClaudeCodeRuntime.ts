@@ -60,6 +60,8 @@ import { normalizeClaudeCodeRuntimeConfig } from './config';
 import { prepareClaudeCodeAuthProfiles, resolveEffectiveClaudeConfigHome } from './auth';
 import { buildClaudeArgs } from './args';
 import { resolveClaudeCodeSkillPluginDir } from './skillPlugin';
+import { recordRunMcpToolSnapshots } from '../mcpToolSnapshots';
+import type { McpPreflightResult } from './mcpPreflight';
 import { resolveResumableSessionId } from './resume';
 import { classifyClaudeRun } from './errors';
 import { ClaudeStreamAccumulator, NdjsonDecoder, mcpToolName } from './streamJson';
@@ -231,15 +233,16 @@ export class ClaudeCodeRuntime implements AgentRuntime {
     );
 
     let requiredMcpToolNames: string[];
+    let preflightResults: McpPreflightResult[];
     let args: string[];
     let childEnv: NodeJS.ProcessEnv;
     let child: ChildProcessWithoutNullStreams;
     try {
-      requiredMcpToolNames = await this.preflightRequiredMcpServers(
+      ({ requiredToolNames: requiredMcpToolNames, results: preflightResults } = await this.preflightRequiredMcpServers(
         mcp,
         instanceId,
         params.runtimeBoundary,
-      );
+      ));
       args = buildClaudeArgs({
         config,
         sessionId,
@@ -285,6 +288,14 @@ export class ClaudeCodeRuntime implements AgentRuntime {
       cleanupClaudeCodeMcpRunConfig(mcp.configPath);
       throw error;
     }
+    void recordRunMcpToolSnapshots({
+      db,
+      tenantId,
+      instanceId,
+      boundary: params.runtimeBoundary,
+      preflightResults,
+      servers: readRunMcpServersForSnapshots(mcp.configPath),
+    });
     const processGroupId = localProcessGroupId(child);
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
@@ -525,13 +536,13 @@ export class ClaudeCodeRuntime implements AgentRuntime {
     mcp: ClaudeMcpMaterialization,
     instanceId: number | null,
     boundary: DispatchParams['runtimeBoundary'],
-  ): Promise<string[]> {
+  ): Promise<{ requiredToolNames: string[]; results: McpPreflightResult[] }> {
     const requiredServerNames = resolveRequiredMcpPreflightServerNames(
       mcp.serverNames,
       mcp.requiredServerNames,
       boundary,
     );
-    if (requiredServerNames.length === 0) return [];
+    if (requiredServerNames.length === 0) return { requiredToolNames: [], results: [] };
     if (!mcp.configPath) {
       throw new Error('Required MCP servers have no readable materialized configuration.');
     }
@@ -559,9 +570,12 @@ export class ClaudeCodeRuntime implements AgentRuntime {
           .map((r) => `${r.serverName} (${r.toolNames.length} tool(s), ${r.durationMs}ms)`)
           .join(', '),
     );
-    return requirements.flatMap((requirement) =>
-      requirement.requiredToolNames.map((toolName) => mcpToolName(requirement.serverName, toolName)),
-    );
+    return {
+      requiredToolNames: requirements.flatMap((requirement) =>
+        requirement.requiredToolNames.map((toolName) => mcpToolName(requirement.serverName, toolName)),
+      ),
+      results,
+    };
   }
 
   // ── Run monitor ────────────────────────────────────────────────────────────
@@ -982,5 +996,15 @@ export class ClaudeCodeRuntime implements AgentRuntime {
       // reference; never let ambient process state retarget the launch.
       adapterOwned: { CLAUDE_CONFIG_DIR: claudeConfigHome },
     });
+  }
+}
+
+/** The run's materialized MCP configs, for recording tools of servers preflight skipped. */
+function readRunMcpServersForSnapshots(configPath: string | null): Record<string, Record<string, unknown>> {
+  if (!configPath) return {};
+  try {
+    return readPreviousRunServers(configPath);
+  } catch {
+    return {};
   }
 }

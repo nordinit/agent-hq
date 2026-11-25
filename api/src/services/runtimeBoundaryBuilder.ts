@@ -203,7 +203,7 @@ function runtimeConfigRecord(value: unknown): Record<string, unknown> | null {
  * and redact them; validating unrelated driver fields remains the adapter's
  * responsibility.
  */
-function effectiveBuiltInTools(
+export function effectiveBuiltInTools(
   runtimeType: string,
   config: Record<string, unknown> | null,
   hasAssignedSkills: boolean,

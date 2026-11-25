@@ -61,6 +61,8 @@ import {
   normalizeCodexReasoningEffort,
 } from './args';
 import { buildCodexSkillFence } from './skillFence';
+import { recordRunMcpToolSnapshots } from '../mcpToolSnapshots';
+import type { McpPreflightResult } from '../claudeCode/mcpPreflight';
 import {
   codexAuthReady,
   prepareCodexAuthProfiles,
@@ -280,6 +282,7 @@ export class CodexRuntime implements AgentRuntime {
     };
 
     let mcp: CodexMcpMaterialization;
+    let preflightResults: McpPreflightResult[] = [];
     try {
       mcp =
         db && ownership.agentId != null && instanceId != null
@@ -306,7 +309,7 @@ export class CodexRuntime implements AgentRuntime {
               runtimeProfile.snapshotPath,
             );
       for (const warning of mcp.warnings) console.warn(`[CodexRuntime] ${warning}`);
-      await this.preflightRequiredMcpServers(mcp, instanceId, params.runtimeBoundary);
+      preflightResults = await this.preflightRequiredMcpServers(mcp, instanceId, params.runtimeBoundary);
     } catch (error) {
       cleanupRuntimeProfile(dispatchContext.mode === 'ad-hoc');
       throw error;
@@ -360,6 +363,14 @@ export class CodexRuntime implements AgentRuntime {
       cleanupRuntimeProfile(dispatchContext.mode === 'ad-hoc');
       throw error;
     }
+    void recordRunMcpToolSnapshots({
+      db,
+      tenantId: ownership.tenantId,
+      instanceId,
+      boundary: params.runtimeBoundary,
+      preflightResults,
+      servers: mcp.servers,
+    });
     if (dispatchContext.mode === 'production') {
       child.once('error', () => cleanupRuntimeProfile());
       child.once('close', () => cleanupRuntimeProfile());
@@ -634,19 +645,20 @@ export class CodexRuntime implements AgentRuntime {
     mcp: CodexMcpMaterialization,
     instanceId: number | null,
     boundary: DispatchParams['runtimeBoundary'],
-  ): Promise<void> {
+  ): Promise<McpPreflightResult[]> {
     const requiredServerNames = resolveRequiredMcpPreflightServerNames(
       mcp.serverNames,
       mcp.requiredServerNames,
       boundary,
     );
-    if (requiredServerNames.length === 0) return;
+    if (requiredServerNames.length === 0) return [];
     const requirements = buildMcpPreflightRequirements(requiredServerNames, boundary);
     const results = await preflightMcpServers(mcp.servers, requirements);
     const failure = describeMcpPreflightFailure(results);
     if (failure) {
       throw new Error(`Codex instance #${instanceId ?? '?'}: ${failure}`);
     }
+    return results;
   }
 
   private async monitorRun(args: {

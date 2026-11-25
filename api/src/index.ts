@@ -1,4 +1,5 @@
 import executionRouter from './routes/execution';
+import contextRouter from './routes/context';
 import { activeProjectPredicate } from './lib/projectArchive';
 import './config/loadRootEnv';
 import { assertOpenClawMaintenanceOwner, startOpenClawMcpSyncWorker } from './services/openclawMcpSyncWorker';
@@ -508,6 +509,7 @@ app.use('/api/v1/routing/model-routes', modelRoutingRouter);
 app.use('/api/v1/setup', setupRouter);
 app.use('/api/v1/settings', settingsRouter);
 app.use('/api/v1/execution', executionRouter);
+app.use('/api/v1/context', contextRouter);
 app.use('/api/v1/tools', toolsRouter);
 app.use('/api/v1/agents/:id/tools', agentToolsRouter);
 app.use('/api/v1/mcp-servers', mcpServersRouter);

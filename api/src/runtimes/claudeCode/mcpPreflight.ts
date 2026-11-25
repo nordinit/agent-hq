@@ -57,6 +57,23 @@ export const DEFAULT_MCP_PREFLIGHT_TIMEOUT_MS = 10_000;
  * the same names in RuntimeBoundaryV1, but failing closed here keeps tests,
  * scripts, and future API call sites from silently degrading to handshake-only.
  */
+export interface McpAdvertisedTool {
+  name: string;
+  title?: string;
+  description?: string;
+  inputSchema?: unknown;
+  annotations?: unknown;
+}
+
+function advertisedTool(tool: Record<string, unknown>): McpAdvertisedTool {
+  const out: McpAdvertisedTool = { name: String(tool.name) };
+  if (typeof tool.title === 'string') out.title = tool.title;
+  if (typeof tool.description === 'string') out.description = tool.description;
+  if (tool.inputSchema !== undefined) out.inputSchema = tool.inputSchema;
+  if (tool.annotations !== undefined) out.annotations = tool.annotations;
+  return out;
+}
+
 export interface McpPreflightRequirement {
   serverName: string;
   requiredToolNames: string[];
@@ -67,6 +84,11 @@ export interface McpPreflightResult {
   ok: boolean;
   /** Tool names the server advertised, when it got as far as tools/list. */
   toolNames: string[];
+  /**
+   * The advertised definitions (name, title, description, inputSchema, annotations), kept so
+   * the context view can show what each tool costs in the prompt. Present once tools/list answered.
+   */
+  tools?: McpAdvertisedTool[];
   /** Names this dispatch required the server to expose. */
   requiredToolNames?: string[];
   /** Required names absent from the tools/list response. */
@@ -377,22 +399,24 @@ export function preflightMcpServer(
         }
         const result = isRecord(message.result) ? message.result : null;
         const tools = result && Array.isArray(result.tools) ? result.tools : [];
-        toolNames = tools
+        const definitions = tools
           .filter(isRecord)
-          .map((tool) => (typeof tool.name === 'string' ? tool.name : ''))
-          .filter((name) => name.length > 0);
+          .filter((tool) => typeof tool.name === 'string' && tool.name.length > 0)
+          .map(advertisedTool);
+        toolNames = definitions.map((tool) => tool.name);
         const advertised = new Set(toolNames);
         const missingToolNames = requiredToolNames.filter((name) => !advertised.has(name));
         if (missingToolNames.length > 0) {
           finish({
             ok: false,
             toolNames,
+            tools: definitions,
             missingToolNames,
             error: `server did not advertise required tool(s): ${missingToolNames.join(', ')}`,
           });
           return;
         }
-        finish({ ok: true, toolNames, missingToolNames: [] });
+        finish({ ok: true, toolNames, tools: definitions, missingToolNames: [] });
       }
     }
 

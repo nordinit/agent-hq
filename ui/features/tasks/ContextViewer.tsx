@@ -61,7 +61,7 @@ function DetailGrid({ detail }: { detail?: Record<string, string | number | bool
 
 // ── Outline ──────────────────────────────────────────────────────────────────
 
-function SegmentOutline({
+export function SegmentOutline({
   segments,
   totalChars,
   activeKey,
@@ -134,7 +134,7 @@ function SegmentOutline({
 
 // ── Prompt pane ──────────────────────────────────────────────────────────────
 
-function PromptPane({
+export function PromptPane({
   promptText,
   segments,
   activeKey,
@@ -324,7 +324,7 @@ function formatDelta(delta: number): string {
   return `${delta > 0 ? '+' : '−'}${formatChars(Math.abs(delta))}`;
 }
 
-function DiffPane({ view }: { view: InstanceContextView }) {
+export function DiffPane({ view }: { view: InstanceContextView }) {
   const diff = view.diff;
   if (!diff) {
     return (

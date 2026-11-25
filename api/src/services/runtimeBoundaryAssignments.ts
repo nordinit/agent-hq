@@ -13,7 +13,7 @@ import {
   sanitizeRuntimeConfigForRevision,
 } from './runtimeBoundaryBuilder';
 
-const TOOL_ALLOWLIST_FIELDS = [
+export const TOOL_ALLOWLIST_FIELDS = [
   'allowed_tools',
   'allowedTools',
   'allowed_tool_names',
@@ -137,7 +137,11 @@ function stringList(value: unknown): string[] | null {
   )).sort((left, right) => left.localeCompare(right));
 }
 
-function assignmentToolNames(overrides: Record<string, unknown>): string[] | null {
+/**
+ * The tool allowlist a run enforces for one MCP assignment: the first allowlist field present in
+ * its overrides, else `toolFilter.include`. Null means the assignment sets no allowlist.
+ */
+export function assignmentToolNames(overrides: Record<string, unknown>): string[] | null {
   for (const field of TOOL_ALLOWLIST_FIELDS) {
     if (Object.prototype.hasOwnProperty.call(overrides, field)) return stringList(overrides[field]) ?? [];
   }
