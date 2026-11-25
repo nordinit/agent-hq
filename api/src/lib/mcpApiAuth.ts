@@ -444,6 +444,22 @@ export async function replaceAgentMcpPermissionPolicy(
   });
 }
 
+/**
+ * Enable capabilities on top of what the agent has now. Any explicit row switches an agent from its
+ * default policy to an explicit one, so the current effective set is written out with the additions;
+ * granting one capability never takes another away.
+ */
+export async function grantAgentMcpCapabilities(
+  db: Db,
+  agentId: number,
+  capabilityKeys: readonly string[],
+  actor = 'system',
+): Promise<AgentMcpPermissionPolicySnapshot> {
+  const current = await getAgentMcpPermissionPolicy(db, agentId);
+  const enabled = current.capabilities.filter((capability) => capability.enabled).map((capability) => capability.key as string);
+  return replaceAgentMcpPermissionPolicy(db, agentId, [...new Set([...enabled, ...capabilityKeys])], agentMcpPolicyRevision(current), actor);
+}
+
 export async function resetAgentMcpPermissionPolicy(db: Db, agentId: number, actor='system'): Promise<AgentMcpPermissionPolicySnapshot> {
   const context = await loadAgentPermissionContext(db, agentId);
   return db.withTransaction(async tx => {

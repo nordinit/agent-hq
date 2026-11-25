@@ -565,6 +565,11 @@ export interface StarterSetupPlan {
   preview: {
     changes: Array<{ action: 'create' | 'update' | 'skip'; resource: string; name: string; reason: string }>;
   };
+  /** Whether applying the plan lets the starter agents run on this machine (host.execute). */
+  execution_access: {
+    host_execute: boolean;
+    summary: string;
+  };
   editable: {
     can_change_owner: boolean;
     can_disable_route: boolean;
@@ -591,6 +596,11 @@ export interface StarterPlanApplyResponse {
   agent_ids: Record<string, number>;
   route_ids: number[];
   model_routing_ids: number[];
+  execution_access: {
+    host_execute_agent_ids: number[];
+    approved_revisions: number;
+    pending: Array<{ kind: string; id: number; reason: string }>;
+  };
 }
 
 export interface RuntimeConfigResponse {

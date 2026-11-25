@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { getDb } from '../db/client';
 import { resolveTenantIdFromRequest } from '../lib/tenantContext';
+import { operatorApprover } from '../domains/execution/operatorApproval';
 import { isProviderGatePassed, countConnectedProviders } from './providers';
 import {
   checkRuntimeConnection,
@@ -208,7 +209,7 @@ router.post('/starter-plan/preview', async (req: Request, res: Response) => {
   try {
     const db = getDb();
     const tenantId = await resolveTenantIdFromRequest(db, req);
-    const plan = await buildStarterSetupPlan(db, tenantId, (req.body ?? {}) as StarterPlanInput);
+    const plan = await buildStarterSetupPlan(db, tenantId, (req.body ?? {}) as StarterPlanInput, { approver: operatorApprover(req) });
     res.json({ ok: true, plan });
   } catch (err) {
     const status = (err as Error & { status?: number }).status ?? 500;
@@ -220,7 +221,7 @@ router.post('/starter-plan/apply', async (req: Request, res: Response) => {
   try {
     const db = getDb();
     const tenantId = await resolveTenantIdFromRequest(db, req);
-    const result = await applyStarterSetupPlan(db, tenantId, (req.body ?? {}) as StarterPlanInput);
+    const result = await applyStarterSetupPlan(db, tenantId, (req.body ?? {}) as StarterPlanInput, { approver: operatorApprover(req) });
     await setSetting('onboarding_completed', 'true');
     res.status(201).json(result);
   } catch (err) {

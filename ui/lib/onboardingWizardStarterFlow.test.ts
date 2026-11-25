@@ -31,6 +31,13 @@ test('onboarding wizard fetches templates from API and supports multi-template s
   assert.match(wizardSource, /if \(key === 'blank'\) return \['blank'\]/);
 });
 
+test('onboarding wizard says the starter agents will be allowed to run on this machine', () => {
+  assert.match(apiTypesSource, /execution_access: \{\s*\n\s*host_execute: boolean;\s*\n\s*summary: string;/);
+  assert.match(wizardSource, /starterPlan\.execution_access\.summary/);
+  assert.match(wizardSource, /These agents can run on this machine/);
+  assert.match(wizardSource, /allowed to run on this machine \(host\.execute\)/);
+});
+
 test('onboarding wizard previews then applies the shared starter plan', () => {
   assert.match(wizardSource, /api\.previewStarterPlan\(starterPlanPayload\(\)\)/);
   assert.match(wizardSource, /This preview comes from the shared setup API/);

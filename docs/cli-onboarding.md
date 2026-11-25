@@ -249,6 +249,7 @@ Agent HQ will create:
 - 1 project
 - selected workflows
 - starter agents/roles for selected owner mappings
+- host.execute for each starter agent, so it can run on this machine
 - owner-based assignment rules
 - transitions and evidence gates
 - model routing defaults

@@ -2,6 +2,17 @@
 
 Open **Capability map** on an agent's detail page, or the tab with the same name on a team. The workflow graph's assignment inspector also links to an agent's map.
 
+## Letting an agent run
+
+Agent HQ starts an agent's runtime only when two things are true:
+
+- **The agent may run on this machine.** It has the `host.execute` permission (**Launch approved host processes**). To grant it here, tick that permission, then **Preview tool access** and **Save policy**. Don't use the **executor** preset for this: a preset replaces the whole draft, including the task permissions the agent already has. Onboarding grants `host.execute` to the starter agents it creates and says so before you apply. An agent you add later starts without it.
+- **Its setup is approved.** Agent HQ records an approved revision of everything that decides what the agent runs: model, provider, runtime settings, workspace, instructions, skills (including team skills), webhook and credential references. It also records the setup of each workflow the agent works in, and each tool and MCP server it uses. Before every launch it compares the agent's current setup with the approved one and refuses to start if they differ.
+
+Changes you make in the UI, or with the operator token from the CLI or API, are approved when you save them: creating or editing an agent, its skills, a skill it uses, its team, its credentials, a workflow's repository or environment setup, a routing rule, or a tool or MCP server assignment. Changes made with an agent's MCP key are never approved this way and wait for review. A save approves only what was already approved before it: if something else changed the agent since its last approval, your edit leaves that change waiting for review rather than approving it on your behalf.
+
+To review a change that is waiting, open **Review and approve executable revisions** on this page. Choose the kind (`agent_runtime` for the agent itself, with the agent's ID), select **Snapshot draft for review**, check the snapshot, confirm, then **Publish reviewed revision** and **Bind to this agent**.
+
 ## Agent resolution
 
 The graph shows configured registry tools, MCP servers, skills and Agent HQ MCP permissions. Select a node to inspect every contributing source, the winning grant, overridden team grants, explicit agent opt-outs and globally disabled resources. Search and category filters keep larger configurations readable; graph nodes support keyboard selection.

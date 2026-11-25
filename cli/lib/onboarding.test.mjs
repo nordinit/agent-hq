@@ -284,6 +284,7 @@ test('init previews editable ownership routing plan and applies starter template
           model_routing: [],
           compatibility: { ok: true, errors: [], warnings: [] },
           preview: { changes: [{ action: 'create', resource: 'project', name: body.project_name, reason: 'test' }] },
+          execution_access: { host_execute: true, summary: 'Each starter agent gets the host.execute permission.' },
           editable: { advanced_path: '/routing' },
         },
       });
@@ -295,7 +296,7 @@ test('init previews editable ownership routing plan and applies starter template
       assert.equal(body.owners.implementation, 'Dev Owner');
       assert.equal(body.routing_plan.some(route => route.key === 'backend:ready' && route.owner_name === 'QA Owner'), true);
       assert.equal(body.routing_plan.some(route => route.key === 'docs:ready'), true);
-      return jsonResponse(201, { ok: true, project_id: 12, workflow_id: 34 });
+      return jsonResponse(201, { ok: true, project_id: 12, workflow_id: 34, execution_access: { host_execute_agent_ids: [1, 2, 3, 4], approved_revisions: 8, pending: [] } });
     }
     if (url.endsWith('/api/v1/setup/onboarding/complete')) {
       return jsonResponse(200, { ok: true, onboarding_completed: true });
@@ -303,6 +304,9 @@ test('init previews editable ownership routing plan and applies starter template
     throw new Error(`Unexpected request: ${url}`);
   };
 
+  const printed = [];
+  const originalLog = console.log;
+  console.log = (...args) => { printed.push(args.join(' ')); };
   await runInit(
     { apiUrl: 'http://agent-hq.test' },
     {
@@ -318,9 +322,12 @@ test('init previews editable ownership routing plan and applies starter template
       noExit: true,
       openBrowser() {},
     },
-  );
+  ).finally(() => { console.log = originalLog; });
 
   assert.equal(requests.some(request => request.url.endsWith('/api/v1/setup/starter-plan/apply')), true);
+  // The review says the starter agents will be allowed to run here, and the result confirms it.
+  assert.match(printed.join('\n'), /These agents can run on this machine:\n {2}Each starter agent gets the host\.execute permission\./);
+  assert.match(printed.join('\n'), /4 starter agents are allowed to run on this machine \(host\.execute\)\./);
 });
 
 test('init surfaces provider validation failures without completing onboarding', async () => {

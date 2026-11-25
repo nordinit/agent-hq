@@ -22,6 +22,7 @@ import {
   Save,
   TerminalSquare,
   AlertCircle,
+  ShieldCheck,
 } from 'lucide-react';
 
 const ONBOARDED_KEY = 'agent-hq-onboarded';
@@ -263,6 +264,7 @@ export default function OnboardingWizard({ onClose }: Props) {
   const [applyLoading, setApplyLoading] = useState(false);
   const [starterPlan, setStarterPlan] = useState<StarterSetupPlan | null>(null);
   const [appliedPlan, setAppliedPlan] = useState<StarterSetupPlan | null>(null);
+  const [hostExecuteAgentCount, setHostExecuteAgentCount] = useState(0);
   const [finishError, setFinishError] = useState<string | null>(null);
   const gatewayGuide = useMemo(() => gatewayCommandBlock(), []);
   const gatewayRemoteGuide = useMemo(() => gatewayRemotePairingBlock(), []);
@@ -550,6 +552,7 @@ export default function OnboardingWizard({ onClose }: Props) {
       }
       const applied = await api.applyStarterPlan(starterPlanPayload());
       setAppliedPlan(applied.plan);
+      setHostExecuteAgentCount(applied.execution_access?.host_execute_agent_ids.length ?? 0);
       try {
         await api.completeOnboarding();
         setFinishError(null);
@@ -1080,6 +1083,21 @@ export default function OnboardingWizard({ onClose }: Props) {
                       </div>
                     ))
                   )}
+                  {starterPlan.execution_access?.summary && (
+                    <div className={`flex items-start gap-3 rounded-lg border p-3 ${
+                      starterPlan.execution_access.host_execute
+                        ? 'border-amber-500/30 bg-amber-500/10'
+                        : 'border-slate-600 bg-slate-900/70'
+                    }`}>
+                      <ShieldCheck className={`mt-0.5 h-4 w-4 shrink-0 ${starterPlan.execution_access.host_execute ? 'text-amber-300' : 'text-slate-400'}`} />
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-slate-200">
+                          {starterPlan.execution_access.host_execute ? 'These agents can run on this machine' : 'These agents cannot run yet'}
+                        </p>
+                        <p className="mt-1 text-xs leading-5 text-slate-400">{starterPlan.execution_access.summary}</p>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 <div className="rounded-xl border border-slate-700 bg-slate-800/40 p-4 space-y-3">
@@ -1196,6 +1214,14 @@ export default function OnboardingWizard({ onClose }: Props) {
                   <CheckCircle2 className="w-4 h-4 text-green-400 shrink-0" />
                   <span className="text-slate-300">
                     <span className="text-white font-medium">{appliedPlan.agents.length}</span> starter agents created
+                  </span>
+                </div>
+              )}
+              {hostExecuteAgentCount > 0 && (
+                <div className="flex items-center gap-2 text-sm">
+                  <ShieldCheck className="w-4 h-4 text-amber-300 shrink-0" />
+                  <span className="text-slate-300">
+                    <span className="text-white font-medium">{hostExecuteAgentCount}</span> {hostExecuteAgentCount === 1 ? 'agent' : 'agents'} allowed to run on this machine (host.execute)
                   </span>
                 </div>
               )}

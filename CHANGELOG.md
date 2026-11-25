@@ -47,8 +47,9 @@ now one consolidated schema; start 0.2.0 on a fresh database.
 - The API and UI listen on `127.0.0.1` by default and refuse cross-origin browser requests unless
   the origin is allowed.
 - Agent HQ launches an agent only when the agent has an explicit `host.execute` grant and its
-  runtime profile is a published revision bound to that agent. Changing the profile requires
-  publishing and binding a new revision.
+  runtime profile is a published revision bound to that agent. Edits made with the operator token
+  publish and bind the new revision as they save; edits made with an agent's MCP key wait for
+  review. Onboarding grants `host.execute` to the starter agents it creates and says so first.
 - Dependencies are updated so that `npm audit` reports no known vulnerabilities in the API or UI.
 
 [Unreleased]: https://github.com/nordinit/agent-hq/compare/v0.2.0...HEAD

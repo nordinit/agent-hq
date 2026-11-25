@@ -14,6 +14,8 @@ import {
   type StarterFieldDefinition,
 } from './starterCatalog';
 import { buildCanonicalAgentMainSessionKey, slugifySessionKeyPart } from './sessionKeys';
+import { grantAgentMcpCapabilities } from './mcpApiAuth';
+import { OperatorApproval, type ApprovalResult } from '../domains/execution/operatorApproval';
 import { type Db } from "../db/adapter/types";
 import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../db/introspection";
 
@@ -124,6 +126,14 @@ export type StarterSetupPlan = {
   };
   preview: {
     changes: Array<{ action: 'create' | 'update' | 'skip'; resource: string; name: string; reason: string }>;
+  };
+  /**
+   * Whether applying the plan lets the starter agents run on this machine. When the operator applies
+   * it, each starter agent gets host.execute and its setup is approved as created.
+   */
+  execution_access: {
+    host_execute: boolean;
+    summary: string;
   };
   editable: {
     can_change_owner: boolean;
@@ -450,7 +460,15 @@ export function listStarterTemplates(): StarterTemplateCatalogEntry[] {
   return STARTER_TEMPLATE_CATALOG.map((template) => ({ ...template, owner_roles: [...template.owner_roles] }));
 }
 
-export async function buildStarterSetupPlan(db: Db, tenantId: number, input: StarterPlanInput = {}): Promise<StarterSetupPlan> {
+export type StarterPlanOptions = {
+  /** The operator applying the plan. Only the operator's plan grants host.execute and approves setups. */
+  approver?: string | null;
+};
+
+export const STARTER_HOST_EXECUTION_SUMMARY = 'Applying this setup lets each starter agent run on this machine: it gets the host.execute permission, so it can start its runtime and run commands here, and its setup is approved as created. Changes you make to it later are approved when you save them. You can remove the permission on the agent\'s Capability map.';
+const STARTER_HOST_EXECUTION_WITHHELD = 'The starter agents will not be able to run until the operator grants host.execute on each agent\'s Capability map and approves its setup.';
+
+export async function buildStarterSetupPlan(db: Db, tenantId: number, input: StarterPlanInput = {}, options: StarterPlanOptions = {}): Promise<StarterSetupPlan> {
   const templateKeys = normalizeTemplateKeys(input);
   const templates = templateKeys.map((key) => STARTER_TEMPLATE_CATALOG.find((entry) => entry.key === key)!);
   const primaryTemplate = templates[0];
@@ -535,6 +553,12 @@ export async function buildStarterSetupPlan(db: Db, tenantId: number, input: Sta
     ...(routes.length ? [{ action: 'create' as const, resource: 'routing', name: `${routes.length} route rules`, reason: 'owner answers converted into starter routing rules' }] : []),
     ...(modelRouting.length ? [{ action: 'create' as const, resource: 'model_policy', name: `${modelRouting.length} model routing defaults`, reason: 'provider-compatible default model policy' }] : []),
   ];
+  const grantsHostExecution = Boolean(options.approver) && agents.length > 0;
+  if (grantsHostExecution) {
+    for (const name of new Set(agents.map((agent) => agent.name))) {
+      changes.push({ action: 'create', resource: 'permission', name: `${name}: host.execute`, reason: 'lets the agent run on this machine' });
+    }
+  }
 
   return {
     template: primaryTemplate,
@@ -556,6 +580,10 @@ export async function buildStarterSetupPlan(db: Db, tenantId: number, input: Sta
       warnings: compatibilityWarnings,
     },
     preview: { changes },
+    execution_access: {
+      host_execute: grantsHostExecution,
+      summary: agents.length === 0 ? '' : grantsHostExecution ? STARTER_HOST_EXECUTION_SUMMARY : STARTER_HOST_EXECUTION_WITHHELD,
+    },
     editable: {
       can_change_owner: true,
       can_disable_route: true,
@@ -784,7 +812,7 @@ async function insertModelRouting(db: Db, tenantId: number, projectId: number, w
   return Number(result.lastInsertId);
 }
 
-export async function applyStarterSetupPlan(db: Db, tenantId: number, input: StarterPlanInput = {}): Promise<{
+export async function applyStarterSetupPlan(db: Db, tenantId: number, input: StarterPlanInput = {}, options: StarterPlanOptions = {}): Promise<{
   ok: true;
   plan: StarterSetupPlan;
   project_id: number;
@@ -793,8 +821,13 @@ export async function applyStarterSetupPlan(db: Db, tenantId: number, input: Sta
   agent_ids: Record<string, number>;
   route_ids: number[];
   model_routing_ids: number[];
+  execution_access: {
+    host_execute_agent_ids: number[];
+    approved_revisions: number;
+    pending: ApprovalResult['pending'];
+  };
 }> {
-  const plan = await buildStarterSetupPlan(db, tenantId, input);
+  const plan = await buildStarterSetupPlan(db, tenantId, input, options);
   if (!plan.compatibility.ok) {
     throw Object.assign(new Error(plan.compatibility.errors.join('; ')), {
       status: 422,
@@ -817,6 +850,7 @@ export async function applyStarterSetupPlan(db: Db, tenantId: number, input: Sta
     }
 
     const routeIds: number[] = [];
+    const routedAgents: Array<{ agent_id: number; workflow_id: number; enabled: number }> = [];
     const modelRoutingIds: number[] = [];
     for (const workflow of plan.workflows) {
       await ensureStarterWorkflowTypeRegistry(db, tenantId, workflow);
@@ -826,10 +860,26 @@ export async function applyStarterSetupPlan(db: Db, tenantId: number, input: Sta
         const agentId = agentIds[route.owner_role];
         if (!agentId) continue;
         routeIds.push(await insertRoutingRule(db, tenantId, workflowId, projectId, workflow.workflow.workflow_type, route, agentId));
+        routedAgents.push({ agent_id: agentId, workflow_id: workflowId, enabled: route.enabled ? 1 : 0 });
       }
       for (const rule of workflow.model_routing) {
         modelRoutingIds.push(await insertModelRouting(db, tenantId, projectId, workflowId, rule));
       }
+    }
+
+    // The plan said so on screen: the operator's starter agents may run here, with their runtime
+    // profiles and their workflows' setups approved as created.
+    const starterAgentIds = [...new Set(agentIdsByOwner.values())];
+    const hostExecuteAgentIds: number[] = [];
+    let approval: ApprovalResult = { approved: [], pending: [] };
+    if (plan.execution_access.host_execute && options.approver) {
+      for (const agentId of starterAgentIds) {
+        await grantAgentMcpCapabilities(db, agentId, ['host.execute'], options.approver);
+        hostExecuteAgentIds.push(agentId);
+      }
+      const operatorApproval = (await OperatorApproval.forActor(options.approver, db, tenantId))
+        .markCreated({ agents: starterAgentIds, workflows: Object.values(workflowIds) });
+      approval = await (await operatorApproval.assignRoutes(routedAgents)).finish();
     }
 
     return {
@@ -841,6 +891,11 @@ export async function applyStarterSetupPlan(db: Db, tenantId: number, input: Sta
       agent_ids: agentIds,
       route_ids: routeIds,
       model_routing_ids: modelRoutingIds,
+      execution_access: {
+        host_execute_agent_ids: hostExecuteAgentIds,
+        approved_revisions: approval.approved.length,
+        pending: approval.pending,
+      },
     };
   });
 }

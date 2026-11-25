@@ -122,7 +122,7 @@ agent-hq token      # print the operator token
 
 To run the API and UI as native Node processes against your own PostgreSQL server, use `agent-hq start --no-docker` with `DATABASE_URL` set. See [`cli/README.md`](cli/README.md).
 
-`agent-hq onboard` connects a model provider and a runtime and creates starter records through the API. `agent-hq init` writes a first-install setup plan to `~/.agent-hq/config.json` (`--dry-run` prints it without writing). The design contract for the guided setup is [`docs/cli-onboarding.md`](docs/cli-onboarding.md); not all of it is implemented yet.
+`agent-hq onboard` connects a model provider and a runtime and creates starter records through the API. The starter agents it creates are allowed to run on this machine; an agent you add later needs the `host.execute` permission on its Capability map first (see [`docs/agent-capability-map.md`](docs/agent-capability-map.md#letting-an-agent-run)). `agent-hq init` writes a first-install setup plan to `~/.agent-hq/config.json` (`--dry-run` prints it without writing). The design contract for the guided setup is [`docs/cli-onboarding.md`](docs/cli-onboarding.md); not all of it is implemented yet.
 
 ---
 

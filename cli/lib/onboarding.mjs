@@ -543,6 +543,10 @@ function printStarterPlan(plan) {
     for (const agent of plan.agents) {
       console.log(`  - ${agent.owner_role}: ${agent.name} (${agent.runtime_type}, ${agent.preferred_provider}${agent.model ? `, ${agent.model}` : ''})`);
     }
+    if (plan.execution_access?.summary) {
+      console.log(plan.execution_access.host_execute ? '\n  These agents can run on this machine:' : '\n  These agents cannot run yet:');
+      console.log(`  ${plan.execution_access.summary}`);
+    }
   }
   console.log('\nRouting plan:');
   if (plan.routes.length === 0) {
@@ -669,6 +673,8 @@ async function runStarterTemplateSetup(apiBase, io, fetchImpl, flags = {}) {
     body: JSON.stringify(payload),
   }, fetchImpl);
   success(`Starter setup applied: project #${applied.project_id}, workflow #${applied.workflow_id}.`);
+  const allowed = applied.execution_access?.host_execute_agent_ids?.length ?? 0;
+  if (allowed > 0) info(`${allowed} starter ${allowed === 1 ? 'agent is' : 'agents are'} allowed to run on this machine (host.execute).`);
   return applied;
 }
 

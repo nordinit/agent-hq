@@ -53,6 +53,16 @@ as a compatibility key and no longer authorizes writes.
    `revision_id` and optional future `expires_at`.
 6. Grant the recipient explicit execution authority separately.
 
+Edits made with the operator token run steps 2 to 5 themselves. Creating or editing an agent,
+its skills, a skill it uses, its team or team membership, its provider connection or GitHub
+identity, a workflow's repository or environment setup, a routing rule, or a tool or MCP server
+assignment publishes the resulting revision and binds it to the subjects that were bound to the
+previous one, or to the agent or team the edit assigned. A new agent is bound to its own runtime
+profile. Edits made with an MCP key are never approved this way. An operator edit re-approves only
+a profile that was approved before the edit, so it never approves a change someone else made since
+the last approval. Step 6 is never automatic, except that the onboarding starter setup grants
+`host.execute` to the starter agents it creates and says so in its preview.
+
 The supported kinds are `tool`, `mcp_server`, `agent_runtime` and
 `workflow_setup`. Runtime launches require the agent profile and, for task
 dispatch, the workflow setup profile. Each profile must match current protected
@@ -61,9 +71,11 @@ content and credential-reference versions. Changes hold subsequent launches or
 chat turns until reviewed again.
 
 Tool/MCP edits do not replace pinned execution content. Registry and assignment
-edits no longer automatically refresh host MCP processes. Provisioning creates
-configuration and visibly holds activation for approval; it does not grant the
-new recipient execution authority. Use the separately authorized MCP sync after
+edits no longer automatically refresh host MCP processes. Provisioning with an
+MCP key creates configuration and visibly holds activation for approval;
+provisioning with the operator token approves the new agent's profile and binds
+the approved revisions it was given. Neither grants the new recipient execution
+authority. Use the separately authorized MCP sync after
 publication and binding when a materialized runtime needs refreshing.
 
 Revoking a revision, disabling/removing an effective assignment, disabling a

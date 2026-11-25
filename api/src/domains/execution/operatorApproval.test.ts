@@ -4,10 +4,12 @@ import { setupTestDb, teardownTestDb } from '../../db/testDb';
 import { getDb } from '../../db/client';
 import { authenticateTestApiRequest } from '../../lib/testApiAuth';
 import { authorizeMcpApiRequestIfPresent, issueMcpApiKeyForAgent, replaceAgentMcpPermissionPolicy } from '../../lib/mcpApiAuth';
+import { saveRuntimeConnectionConfig } from '../../lib/runtimeOnboarding';
 import agentsRouter from '../../routes/agents';
 import skillsRouter from '../../routes/skills';
 import workflowsRouter from '../../routes/workflows';
 import routingRouter from '../../routes/routing';
+import setupRouter from '../../routes/setup';
 import { requirePublishedProfile } from './authority';
 
 describe('operator edits approve what they change', () => {
@@ -34,6 +36,7 @@ describe('operator edits approve what they change', () => {
     app.use('/api/v1/skills', skillsRouter);
     app.use('/api/v1/workflows', workflowsRouter);
     app.use('/api/v1/routing', routingRouter);
+    app.use('/api/v1/setup', setupRouter);
     await new Promise<void>((resolve) => {
       server = app.listen(0, '127.0.0.1', () => {
         base = `http://127.0.0.1:${(server.address() as { port: number }).port}/api/v1`;
@@ -131,5 +134,38 @@ describe('operator edits approve what they change', () => {
 
     expect((await call('PUT', `/workflows/${workflowId}`, { environment_setup: { mode: 'custom', steps: [{ command: ['npm', 'ci'] }] } })).status).toBe(200);
     expect(await refusal(id, 'workflow_setup', workflowId)).toBeNull();
+  });
+
+  it('grants host.execute to the starter agents onboarding creates, and says so in the preview', async () => {
+    await saveRuntimeConnectionConfig(getDb(), { kind: 'openclaw', endpoint: 'ws://127.0.0.1:17601', authToken: 'test' });
+    const payload = { template_key: 'development', project_name: 'Acme', workflow_name: 'Delivery' };
+
+    const preview = await call('POST', '/setup/starter-plan/preview', payload);
+    expect(preview.status).toBe(200);
+    expect(preview.body.plan.execution_access).toEqual({ host_execute: true, summary: expect.stringContaining('host.execute') });
+    expect(preview.body.plan.preview.changes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ resource: 'permission', name: expect.stringContaining(': host.execute') }),
+    ]));
+
+    const applied = await call('POST', '/setup/starter-plan/apply', payload);
+    expect(applied.status).toBe(201);
+    const agentIds = [...new Set(Object.values(applied.body.agent_ids as Record<string, number>))];
+    expect(agentIds.length).toBeGreaterThan(0);
+    expect([...applied.body.execution_access.host_execute_agent_ids].sort()).toEqual([...agentIds].sort());
+    expect(applied.body.execution_access.pending).toEqual([]);
+    for (const agentId of agentIds) expect(await refusal(agentId)).toBeNull();
+
+    // Every enabled route's agent may launch on that workflow's tasks.
+    const routes = await getDb().all<{ agent_id: number; workflow_id: number }>(
+      'SELECT DISTINCT agent_id, workflow_id FROM workflow_task_routing_rules WHERE id = ANY(?::bigint[]) AND enabled = 1', applied.body.route_ids,
+    );
+    expect(routes.length).toBeGreaterThan(0);
+    for (const route of routes) expect(await refusal(Number(route.agent_id), 'workflow_setup', Number(route.workflow_id))).toBeNull();
+
+    // Granting host.execute keeps the agents' other default capabilities.
+    const capabilities = await getDb().all<{ capability_key: string }>(
+      "SELECT capability_key FROM agent_mcp_capability_policies WHERE agent_id = ? AND enabled = 1 AND capability_key IN ('host.execute','tasks.read_active_context')", agentIds[0],
+    );
+    expect(capabilities.map((row) => row.capability_key).sort()).toEqual(['host.execute', 'tasks.read_active_context']);
   });
 });
