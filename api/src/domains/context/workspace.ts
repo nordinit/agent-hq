@@ -346,6 +346,7 @@ export async function taskContextSources(db: Db, tenantId: number, taskId: numbe
 }
 
 export interface ContextRunFilter {
+  projectId?: number;
   agentId?: number;
   workflowId?: number;
   taskType?: string;
@@ -364,6 +365,7 @@ export async function listContextRuns(db: Db, tenantId: number, filter: ContextR
      LEFT JOIN tasks t ON t.id = b.task_id
      LEFT JOIN agents a ON a.id = b.agent_id
      WHERE b.tenant_id = ?
+       AND (?::bigint IS NULL OR t.project_id = ?)
        AND (?::bigint IS NULL OR b.agent_id = ?)
        AND (?::bigint IS NULL OR t.workflow_id = ?)
        AND (?::text IS NULL OR t.task_type = ?)
@@ -371,6 +373,7 @@ export async function listContextRuns(db: Db, tenantId: number, filter: ContextR
      ORDER BY b.id DESC
      LIMIT ?`,
     tenantId,
+    filter.projectId ?? null, filter.projectId ?? null,
     filter.agentId ?? null, filter.agentId ?? null,
     filter.workflowId ?? null, filter.workflowId ?? null,
     filter.taskType ?? null, filter.taskType ?? null,

@@ -6,8 +6,9 @@ runs), which stays available from the page's **Full viewer** button.
 
 ## Finding a run
 
-The left rail narrows from the agent down: **Agent → Workflow → Task type → Recorded run**.
-Workflows and task types come from the agent's recorded runs. Selecting a run sets the run
+The left rail narrows from the project down: **Project → Agent → Workflow → Task type → Recorded
+run**. The project limits the agents (each agent belongs to one project), the agent's workflows
+and its recorded runs. Workflows and task types come from the agent's recorded runs. Selecting a run sets the run
 shown on the **Prompt** and **Task** tabs and the tool lists on **Tools**.
 
 ## Tabs
@@ -61,7 +62,7 @@ part of an agent's approved profile and need no re-approval.
 |---|---|
 | `GET /api/v1/context/agents/:id` | Agent sources, skills, tools and workflows, with hashes |
 | `GET /api/v1/context/tasks/:id` | Task description and series template, with hashes |
-| `GET /api/v1/context/runs?agent_id=&workflow_id=&task_type=&task_id=&limit=` | Recorded runs, newest first |
+| `GET /api/v1/context/runs?project_id=&agent_id=&workflow_id=&task_type=&task_id=&limit=` | Recorded runs, newest first |
 | `GET /api/v1/context/runs/:id/mcp-tools` | Tool definitions recorded for one run |
 | `POST /api/v1/context/publish` | Publish staged changes (`job_instructions`, `agent_skills`, `mcp_allowlist`, `workflow_goal`, `project_context`, `task_description`, `series_template`) |
 

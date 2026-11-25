@@ -137,8 +137,9 @@ function query(params: Record<string, string | number | null | undefined>): stri
 }
 
 export const contextClient = {
-  getContextRuns: (filter: { agentId?: number | null; workflowId?: number | null; taskType?: string | null; taskId?: number | null; limit?: number }) =>
+  getContextRuns: (filter: { projectId?: number | null; agentId?: number | null; workflowId?: number | null; taskType?: string | null; taskId?: number | null; limit?: number }) =>
     apiFetch<{ runs: ContextRun[] }>(`/api/v1/context/runs${query({
+      project_id: filter.projectId,
       agent_id: filter.agentId,
       workflow_id: filter.workflowId,
       task_type: filter.taskType,

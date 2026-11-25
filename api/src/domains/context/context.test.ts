@@ -129,6 +129,8 @@ describe('Context page read model and publish', () => {
       expect.objectContaining({ instanceId: 800, taskId: 900, agentName: 'Casper' }),
     ]);
     expect(await listContextRuns(db, 1, { taskType: 'other' })).toEqual([]);
+    expect(await listContextRuns(db, 1, { projectId: 90, agentId: 9 })).toHaveLength(1);
+    expect(await listContextRuns(db, 1, { projectId: 91, agentId: 9 })).toEqual([]);
   });
 
   it('publishes every staged edit together and re-approves the edited agent', async () => {

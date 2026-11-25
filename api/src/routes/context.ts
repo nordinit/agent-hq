@@ -38,6 +38,7 @@ function handle(fn: (req: Request, res: Response) => Promise<unknown>) {
 
 router.get('/runs', handle(async (req, res) => {
   const query = z.object({
+    project_id: positiveId.optional(),
     agent_id: positiveId.optional(),
     workflow_id: positiveId.optional(),
     task_type: z.string().min(1).max(200).optional(),
@@ -48,6 +49,7 @@ router.get('/runs', handle(async (req, res) => {
   const tenantId = await resolveTenantIdFromRequest(db, req);
   res.json({
     runs: await listContextRuns(db, tenantId, {
+      projectId: query.project_id,
       agentId: query.agent_id,
       workflowId: query.workflow_id,
       taskType: query.task_type,

@@ -7,6 +7,7 @@ import {
   ContextPublishConflict,
   type Agent,
   type AgentContextSources,
+  type Project,
   type ContextRun,
   type ContextSegment,
   type InstanceContextView,
@@ -30,6 +31,7 @@ const TABS: Array<{ id: Tab; label: string }> = [
 ];
 
 interface Selection {
+  projectId: number | null;
   agentId: number | null;
   workflowId: number | null;
   taskType: string | null;
@@ -42,11 +44,18 @@ function readSelection(): Selection {
     const value = Number(params.get(key));
     return Number.isInteger(value) && value > 0 ? value : null;
   };
-  return { agentId: number('agent'), workflowId: number('workflow'), taskType: params.get('type') || null, runId: number('run') };
+  return {
+    projectId: number('project'),
+    agentId: number('agent'),
+    workflowId: number('workflow'),
+    taskType: params.get('type') || null,
+    runId: number('run'),
+  };
 }
 
 function writeSelection(selection: Selection, tab: Tab) {
   const params = new URLSearchParams();
+  if (selection.projectId) params.set('project', String(selection.projectId));
   if (selection.agentId) params.set('agent', String(selection.agentId));
   if (selection.workflowId) params.set('workflow', String(selection.workflowId));
   if (selection.taskType) params.set('type', selection.taskType);
@@ -68,7 +77,8 @@ function railItem(active: boolean) {
 
 export default function ContextWorkspace() {
   const [agents, setAgents] = useState<Agent[]>([]);
-  const [selection, setSelection] = useState<Selection>({ agentId: null, workflowId: null, taskType: null, runId: null });
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [selection, setSelection] = useState<Selection>({ projectId: null, agentId: null, workflowId: null, taskType: null, runId: null });
   const [tab, setTab] = useState<Tab>('prompt');
   const [sources, setSources] = useState<AgentContextSources | null>(null);
   const [runs, setRuns] = useState<ContextRun[]>([]);
@@ -90,10 +100,27 @@ export default function ContextWorkspace() {
     setSelection(initial);
     const initialTab = new URLSearchParams(window.location.search).get('tab') as Tab | null;
     if (initialTab && TABS.some((entry) => entry.id === initialTab)) setTab(initialTab);
+    api.getProjects()
+      .then((rows) => setProjects(rows.filter((project) => !project.archived_at).sort((a, b) => a.name.localeCompare(b.name))))
+      .catch((err: Error) => setError(err.message));
     api.getAgents()
-      .then((rows) => setAgents([...rows].sort((a, b) => a.name.localeCompare(b.name))))
+      .then((rows) => {
+        const sorted = [...rows].sort((a, b) => a.name.localeCompare(b.name));
+        setAgents(sorted);
+        // A link that names only an agent still opens with its project chosen.
+        setSelection((previous) => {
+          if (previous.projectId || !previous.agentId) return previous;
+          const projectId = sorted.find((agent) => agent.id === previous.agentId)?.project_id ?? null;
+          return projectId ? { ...previous, projectId } : previous;
+        });
+      })
       .catch((err: Error) => setError(err.message));
   }, []);
+
+  const projectAgents = useMemo(
+    () => (selection.projectId ? agents.filter((agent) => agent.project_id === selection.projectId) : agents),
+    [agents, selection.projectId],
+  );
 
   useEffect(() => { writeSelection(selection, tab); }, [selection, tab]);
 
@@ -114,7 +141,13 @@ export default function ContextWorkspace() {
   useEffect(() => {
     if (!selection.agentId) { setRuns([]); return; }
     let cancelled = false;
-    api.getContextRuns({ agentId: selection.agentId, workflowId: selection.workflowId, taskType: selection.taskType, limit: 40 })
+    api.getContextRuns({
+      projectId: selection.projectId,
+      agentId: selection.agentId,
+      workflowId: selection.workflowId,
+      taskType: selection.taskType,
+      limit: 40,
+    })
       .then((rows) => {
         if (cancelled) return;
         setRuns(rows);
@@ -126,7 +159,7 @@ export default function ContextWorkspace() {
       })
       .catch((err: Error) => { if (!cancelled) setError(err.message); });
     return () => { cancelled = true; };
-  }, [selection.agentId, selection.workflowId, selection.taskType, reloadToken]);
+  }, [selection.projectId, selection.agentId, selection.workflowId, selection.taskType, reloadToken]);
 
   const selectedRun = useMemo(() => runs.find((run) => run.instanceId === selection.runId) ?? null, [runs, selection.runId]);
 
@@ -155,10 +188,26 @@ export default function ContextWorkspace() {
   const selectAgent = (agentId: number) => {
     if (agentId === selection.agentId) return;
     if (staged.list.length > 0 && !window.confirm('Switching agent keeps your staged changes. Continue?')) return;
-    setSelection({ agentId, workflowId: null, taskType: null, runId: null });
+    setSelection((previous) => ({ projectId: previous.projectId, agentId, workflowId: null, taskType: null, runId: null }));
   };
 
-  const workflow = sources?.workflows.find((entry) => entry.id === selection.workflowId) ?? null;
+  const selectProject = (projectId: number | null) => {
+    if (projectId === selection.projectId) return;
+    setSelection((previous) => {
+      // Keep the agent when it belongs to the new project; otherwise start over at the agent.
+      const keep = previous.agentId && (projectId === null
+        || agents.find((agent) => agent.id === previous.agentId)?.project_id === projectId);
+      return keep
+        ? { ...previous, projectId, workflowId: null, taskType: null, runId: null }
+        : { projectId, agentId: null, workflowId: null, taskType: null, runId: null };
+    });
+  };
+
+  const workflows = useMemo(
+    () => (sources?.workflows ?? []).filter((entry) => !selection.projectId || entry.projectId === selection.projectId),
+    [sources, selection.projectId],
+  );
+  const workflow = workflows.find((entry) => entry.id === selection.workflowId) ?? null;
 
   const publish = useCallback(async () => {
     setPublishing(true);
@@ -206,14 +255,43 @@ export default function ContextWorkspace() {
 
       <div className="flex min-h-0 flex-1 flex-col md:flex-row">
         <aside className="max-h-56 w-full shrink-0 overflow-y-auto border-b border-slate-800 bg-slate-900/40 p-3 md:max-h-none md:w-64 md:border-b-0 md:border-r">
+          <RailHeading>Project</RailHeading>
+          <select
+            value={selection.projectId ?? ''}
+            onChange={(event) => selectProject(event.target.value ? Number(event.target.value) : null)}
+            className="w-full rounded-lg border border-slate-700 bg-slate-950/60 px-2 py-1.5 text-xs text-slate-200"
+          >
+            <option value="">All projects</option>
+            {projects.map((project) => (
+              <option key={project.id} value={project.id}>
+                {project.name} ({agents.filter((agent) => agent.project_id === project.id).length})
+              </option>
+            ))}
+          </select>
+
           <RailHeading>Agent</RailHeading>
           <select
             value={selection.agentId ?? ''}
             onChange={(event) => selectAgent(Number(event.target.value))}
             className="w-full rounded-lg border border-slate-700 bg-slate-950/60 px-2 py-1.5 text-xs text-slate-200"
           >
-            <option value="" disabled>Choose an agent…</option>
-            {agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name}</option>)}
+            <option value="" disabled>{projectAgents.length ? 'Choose an agent…' : 'No agents in this project'}</option>
+            {selection.projectId
+              ? projectAgents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name}</option>)
+              : projects.map((project) => {
+                  const members = agents.filter((agent) => agent.project_id === project.id);
+                  return members.length ? (
+                    <optgroup key={project.id} label={project.name}>
+                      {members.map((agent) => <option key={agent.id} value={agent.id}>{agent.name}</option>)}
+                    </optgroup>
+                  ) : null;
+                })}
+            {!selection.projectId && agents.some((agent) => !projects.some((project) => project.id === agent.project_id)) && (
+              <optgroup label="No active project">
+                {agents.filter((agent) => !projects.some((project) => project.id === agent.project_id))
+                  .map((agent) => <option key={agent.id} value={agent.id}>{agent.name}</option>)}
+              </optgroup>
+            )}
           </select>
 
           {sources && (
@@ -222,7 +300,7 @@ export default function ContextWorkspace() {
               <button type="button" className={railItem(!selection.workflowId)} onClick={() => setSelection((previous) => ({ ...previous, workflowId: null, taskType: null, runId: null }))}>
                 All workflows
               </button>
-              {sources.workflows.map((entry) => (
+              {workflows.map((entry) => (
                 <button
                   key={entry.id}
                   type="button"
@@ -309,7 +387,7 @@ export default function ContextWorkspace() {
 
           <div className="min-h-0 flex-1 overflow-y-auto p-4">
             {!selection.agentId ? (
-              <p className="text-sm text-slate-400">Choose an agent to see its context.</p>
+              <p className="text-sm text-slate-400">Choose a project and an agent to see the agent’s context.</p>
             ) : loading && !sources ? (
               <p className="flex items-center gap-2 text-sm text-slate-400"><Loader2 className="h-4 w-4 animate-spin" /> Loading…</p>
             ) : !sources ? null : tab === 'prompt' ? (
