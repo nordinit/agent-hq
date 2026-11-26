@@ -750,7 +750,7 @@ router.post('/types', async (req: Request, res: Response) => {
         VALUES (${tenant.placeholders}${project.placeholders}?, ?, ?, 0, ?, ${extraColumns.map(() => '?, ').join('')}to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
       `, ...tenant.params, ...project.params, key, name, description, keepSame, ...extraColumns.map((column) => sourceColumns[column]));
       if (source && copyFrom && tenantId != null) {
-        copied = await copyWorkflowTypeDefinition(db, { tenantId, sourceKey: copyFrom, targetKey: key });
+        copied = await copyWorkflowTypeDefinition(db, { tenantId, sourceKey: copyFrom, targetKey: key, projectId: project.projectId ?? null });
       }
     });
 

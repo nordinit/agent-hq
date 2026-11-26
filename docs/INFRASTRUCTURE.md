@@ -315,7 +315,9 @@ cannot have statuses of its own; `GET /api/v1/routing/statuses?workflow_id=` ret
 list, and writes there answer 409 `statuses_defined_on_workflow_type`. A workflow that needs
 different statuses needs its own type: `POST /api/v1/workflows/types` with `copy_from` starts a
 type as a full copy of another (statuses, task types, outcomes, relationship types, task fields
-and type-wide routing). Moves and assignment rules can still be set per workflow.
+and type-wide routing). A type created for one project (`project_id`) copies only that project's
+type-wide routing and the rows that apply to every project. Moves and assignment rules can still be
+set per workflow.
 
 Changing a workflow's type (`PUT /api/v1/workflows/:id` with `workflow_type`) moves the
 workflow's own transitions, assignment rules, requirements, event mappings and model routing onto

@@ -58,12 +58,13 @@ export interface WorkflowTypeCopyResult {
 
 /**
  * Copies a workflow type's definition onto a new type that already has its `workflow_types` row.
- * Runs inside the caller's transaction. The copy belongs to the tenant (`is_system = 0`), so
+ * Runs inside the caller's transaction. With `projectId` (a type made for one project), type-wide
+ * routing is copied only for that project and for all projects. The copy belongs to the tenant (`is_system = 0`), so
  * starter-type maintenance never prunes or rewrites it.
  */
 export async function copyWorkflowTypeDefinition(
   db: Db,
-  input: { tenantId: number; sourceKey: string; targetKey: string },
+  input: { tenantId: number; sourceKey: string; targetKey: string; projectId?: number | null },
 ): Promise<WorkflowTypeCopyResult> {
   const copied: Record<string, number> = {};
   for (const table of TYPE_DEFINITION_TABLES) {
@@ -81,11 +82,14 @@ export async function copyWorkflowTypeDefinition(
       || !await tableHasColumn(db, table, 'workflow_type')
       || !await tableHasColumn(db, table, 'workflow_id')) continue;
     const hasTenant = await tableHasColumn(db, table, 'tenant_id');
+    // A type made for one project takes only that project's type-wide routing (and rows that
+    // apply to every project); other projects' rows could never apply to its workflows.
+    const projectScoped = input.projectId != null && await tableHasColumn(db, table, 'project_id');
     copied[table] = await copyRows(
       db,
       table,
-      `workflow_id IS NULL AND workflow_type = ?${hasTenant ? ' AND tenant_id = ?' : ''}`,
-      hasTenant ? [input.sourceKey, input.tenantId] : [input.sourceKey],
+      `workflow_id IS NULL AND workflow_type = ?${hasTenant ? ' AND tenant_id = ?' : ''}${projectScoped ? ' AND (project_id = ? OR project_id IS NULL)' : ''}`,
+      [input.sourceKey, ...(hasTenant ? [input.tenantId] : []), ...(projectScoped ? [input.projectId] : [])],
       { workflow_type: input.targetKey },
     );
   }

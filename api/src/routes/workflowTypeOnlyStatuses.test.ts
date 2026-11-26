@@ -105,6 +105,31 @@ test('copy_from creates a full copy of a workflow type', async () => {
   expect(Number((await db.get(`SELECT COUNT(*) AS n FROM workflow_type_task_statuses WHERE workflow_type_key = 'devx'`) as { n: number }).n)).toBe(4);
 });
 
+test('a copy made for one project takes only that project\'s type-wide routing', async () => {
+  const db = getDb();
+  await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (2, 1, 'Pool Client')`);
+  // Type-wide rows for another project, and one with no project (applies everywhere).
+  await db.run(`
+    INSERT INTO workflow_task_transitions (tenant_id, project_id, workflow_id, workflow_type, task_type, from_status, outcome, to_status, enabled, priority, is_protected)
+    VALUES (1, 2, NULL, 'devx', 'backend', 'review', 'approve', 'done', 1, 0, 0),
+           (1, NULL, NULL, 'devx', NULL, 'todo', 'mark_ready', 'in_progress', 1, 0, 0)
+  `);
+  await db.run(`
+    INSERT INTO workflow_task_routing_rules (tenant_id, project_id, workflow_id, workflow_type, task_type, status, agent_id, priority)
+    VALUES (1, 2, NULL, 'devx', 'backend', 'review', 7, 1)
+  `);
+
+  const created = await call('POST', '/workflows/types', { key: 'agency_dev', name: 'Agency Dev', copy_from: 'devx', project_id: 1 });
+  expect(created.status).toBe(201);
+  expect(await db.all(`SELECT project_id, from_status FROM workflow_task_transitions WHERE workflow_type = 'agency_dev' ORDER BY from_status`))
+    .toEqual([{ project_id: 1, from_status: 'in_progress' }, { project_id: null, from_status: 'todo' }]);
+  expect(Number((await db.get(`SELECT COUNT(*) AS n FROM workflow_task_routing_rules WHERE workflow_type = 'agency_dev'`) as { n: number }).n)).toBe(0);
+
+  // A copy for no particular project still takes every project's rows.
+  expect((await call('POST', '/workflows/types', { key: 'shared_dev', name: 'Shared Dev', copy_from: 'devx' })).status).toBe(201);
+  expect(Number((await db.get(`SELECT COUNT(*) AS n FROM workflow_task_transitions WHERE workflow_type = 'shared_dev'`) as { n: number }).n)).toBe(3);
+});
+
 test('changing a workflow to a compatible type moves its own routing so it keeps working', async () => {
   expect((await call('POST', '/workflows/types', { key: 'agency_dev', name: 'Agency Dev', copy_from: 'devx' })).status).toBe(201);
   const db = getDb();
