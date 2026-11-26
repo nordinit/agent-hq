@@ -1,4 +1,5 @@
 import type { ProfileChange } from './api';
+import { summarizeEnvironmentSetup } from './environmentSetup.ts';
 
 /**
  * What each setting on the Approvals page is, why Agent HQ asks before it runs with it, and where
@@ -84,13 +85,6 @@ export function fieldGuide(change: ProfileChange, ctx: FieldContext): FieldGuide
 
 const RUNTIMES: Record<string, string> = { 'claude-code': 'Claude Code', codex: 'Codex', openclaw: 'OpenClaw' };
 
-/** "npm ci" in "." → `npm ci`, or `npm ci` (in web). */
-function commandText(step: { command?: unknown; cwd?: unknown }): string {
-  const command = Array.isArray(step.command) ? step.command.map(String).join(' ') : String(step.command ?? '');
-  const cwd = typeof step.cwd === 'string' && step.cwd !== '.' ? ` (in ${step.cwd})` : '';
-  return `${command}${cwd}`;
-}
-
 /**
  * A value in plain words, for settings whose saved form is code or JSON. Null means the raw value
  * already reads plainly.
@@ -102,19 +96,15 @@ export function describeValue(path: string, value: string | null): string | null
     return null;
   }
   const parsed = decode(value);
-  if (path === 'environment_setup' && parsed && typeof parsed === 'object') {
-    const setup = parsed as { mode?: string; roots?: unknown; steps?: unknown; timeoutSeconds?: unknown };
-    const limit = typeof setup.timeoutSeconds === 'number' ? ` It stops after ${setup.timeoutSeconds} seconds.` : '';
-    if (setup.mode === 'off') return 'Off: nothing runs before the agent starts. The agent starts in its workspace as it is.';
-    if (setup.mode === 'auto') {
-      const roots = Array.isArray(setup.roots) ? setup.roots.map(String) : ['.'];
-      const where = roots.length === 1 && roots[0] === '.' ? 'the repository' : roots.join(', ');
-      return `Automatic: Agent HQ finds the project’s lockfile in ${where} and runs the matching install (for example npm ci or uv sync), skipping it when nothing changed.${limit}`;
-    }
-    if (setup.mode === 'custom') {
-      const steps = Array.isArray(setup.steps) ? setup.steps as Array<{ command?: unknown; cwd?: unknown }> : [];
-      const list = steps.map((step, index) => `${index + 1}. ${commandText(step)}`).join('\n');
-      return `Custom: runs these commands in order, every time, before the agent starts:\n${list}\n${limit.trim()}`.trim();
+  if (path === 'environment_setup') {
+    const setup = summarizeEnvironmentSetup(parsed);
+    if (setup) {
+      const lower = setup.description.charAt(0).toLowerCase() + setup.description.slice(1);
+      const limit = setup.timeoutSeconds === null ? '' : `It stops after ${setup.timeoutSeconds} seconds.`;
+      if (setup.mode === 'off') return `Off: ${lower}`;
+      if (setup.mode === 'auto') return `Automatic: ${setup.description}${limit ? ` ${limit}` : ''}`;
+      const list = setup.steps.map((step, index) => `${index + 1}. ${step.command}${step.cwd !== '.' ? ` (in ${step.cwd})` : ''}`).join('\n');
+      return `Custom: ${lower}\n${list}\n${limit}`.trim();
     }
   }
   if (path === 'repo_access_mode') {

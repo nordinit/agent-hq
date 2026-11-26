@@ -25,6 +25,8 @@ import { TaskDetailPanel } from '@/features/tasks/TaskDetailPanel';
 import { useTaskStatuses } from '@/lib/useTaskStatuses';
 import ProjectFiles from '@/components/ProjectFiles';
 import { WorkflowTeamCard } from '@/components/WorkflowTeamCard';
+import { WorkflowSetupCard } from '@/components/WorkflowSetupCard';
+import { summarizeEnvironmentSetup } from '@/lib/environmentSetup';
 
 type Tab = 'overview' | 'tasks' | 'files' | 'metrics';
 
@@ -57,12 +59,16 @@ function formatWorkflowTypeLabel(workflowType: string | null | undefined): strin
 // ── Overview Tab ──────────────────────────────────────────────────────────────
 
 function OverviewTab({ workflow, metrics }: { workflow: Workflow; metrics: WorkflowMetrics | null }) {
-  if (!metrics) return <div className="text-slate-500 text-sm">Loading metrics…</div>;
+  if (!metrics) return <div className="space-y-6">
+    <WorkflowSetupCard workflow={workflow} />
+    <div className="text-slate-500 text-sm">Loading metrics…</div>
+  </div>;
 
   const pct = metrics.completion_rate;
 
   return (
     <div className="space-y-6">
+      <WorkflowSetupCard workflow={workflow} />
       <WorkflowTeamCard workflowId={workflow.id} teamId={workflow.team_id ?? null} />
 
       {/* Progress */}
@@ -528,6 +534,7 @@ export default function WorkflowDetailPage() {
   const total = metrics?.tasks_total ?? 0;
   const done = metrics?.tasks_done ?? 0;
   const workflowTypeLabel = formatWorkflowTypeLabel(workflow.workflow_type);
+  const preparation = summarizeEnvironmentSetup(workflow.environment_setup ?? null);
 
   const tabs: { key: Tab; label: string; icon: React.ReactNode }[] = [
     { key: 'overview', label: 'Overview', icon: <Activity className="w-4 h-4" /> },
@@ -593,6 +600,11 @@ export default function WorkflowDetailPage() {
                 )}
                 {workflow.repo_access_mode === 'clone' && workflow.repo_url && (
                   <span className="font-mono text-cyan-300 break-all">Repo: {workflow.repo_url}</span>
+                )}
+                {preparation && (
+                  <span title={preparation.description}>
+                    Preparation: {preparation.label}{preparation.mode === 'custom' ? ` (${preparation.steps.length} ${preparation.steps.length === 1 ? 'command' : 'commands'})` : ''}
+                  </span>
                 )}
                 <span>Status: {workflow.status}</span>
                 {workflow.length_value && (

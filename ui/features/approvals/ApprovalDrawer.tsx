@@ -36,7 +36,7 @@ function isWorkflow(check: SetupCheck | WorkflowCheck): check is WorkflowCheck {
 function ValueBlock({ path, value, tone }: { path: string; value: string | null; tone: 'before' | 'after' | 'only' }) {
   const plain = describeValue(path, value);
   const color = tone === 'before' ? 'text-slate-400' : tone === 'after' ? 'text-amber-100' : 'text-slate-200';
-  const raw = <pre className={`mt-1 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded bg-slate-950 p-2 text-xs ${color}`}>{value ?? '(empty)'}</pre>;
+  const raw = <pre className={`mt-1 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded bg-slate-950 p-2 text-xs [font-variant-ligatures:none] ${color}`}>{value ?? '(empty)'}</pre>;
   if (!plain) return raw;
   return <div>
     <p className={`whitespace-pre-line rounded bg-slate-950 p-2 text-sm ${color}`}>{plain}</p>
