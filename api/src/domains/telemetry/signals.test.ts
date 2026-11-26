@@ -130,13 +130,18 @@ it.each([false,true])('pins comparison expressions with literal on either side (
   expect(compiled.dependencies.signals.some((signal:any)=>signal.key==='approved'&&signal.source)).toBe(true);
 });
 
-it('uses workflow overrides and global status lifecycles without leaking tenant-owned signals',async()=>{
+it('uses workflow type statuses and global status lifecycles without leaking tenant-owned signals',async()=>{
   await db.run(`INSERT INTO task_statuses(name,label) VALUES('global','Global')`);
+  // A leftover per-workflow row from before statuses moved to the type: listed for history only.
   await db.run(`INSERT INTO workflow_task_statuses(id,workflow_id,status_key,label) VALUES(10,1,'approved','Workflow approval')`);
   await db.run(`INSERT INTO workflow_type_task_statuses(id,tenant_id,workflow_type_key,status_key,label) VALUES(20,2,'private','secret','Secret')`);
-  const records=await catalog(),override=records.statuses.find(signal=>signal.source?.table==='workflow_task_statuses')!;
+  const records=await catalog(),approved=records.statuses.find(signal=>signal.key==='approved'&&signal.source?.table==='workflow_type_task_statuses')!;
+  const legacy=records.statuses.find(signal=>signal.key==='approved'&&signal.source?.table==='workflow_task_statuses')!;
+  expect(legacy).toBeDefined();
   expect(records.statuses.some(signal=>signal.key==='secret')).toBe(false);
-  await task(1);expect(await db.value('SELECT telemetry_status_identity FROM tasks WHERE id=1')).toBe(override.identity);
+  // New observations use the type's identity, never the leftover row's.
+  await task(1);expect(await db.value('SELECT telemetry_status_identity FROM tasks WHERE id=1')).toBe(approved.identity);
+  expect(approved.identity).not.toBe(legacy.identity);
   const global=records.statuses.find(signal=>signal.key==='global')!;
   await db.run(`DELETE FROM task_statuses WHERE name='global'`);
   await db.run(`INSERT INTO task_statuses(name,label) VALUES('global','New global')`);

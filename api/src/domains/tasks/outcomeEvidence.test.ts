@@ -19,8 +19,8 @@ beforeEach(async () => {
   await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (1, 1, 'Sales')`);
   await db.run(`INSERT INTO workflow_types (tenant_id, key, name) VALUES (1, 'lead_generation', 'Lead Generation')`);
   await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name, workflow_type) VALUES (10, 1, 1, 'Leads', 'lead_generation')`);
-  await db.run(`INSERT INTO workflow_task_statuses (workflow_id, status_key, label, terminal, stage_order)
-    VALUES (10, 'approved', 'Approved', 0, 0), (10, 'submitted', 'Submitted', 0, 1)`);
+  await db.run(`INSERT INTO workflow_type_task_statuses (tenant_id, workflow_type_key, status_key, label, terminal, stage_order)
+    VALUES (1, 'lead_generation', 'approved', 'Approved', 0, 0), (1, 'lead_generation', 'submitted', 'Submitted', 0, 1)`);
   await db.run(`INSERT INTO agents (id, tenant_id, name, session_key) VALUES (7, 1, 'Sales', 'sales')`);
   await db.run(`INSERT INTO tasks (id, tenant_id, title, status, project_id, workflow_id, task_type, agent_id, custom_fields_json)
     VALUES (417, 1, 'Proposal', 'approved', 1, 10, 'proposal', 7, ?)`, JSON.stringify({ retired_field: 'preserve', memo: 'old' }));
@@ -138,8 +138,8 @@ it('previews payload-only proof without changing task, history, notes or run', a
 });
 
 it('omits run-closure flags from a recovery preview while a real outcome closes the reviewer run', async () => {
-  await db.run(`INSERT INTO workflow_task_statuses (workflow_id, status_key, label, terminal, stage_order)
-    VALUES (10, 'blocked', 'Blocked', 0, 2), (10, 'in_progress', 'In Progress', 0, 3)`);
+  await db.run(`INSERT INTO workflow_type_task_statuses (tenant_id, workflow_type_key, status_key, label, terminal, stage_order)
+    VALUES (1, 'lead_generation', 'blocked', 'Blocked', 0, 2), (1, 'lead_generation', 'in_progress', 'In Progress', 0, 3)`);
   await db.run(`INSERT INTO agents (id, tenant_id, name, session_key) VALUES (8, 1, 'Producer', 'producer')`);
   await db.run(`INSERT INTO workflow_task_transitions (tenant_id, workflow_id, task_type, from_status, outcome, to_status, enabled)
     VALUES (1, 10, 'lead_search', 'blocked', 'blocker_resolved', 'in_progress', 1)`);

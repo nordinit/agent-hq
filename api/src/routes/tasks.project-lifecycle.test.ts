@@ -28,8 +28,8 @@ beforeEach(async () => {
   await db.run(`INSERT INTO workflow_types (tenant_id, key, name) VALUES (1, 'lead_generation', 'Lead Generation')`);
   await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name, workflow_type)
     VALUES (10, 1, 1, 'Leads', 'lead_generation'), (11, 1, 2, 'Other leads', 'lead_generation'), (12, 2, 3, 'Tenant leads', 'lead_generation')`);
-  await db.run(`INSERT INTO workflow_task_statuses (workflow_id, status_key, label, terminal, stage_order)
-    VALUES (10, 'in_progress', 'In Progress', 0, 0), (10, 'done', 'Done', 1, 1)`);
+  await db.run(`INSERT INTO workflow_type_task_statuses (tenant_id, workflow_type_key, status_key, label, terminal, stage_order)
+    VALUES (1, 'lead_generation', 'in_progress', 'In Progress', 0, 0), (1, 'lead_generation', 'done', 'Done', 1, 1)`);
   await db.run(`INSERT INTO agents (id, tenant_id, project_id, name, session_key)
     VALUES (7, 1, 1, 'Supervisor', 'supervisor'), (8, 1, 1, 'Worker', 'worker')`);
   await db.run(`INSERT INTO tasks (id, tenant_id, project_id, workflow_id, title, status, task_type, assigned_agent_id)

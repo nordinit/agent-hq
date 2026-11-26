@@ -158,8 +158,8 @@ describe('tasks route write-model handoff', () => {
   it.each(['approved', 'awaiting_customer_signature'])('preserves a live owner through title and status edits from %s', async taskStatus => {
     const db = getDb();
     for (const status of [taskStatus, 'customer_followup']) {
-      await db.run(`INSERT INTO workflow_task_statuses (workflow_id, status_key, label, terminal)
-        VALUES (42, ?, ?, 0)`, status, status);
+      await db.run(`INSERT INTO workflow_type_task_statuses (tenant_id, workflow_type_key, status_key, label, terminal)
+        VALUES (1, 'generic', ?, ?, 0) ON CONFLICT DO NOTHING`, status, status);
     }
     await db.run(`INSERT INTO job_instances (id, tenant_id, task_id, agent_id, status)
       VALUES (900, 1, 102, 7, 'running')`);
@@ -197,9 +197,9 @@ describe('tasks route write-model handoff', () => {
 
   it('uses configured terminality for pause instead of built-in status names', async () => {
     const db = getDb();
-    await db.run(`INSERT INTO workflow_task_statuses (workflow_id, status_key, label, terminal)
-      VALUES (42, 'failed', 'Recoverable', 0), (42, 'custom_final', 'Final', 1)
-      ON CONFLICT (workflow_id, status_key) DO UPDATE SET label = excluded.label, terminal = excluded.terminal`);
+    await db.run(`INSERT INTO workflow_type_task_statuses (tenant_id, workflow_type_key, status_key, label, terminal)
+      VALUES (1, 'generic', 'failed', 'Recoverable', 0), (1, 'generic', 'custom_final', 'Final', 1)
+      ON CONFLICT (tenant_id, workflow_type_key, status_key) DO UPDATE SET label = excluded.label, terminal = excluded.terminal`);
     const pause = await fetch(`${baseUrl}/api/v1/tasks/103/pause`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
     });

@@ -75,9 +75,9 @@ describe('task read model blocker state', () => {
     expect(await blockerFlags(db, 530)).toEqual({ isBlocked: false, blockers: [[567, false]] });
   });
 
-  it('keeps blocking when the workflow marks the blocker status non-terminal', async () => {
+  it('keeps blocking when the workflow type marks the blocker status non-terminal', async () => {
     const db = await setupDb();
-    await db.run(`INSERT INTO workflow_task_statuses (workflow_id, status_key, label, terminal) VALUES (10, 'failed', 'Failed', 0)`);
+    await db.run(`INSERT INTO workflow_type_task_statuses (tenant_id, workflow_type_key, status_key, label, terminal) VALUES (1, 'dev', 'failed', 'Failed', 0)`);
     await insertTask(db, 530, 'blocked');
     await insertTask(db, 567, 'failed');
     await blockOn(db, 530, 567);

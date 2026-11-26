@@ -10,51 +10,23 @@ import {
 } from './metadata';
 import { type Db } from "../../../db/adapter/types";
 
+/**
+ * A workflow's statuses are its workflow type's statuses. Statuses are defined only on the
+ * type (workflow_type_task_statuses); a workflow never has a list of its own, so every screen
+ * and every check sees the same set.
+ */
 export async function listWorkflowTaskStatuses(
   db: Db,
   workflowId?: number | null,
 ): Promise<WorkflowTaskStatusMeta[]> {
-  if (typeof workflowId === 'number' && Number.isFinite(workflowId) && await tableExists(db, 'workflow_task_statuses')) {
-    const rows = await db.all(`
-      SELECT status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json
-      FROM workflow_task_statuses
-      WHERE workflow_id = ?
-      ORDER BY stage_order ASC, id ASC
-    `, workflowId) as Array<{
-      status_key: string;
-      label: string;
-      color: string;
-      terminal: number;
-      is_system: number;
-      allowed_transitions_json: string | null;
-      stage_order: number | null;
-      is_default_entry: number | null;
-      metadata_json: string | null;
-    }>;
-    if (rows.length > 0) {
-      return rows.map((row, index) => {
-        const metadata = parseJsonObject(row.metadata_json);
-        const emoji = typeof metadata.emoji === 'string' ? metadata.emoji : null;
-        return {
-          name: row.status_key,
-          label: row.label,
-          color: row.color,
-          terminal: Boolean(row.terminal),
-          is_system: Boolean(row.is_system),
-          allowed_transitions: parseJsonArray(row.allowed_transitions_json),
-          emoji,
-          metadata: emoji ? { ...metadata, emoji } : metadata,
-          stage_order: Number.isFinite(Number(row.stage_order)) ? Number(row.stage_order) : index,
-          is_default_entry: Boolean(row.is_default_entry),
-        };
-      });
-    }
-
-    return [];
-  }
-
-  // Statuses are configuration only: without a configured workflow there are none (no built-in fallback list).
-  return [];
+  if (typeof workflowId !== 'number' || !Number.isFinite(workflowId) || !await tableExists(db, 'workflows')) return [];
+  const hasTenant = await tableHasColumn(db, 'workflows', 'tenant_id');
+  const workflow = await db.get(
+    `SELECT workflow_type${hasTenant ? ', tenant_id' : ''} FROM workflows WHERE id = ? LIMIT 1`,
+    workflowId,
+  ) as { workflow_type?: string | null; tenant_id?: number | null } | undefined;
+  if (!workflow?.workflow_type) return [];
+  return listWorkflowTypeTaskStatuses(db, workflow.workflow_type, { tenantId: workflow.tenant_id ?? null });
 }
 
 export async function listWorkflowTypeTaskStatuses(

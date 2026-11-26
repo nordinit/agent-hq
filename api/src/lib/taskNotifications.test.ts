@@ -23,6 +23,7 @@ async function seedTask(db: Db, taskId: number, tenantId = 1): Promise<void> {
   await db.run(`INSERT INTO tasks (id, tenant_id, title, project_id, workflow_id) VALUES (?, ?, 'Status emoji test', 1, 10)`, taskId, tenantId);
 }
 
+// Configures a status on workflow 10's type ('enhancements'); a workflow uses its type's statuses.
 async function seedWorkflowStatus(
   db: Db,
   statusKey: string,
@@ -30,10 +31,10 @@ async function seedWorkflowStatus(
   stageOrder = 0,
 ): Promise<void> {
   await db.run(`
-    INSERT INTO workflow_task_statuses (
-      workflow_id, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json
-    ) VALUES (?, ?, ?, 'slate', 0, 0, '[]', ?, 0, ?)
-  `, 10, statusKey, statusKey, stageOrder, metadataJson);
+    INSERT INTO workflow_type_task_statuses (
+      tenant_id, workflow_type_key, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json
+    ) VALUES (1, 'enhancements', ?, ?, 'slate', 0, 0, '[]', ?, 0, ?)
+  `, statusKey, statusKey, stageOrder, metadataJson);
 }
 
 describe('notifyTaskStatusChange', () => {

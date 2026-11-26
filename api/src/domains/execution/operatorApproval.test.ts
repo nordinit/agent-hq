@@ -160,7 +160,7 @@ describe('operator edits approve what they change', () => {
     const workflow = await call('POST', '/workflows', { project_id: 101, name: 'Delivery', workflow_type: 'generic' });
     expect(workflow.status).toBe(201);
     const workflowId = Number(workflow.body.id);
-    await getDb().run("INSERT INTO workflow_task_statuses (workflow_id, status_key, label) VALUES (?, 'ready', 'Ready')", workflowId);
+    await getDb().run("INSERT INTO workflow_type_task_statuses (tenant_id, workflow_type_key, status_key, label) VALUES (1, 'generic', 'ready', 'Ready') ON CONFLICT DO NOTHING");
     expect(await refusal(id, 'workflow_setup', workflowId)).toBe('No active grant for this published executable revision.');
 
     const rule = await call('POST', '/routing/rules', { project_id: 101, workflow_id: workflowId, workflow_type: 'generic', task_type: 'backend', status: 'ready', agent_id: id });

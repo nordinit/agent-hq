@@ -76,16 +76,6 @@ async function resetDb(): Promise<void> {
            CASE WHEN name = 'todo' THEN 1 ELSE 0 END, '{}'
     FROM task_statuses
   `);
-  await db.run(`
-    INSERT INTO workflow_task_statuses (
-      workflow_id, status_key, label, color, terminal, is_system,
-      allowed_transitions_json, stage_order, is_default_entry, metadata_json
-    )
-    SELECT 10, name, label, color, terminal, is_system,
-           '[]', ROW_NUMBER() OVER (ORDER BY name) - 1,
-           CASE WHEN name = 'todo' THEN 1 ELSE 0 END, '{}'
-    FROM task_statuses
-  `);
 
 }
 
@@ -1735,7 +1725,7 @@ describe('routing rules API', () => {
     }
   });
 
-  it('persists workflow-scoped status emoji updates and returns them in the API response', async () => {
+  it('refuses status edits on a single workflow and points to its workflow type', async () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const updateResponse = await fetch(`${baseUrl}/api/v1/routing/statuses/blocked`, {
@@ -1743,24 +1733,24 @@ describe('routing rules API', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ workflow_id: 10, emoji: '🟡' }),
       });
-
-      if (updateResponse.status !== 200) {
-        throw new Error(`Expected 200, received ${updateResponse.status}: ${JSON.stringify(await updateResponse.json())}`);
-      }
-      await expect(updateResponse.json()).resolves.toEqual(expect.objectContaining({
-        name: 'blocked',
-        emoji: '🟡',
-      }));
+      expect(updateResponse.status).toBe(409);
+      const body = await updateResponse.json() as { code: string; error: string; workflow_type: string };
+      expect(body).toEqual(expect.objectContaining({ code: 'statuses_defined_on_workflow_type', workflow_type: 'bugs' }));
+      expect(body.error).toContain('/api/v1/workflows/types/bugs/statuses');
 
       const db = getDb();
-      const row = await db.get(`
+      const typeRow = await db.get(`
         SELECT metadata_json
-        FROM workflow_task_statuses
-        WHERE workflow_id = ? AND status_key = ?
-      `, 10, 'blocked') as { metadata_json: string } | undefined;
-      expect(row).toBeDefined();
-      expect(JSON.parse(row?.metadata_json ?? '{}')).toEqual(expect.objectContaining({ emoji: '🟡' }));
+        FROM workflow_type_task_statuses
+        WHERE tenant_id = 1 AND workflow_type_key = 'bugs' AND status_key = 'blocked'
+      `) as { metadata_json: string } | undefined;
+      expect(JSON.parse(typeRow?.metadata_json ?? '{}')).not.toEqual(expect.objectContaining({ emoji: '🟡' }));
 
+      // A workflow's statuses are its type's: an emoji set on the type shows on the workflow.
+      await db.run(`
+        UPDATE workflow_type_task_statuses SET metadata_json = '{"emoji":"🟡"}'
+        WHERE tenant_id = 1 AND workflow_type_key = 'bugs' AND status_key = 'blocked'
+      `);
       const listResponse = await fetch(`${baseUrl}/api/v1/routing/statuses?workflow_id=10`);
       expect(listResponse.status).toBe(200);
       const listBody = await listResponse.json() as { statuses: Array<{ name: string; emoji: string | null }> };
@@ -1806,8 +1796,10 @@ describe('routing rules API', () => {
     }
   });
 
-  it('allows deleting seeded workflow-scoped statuses without recreating them on later reads', async () => {
-    await seedWorkflowTaskPolicy(getDb(), 10);
+  it('refuses deleting a status from a single workflow, and seeding writes no workflow statuses', async () => {
+    const db = getDb();
+    await seedWorkflowTaskPolicy(db, 10);
+    expect(await db.all(`SELECT id FROM workflow_task_statuses WHERE workflow_id = 10`)).toEqual([]);
     const { server, baseUrl } = await startTestServer();
     try {
       const initialListResponse = await fetch(`${baseUrl}/api/v1/routing/statuses?workflow_id=10`);
@@ -1818,21 +1810,13 @@ describe('routing rules API', () => {
       const deleteResponse = await fetch(`${baseUrl}/api/v1/routing/statuses/review?workflow_id=10`, {
         method: 'DELETE',
       });
-      expect(deleteResponse.status).toBe(200);
-      await expect(deleteResponse.json()).resolves.toEqual(expect.objectContaining({ ok: true, deleted: 'review', workflow_id: 10 }));
-
-      const db = getDb();
-      const deletedRow = await db.get(`
-        SELECT id
-        FROM workflow_task_statuses
-        WHERE workflow_id = ? AND status_key = ?
-      `, 10, 'review');
-      expect(deletedRow).toBeUndefined();
+      expect(deleteResponse.status).toBe(409);
+      await expect(deleteResponse.json()).resolves.toEqual(expect.objectContaining({ code: 'statuses_defined_on_workflow_type', workflow_id: 10 }));
 
       const listResponse = await fetch(`${baseUrl}/api/v1/routing/statuses?workflow_id=10`);
       expect(listResponse.status).toBe(200);
       const listBody = await listResponse.json() as { statuses: Array<{ name: string }> };
-      expect(listBody.statuses.find((status) => status.name === 'review')).toBeUndefined();
+      expect(listBody.statuses.find((status) => status.name === 'review')).toBeDefined();
     } finally {
       await stopTestServer(server);
     }
@@ -1912,7 +1896,7 @@ describe('routing rules API', () => {
     expect(rows.map((row) => row.status_key)).toEqual(['intake', 'done']);
   });
 
-  it('keeps an initialized workflow empty after deleting its last workflow-scoped status', async () => {
+  it('ignores leftover workflow-scoped status rows and lists the workflow type statuses', async () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const db = getDb();
@@ -1926,14 +1910,15 @@ describe('routing rules API', () => {
         ) VALUES (12, 'only_status', 'Only Status', 'amber', 0, 1, '[]', 0, 1, '{}')
       `);
 
-      const deleteResponse = await fetch(`${baseUrl}/api/v1/routing/statuses/only_status?workflow_id=12`, {
-        method: 'DELETE',
-      });
-      expect(deleteResponse.status).toBe(200);
-
+      // The generic type has no statuses in this fixture, so the workflow has none either.
       const listResponse = await fetch(`${baseUrl}/api/v1/routing/statuses?workflow_id=12`);
       expect(listResponse.status).toBe(200);
       await expect(listResponse.json()).resolves.toEqual({ statuses: [] });
+
+      const deleteResponse = await fetch(`${baseUrl}/api/v1/routing/statuses/only_status?workflow_id=12`, {
+        method: 'DELETE',
+      });
+      expect(deleteResponse.status).toBe(409);
     } finally {
       await stopTestServer(server);
     }

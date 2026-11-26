@@ -16,8 +16,7 @@ beforeEach(async()=>{
     INSERT INTO workflows(id,tenant_id,project_id,name,workflow_type) VALUES(102,1,101,'Editorial','delivery');
     INSERT INTO agents(id,tenant_id,project_id,name,session_key) VALUES(103,1,101,'Editor','project-source'),(203,2,202,'Private agent','project-private');
     INSERT INTO workflow_type_task_types(tenant_id,workflow_type_key,task_type) VALUES(1,'delivery','article'),(2,'delivery','private_task');
-    INSERT INTO workflow_type_task_statuses(tenant_id,workflow_type_key,status_key,label,terminal) VALUES(1,'delivery','approved_source','Approved source',1),(2,'delivery','private_status','Private status',1);
-    INSERT INTO workflow_task_statuses(workflow_id,status_key,label,terminal) VALUES(102,'submitted_instance','Submitted instance',1);
+    INSERT INTO workflow_type_task_statuses(tenant_id,workflow_type_key,status_key,label,terminal,stage_order) VALUES(1,'delivery','approved_source','Approved source',1,0),(1,'delivery','submitted_instance','Submitted instance',1,1),(2,'delivery','private_status','Private status',1,0);
     INSERT INTO workflow_type_outcomes(tenant_id,workflow_type_key,task_type,outcome_key,label) VALUES(1,'delivery','article','handoff_source','Source handoff');
     INSERT INTO task_field_schemas(id,tenant_id,workflow_type_key,task_type,schema_json) VALUES
       (104,1,'delivery',NULL,'{"fields":[{"key":"amount","type":"number","label":"Amount"}]}'),
@@ -37,9 +36,10 @@ it('exports deterministic scoped telemetry and canonical workflow metadata witho
   const first=await exportProjectManifest(db,101,false),second=await exportProjectManifest(db,101,false);
   expect(manifestJson(first.manifest)).toBe(manifestJson(second.manifest));
   expect(first.manifest.telemetry?.resources).toHaveLength(3);expect(first.manifest.telemetry).not.toHaveProperty('exported_at');
-  expect(first.manifest.workflow_types?.[0]).toMatchObject({key:'delivery',configuration:{description:'Source semantics',repo_required:1},task_types:[{task_type:'article'}],statuses:[{status_key:'approved_source',terminal:1}],outcomes:[{outcome_key:'handoff_source',task_type:'article'}]});
+  expect(first.manifest.workflow_types?.[0]).toMatchObject({key:'delivery',configuration:{description:'Source semantics',repo_required:1},task_types:[{task_type:'article'}],statuses:[{status_key:'approved_source',terminal:1},{status_key:'submitted_instance',terminal:1}],outcomes:[{outcome_key:'handoff_source',task_type:'article'}]});
   expect(first.manifest.workflows[0].field_schemas.map(schema=>schema.source_schema_id).sort()).toEqual([104,105]);
-  expect(first.manifest.workflows[0].statuses?.[0]).toMatchObject({status_key:'submitted_instance',terminal:1});
+  // Statuses travel with the workflow type only; a workflow exports none of its own.
+  expect(first.manifest.workflows[0].statuses).toBeUndefined();
   expect(manifestJson(first.manifest)).not.toContain('private_amount');expect(manifestJson(first.manifest)).not.toContain('private_status');
   expect((await validateProjectManifest(db,first.manifest)).counts).toMatchObject({telemetry_definitions:3,telemetry_bindings:1});
 });
@@ -95,8 +95,8 @@ it.each([false,true])('maps a selected external event mapping to its cloned iden
 });
 
 it('does not activate a retired historical signal against a recreated same-key status during project copy',async()=>{
-  await db.run("DELETE FROM workflow_task_statuses WHERE workflow_id=102 AND status_key='submitted_instance'");
-  await db.run("INSERT INTO workflow_task_statuses(workflow_id,status_key,label,terminal) VALUES(102,'submitted_instance','New meaning',1)");
+  await db.run("DELETE FROM workflow_type_task_statuses WHERE tenant_id=1 AND workflow_type_key='delivery' AND status_key='submitted_instance'");
+  await db.run("INSERT INTO workflow_type_task_statuses(tenant_id,workflow_type_key,status_key,label,terminal,stage_order) VALUES(1,'delivery','submitted_instance','New meaning',1,1)");
   const manifest=(await exportProjectManifest(db,101,false)).manifest;
   expect(manifest.telemetry!.signals).toEqual(expect.arrayContaining([expect.objectContaining({key:'submitted_instance',retired:true})]));
   const result=await importProjectManifest(db,manifest,{tenantId:2,actor:'test'});

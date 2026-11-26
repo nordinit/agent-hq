@@ -43,10 +43,6 @@ async function resetDb(): Promise<void> {
   `);
 
   await db.run(`
-    INSERT INTO workflow_task_statuses (workflow_id, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json)
-    VALUES (10, 'review_ready', 'Review Ready', 'cyan', 0, 0, '["review"]', 0, 1, '{"source":true}')
-  `);
-  await db.run(`
     INSERT INTO workflow_type_task_statuses (tenant_id, workflow_type_key, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json)
     VALUES (2, 'enhancements', 'review_ready', 'Review Ready', 'cyan', 0, 0, '["review"]', 0, 1, '{"emoji":"🧪"}')
   `);
@@ -128,9 +124,11 @@ describe('workflows API create clone support', () => {
       const createdWorkflow = await db.get(`SELECT * FROM workflows WHERE id = ?`, body.id) as { tenant_id: number; project_id: number; workflow_type: string; name: string };
       expect(createdWorkflow).toEqual(expect.objectContaining({ tenant_id: 2, project_id: 1, workflow_type: 'enhancements', name: 'Enhancements Clone' }));
 
-      const clonedStatus = await db.get(`SELECT status_key, label, metadata_json FROM workflow_task_statuses WHERE workflow_id = ?`, body.id) as { status_key: string; label: string; metadata_json: string };
-      expect(clonedStatus).toEqual(expect.objectContaining({ status_key: 'review_ready', label: 'Review Ready', metadata_json: '{"source":true}' }));
-      expect((await db.get(`SELECT COUNT(*) AS n FROM workflow_task_statuses WHERE workflow_id = ?`, body.id) as { n: number }).n).toBe(1);
+      // Statuses live on the workflow type, so a clone copies none: it has its type's statuses.
+      expect(Number((await db.get(`SELECT COUNT(*) AS n FROM workflow_task_statuses WHERE workflow_id = ?`, body.id) as { n: number }).n)).toBe(0);
+      const cloneStatuses = await fetch(`${baseUrl}/api/v1/workflows/workflow-metadata?workflow_id=${body.id}`);
+      const cloneStatusBody = await cloneStatuses.json() as { statuses: Array<{ name: string; label: string }> };
+      expect(cloneStatusBody.statuses.map((status) => status.name)).toEqual(['review_ready']);
 
       const clonedTransition = await db.get(`SELECT tenant_id, project_id, task_type, from_status, outcome, to_status, priority FROM workflow_task_transitions WHERE workflow_id = ?`, body.id) as { tenant_id: number; project_id: number; task_type: string; from_status: string; outcome: string; to_status: string; priority: number };
       expect(clonedTransition).toEqual(expect.objectContaining({ tenant_id: 2, project_id: 1, task_type: 'backend', from_status: 'in_progress', outcome: 'completed_for_review', to_status: 'review', priority: 9 }));
@@ -313,6 +311,30 @@ describe('workflows API create clone support', () => {
         workflow_type: 'enhancements',
       }));
 
+      // The cloned routing uses statuses and a task type the generic type lacks, so the change
+      // is refused and nothing moves.
+      const refusedResponse = await fetch(`${baseUrl}/api/v1/workflows/${created.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workflow_type: 'generic', goal: 'Updated workflow' }),
+      });
+      expect(refusedResponse.status).toBe(409);
+      await expect(refusedResponse.json()).resolves.toEqual(expect.objectContaining({
+        code: 'workflow_type_change_unsafe',
+        missing_statuses: ['in_progress', 'ready', 'review'],
+        missing_task_types: ['backend'],
+      }));
+      const db = getDb();
+      expect(await db.get(`SELECT workflow_type FROM workflows WHERE id = ?`, created.id)).toEqual({ workflow_type: 'enhancements' });
+
+      for (const [order, status] of ['ready', 'in_progress', 'review'].entries()) {
+        await db.run(`
+          INSERT INTO workflow_type_task_statuses (tenant_id, workflow_type_key, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json)
+          VALUES (2, 'generic', ?, ?, 'slate', 0, 0, '[]', ?, 0, '{}')
+        `, status, status, order);
+      }
+      await db.run(`INSERT INTO workflow_type_task_types (tenant_id, workflow_type_key, task_type, is_system) VALUES (2, 'generic', 'backend', 0)`);
+
       const updateResponse = await fetch(`${baseUrl}/api/v1/workflows/${created.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -326,6 +348,9 @@ describe('workflows API create clone support', () => {
 
         goal: 'Updated workflow',
       }));
+      // The workflow's own routing moved onto the new type with it.
+      expect(await db.all(`SELECT DISTINCT workflow_type FROM workflow_task_transitions WHERE workflow_id = ?`, created.id)).toEqual([{ workflow_type: 'generic' }]);
+      expect(await db.all(`SELECT DISTINCT workflow_type FROM workflow_task_routing_rules WHERE workflow_id = ?`, created.id)).toEqual([{ workflow_type: 'generic' }]);
 
       const deleteResponse = await fetch(`${baseUrl}/api/v1/workflows/${created.id}`, { method: 'DELETE' });
       expect(deleteResponse.status).toBe(200);
@@ -679,13 +704,22 @@ describe('workflows API create clone support', () => {
       expect(typeRow).toBeDefined();
       expect(JSON.parse(typeRow?.metadata_json ?? '{}')).toEqual({});
 
+      // Type edits are not copied into workflow rows: the workflow reads its type's statuses.
       const workflowRow = await db.get(`
         SELECT metadata_json
         FROM workflow_task_statuses
         WHERE workflow_id = ? AND status_key = ?
       `, 10, 'handoff') as { metadata_json: string } | undefined;
-      expect(workflowRow).toBeDefined();
-      expect(JSON.parse(workflowRow?.metadata_json ?? '{}')).toEqual(expect.objectContaining({ source: true }));
+      expect(workflowRow).toBeUndefined();
+      const workflowStatusesResponse = await fetch(`${baseUrl}/api/v1/workflows/workflow-metadata?workflow_id=10`);
+      const workflowStatusesBody = await workflowStatusesResponse.json() as {
+        statuses: Array<{ name: string; emoji?: string | null; metadata?: Record<string, unknown> }>;
+      };
+      expect(workflowStatusesBody.statuses.find((status) => status.name === 'handoff')).toEqual(expect.objectContaining({
+        name: 'handoff',
+        emoji: null,
+        metadata: expect.objectContaining({ source: true }),
+      }));
 
       const typeCreatedRow = await db.get(`
         SELECT metadata_json

@@ -63,9 +63,9 @@ function normalizeStatus(value: unknown): string | null {
 }
 
 /**
- * The statuses a task may hold, read only from configuration: the workflow's own statuses, or its
- * workflow type's when the workflow has none. There is no global fallback list; an unconfigured
- * workflow allows no status.
+ * The statuses a task may hold, read only from configuration: its workflow type's statuses (a
+ * workflow has none of its own). There is no global fallback list; a workflow whose type has no
+ * statuses allows none.
  */
 export async function listAllowedTaskStatusesForWorkflow(
   db: Db,

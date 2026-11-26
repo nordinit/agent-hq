@@ -28,7 +28,6 @@ async function resetDb(): Promise<void> {
   await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name, workflow_type, status) VALUES (10, 1, 1, 'Enhancements', 'enhancements', 'active')`);
   await db.run(`INSERT INTO task_statuses (name, label, color, terminal, is_system, allowed_transitions) VALUES ('review', 'Review', 'purple', 0, 1, '[]')`);
   await db.run(`INSERT INTO workflow_type_task_statuses (tenant_id, workflow_type_key, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json) VALUES (1, 'enhancements', 'review', 'Review', 'purple', 0, 1, '[]', 0, 1, '{}')`);
-  await db.run(`INSERT INTO workflow_task_statuses (workflow_id, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json) VALUES (10, 'review', 'Review', 'purple', 0, 1, '[]', 0, 1, '{}')`);
 }
 
 beforeEach(async () => {
@@ -90,9 +89,12 @@ test('workflow type status emoji persists and round-trips on repeated reload fet
 
     const db = getDb();
     const workflowTypeRow = await db.get(`SELECT metadata_json FROM workflow_type_task_statuses WHERE workflow_type_key = ? AND status_key = ?`, 'enhancements', 'review') as { metadata_json: string } | undefined;
-    const workflowRow = await db.get(`SELECT metadata_json FROM workflow_task_statuses WHERE workflow_id = ? AND status_key = ?`, 10, 'review') as { metadata_json: string } | undefined;
     expect(JSON.parse(workflowTypeRow?.metadata_json ?? '{}')).toEqual(expect.objectContaining({ emoji: '🚦' }));
-    expect(JSON.parse(workflowRow?.metadata_json ?? '{}')).toEqual(expect.objectContaining({ emoji: '🚦' }));
+    // The edit is not copied into workflow rows; the workflow reads its type's statuses.
+    expect(await db.all(`SELECT id FROM workflow_task_statuses WHERE workflow_id = ?`, 10)).toEqual([]);
+    const byWorkflow = await fetch(`${baseUrl}/api/v1/workflows/workflow-metadata?workflow_id=10`);
+    const byWorkflowBody = await byWorkflow.json() as { statuses: Array<{ name: string; emoji?: string | null }> };
+    expect(byWorkflowBody.statuses.find((status) => status.name === 'review')).toEqual(expect.objectContaining({ name: 'review', emoji: '🚦' }));
 
     const workflowResponse = await fetch(`${baseUrl}/api/v1/workflows/workflow-metadata?workflow_type=enhancements`);
     expect(workflowResponse.status).toBe(200);
@@ -107,14 +109,16 @@ test('workflow type status emoji persists and round-trips on repeated reload fet
   }
 });
 
-test('seedWorkflowTaskPolicy preserves workflow-type metadata when cloning statuses into a workflow', async () => {
+test('seedWorkflowTaskPolicy leaves the workflow type statuses and their metadata as they are', async () => {
   const db = getDb();
   await db.run(`UPDATE workflow_type_task_statuses SET metadata_json = ? WHERE workflow_type_key = ? AND status_key = ?`, '{"source":"legacy-seed"}', 'enhancements', 'review');
-  await db.run(`DELETE FROM workflow_task_statuses WHERE workflow_id = ? AND status_key = ?`, 10, 'review');
 
-  const { seedWorkflowTaskPolicy } = require('../domains/routing/policy') as typeof import('../domains/routing/policy');
+  const { seedWorkflowTaskPolicy, listWorkflowTaskStatuses } = require('../domains/routing/policy') as typeof import('../domains/routing/policy');
   await seedWorkflowTaskPolicy(db, 10, { force: true });
 
-  const workflowSeedRow = await db.get(`SELECT metadata_json FROM workflow_task_statuses WHERE workflow_id = ? AND status_key = ?`, 10, 'review') as { metadata_json: string } | undefined;
-  expect(JSON.parse(workflowSeedRow?.metadata_json ?? '{}')).toEqual(expect.objectContaining({ source: 'legacy-seed' }));
+  expect(await db.all(`SELECT id FROM workflow_task_statuses WHERE workflow_id = ?`, 10)).toEqual([]);
+  const typeRow = await db.get(`SELECT metadata_json FROM workflow_type_task_statuses WHERE workflow_type_key = ? AND status_key = ?`, 'enhancements', 'review') as { metadata_json: string } | undefined;
+  expect(JSON.parse(typeRow?.metadata_json ?? '{}')).toEqual(expect.objectContaining({ source: 'legacy-seed' }));
+  const statuses = await listWorkflowTaskStatuses(db, 10);
+  expect(statuses.find((status) => status.name === 'review')?.metadata).toEqual(expect.objectContaining({ source: 'legacy-seed' }));
 });

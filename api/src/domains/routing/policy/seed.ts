@@ -109,7 +109,7 @@ export async function seedWorkflowTaskPolicy(
   options?: { force?: boolean },
 ): Promise<void> {
   if (!Number.isFinite(workflowId)) return;
-  if (!await tableExists(db, 'workflow_task_statuses')) return;
+  if (!await tableExists(db, 'workflow_type_task_statuses')) return;
   if (!await tableExists(db, 'workflow_task_transitions')) return;
 
   const workflow = await getWorkflowSeedRow(db, workflowId);
@@ -124,10 +124,11 @@ export async function seedWorkflowTaskPolicy(
   // forced install/migration is allowed to replace the policy after this marker is set.
   if (policySeeded && !force) return;
 
-  const statusCount = (await db.get(`SELECT COUNT(*) AS n FROM workflow_task_statuses WHERE workflow_id = ?`, workflowId) as { n: number }).n;
+  // Statuses live on the workflow type. A workflow only needs its type to have some.
+  const statusCount = (await listWorkflowTypeTaskStatuses(db, workflow.workflow_type, { tenantId: workflow.tenant_id })).length;
   const transitionCount = (await db.get(`SELECT COUNT(*) AS n FROM workflow_task_transitions WHERE workflow_id = ?`, workflowId) as { n: number }).n;
   const requirementCount = (await db.get(`SELECT COUNT(*) AS n FROM workflow_task_transition_requirements WHERE workflow_id = ?`, workflowId) as { n: number }).n;
-  const shouldSeedStatuses = force || (!policySeeded && statusCount === 0);
+  const shouldSeedStatuses = statusCount === 0 && (force || !policySeeded);
   const shouldSeedTransitions = force || (!policySeeded && transitionCount === 0);
   const shouldSeedRequirements = force || (!policySeeded && requirementCount === 0);
 
@@ -194,17 +195,25 @@ export async function seedWorkflowTaskPolicy(
     }
 
     if (shouldSeedStatuses) {
-      await db.run(`DELETE FROM workflow_task_statuses WHERE workflow_id = ?`, workflowId);
-      const insertSql = `
-        INSERT INTO workflow_task_statuses (
-          workflow_id, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
-      `;
-      const policyStatuses = await loadPolicyStatuses(db);
+      // The type has no statuses yet: give it the starter set, so this workflow (and every
+      // other workflow of the type) has statuses to use.
+      const workflowType = normalizeWorkflowType(workflow.workflow_type);
+      const hasStatusTenantId = await tableHasColumn(db, 'workflow_type_task_statuses', 'tenant_id');
+      const insertSql = hasStatusTenantId
+        ? `
+          INSERT INTO workflow_type_task_statuses (
+            tenant_id, workflow_type_key, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')) ON CONFLICT DO NOTHING`
+        : `
+          INSERT INTO workflow_type_task_statuses (
+            workflow_type_key, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')) ON CONFLICT DO NOTHING`;
+      const policyStatuses = workflowType ? await loadPolicyStatuses(db) : [];
       for (const [index, row] of policyStatuses.entries()) {
         await db.run(
           insertSql,
-          workflowId,
+          ...(hasStatusTenantId ? [workflow.tenant_id ?? null] : []),
+          workflowType,
           row.name,
           row.label,
           row.color,

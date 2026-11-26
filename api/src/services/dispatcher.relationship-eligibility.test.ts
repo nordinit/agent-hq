@@ -149,8 +149,8 @@ describe('dispatcher relationship-driven eligibility', () => {
     const db = await setupDb();
     const { runDispatcher } = await import('./dispatcher');
     await db.run(`
-      INSERT INTO workflow_task_statuses (workflow_id, status_key, label, terminal, stage_order)
-      VALUES (10, 'archived', 'Archived', 1, 99)
+      INSERT INTO workflow_type_task_statuses (tenant_id, workflow_type_key, status_key, label, terminal, stage_order)
+      VALUES (1, 'dev', 'archived', 'Archived', 1, 99)
     `);
     await db.run(`
       INSERT INTO workflow_task_routing_rules (tenant_id, workflow_id, project_id, workflow_type, task_type, status, agent_id, priority)
@@ -170,8 +170,8 @@ describe('dispatcher relationship-driven eligibility', () => {
     const db = await setupDb();
     const { runDispatcher } = await import('./dispatcher');
     await db.run(`
-      INSERT INTO workflow_task_statuses (workflow_id, status_key, label, terminal, stage_order)
-      VALUES (10, 'failed', 'Failed', 0, 80)
+      INSERT INTO workflow_type_task_statuses (tenant_id, workflow_type_key, status_key, label, terminal, stage_order)
+      VALUES (1, 'dev', 'failed', 'Failed', 0, 80)
     `);
     await db.run(`
       INSERT INTO workflow_task_routing_rules (tenant_id, workflow_id, project_id, workflow_type, task_type, status, agent_id, priority)
@@ -188,14 +188,15 @@ describe('dispatcher relationship-driven eligibility', () => {
     await teardownTestDb();
   });
 
-  it('uses workflow-specific terminality before workflow-type and global fallbacks', async () => {
+  it('uses workflow-type terminality before the global fallback and ignores leftover workflow rows', async () => {
     const db = await setupDb();
     const { runDispatcher } = await import('./dispatcher');
     await db.run(`INSERT INTO task_statuses (name, label, terminal) VALUES ('failed', 'Failed', 1)`);
-    await db.run(`INSERT INTO workflow_type_task_statuses (tenant_id, workflow_type_key, status_key, label, terminal) VALUES (1, 'dev', 'failed', 'Failed', 1)`);
+    await db.run(`INSERT INTO workflow_type_task_statuses (tenant_id, workflow_type_key, status_key, label, terminal) VALUES (1, 'dev', 'failed', 'Failed', 0)`);
+    // A workflow has no statuses of its own: a leftover per-workflow row has no effect.
     await db.run(`
       INSERT INTO workflow_task_statuses (workflow_id, status_key, label, terminal, stage_order)
-      VALUES (10, 'failed', 'Failed', 0, 80)
+      VALUES (10, 'failed', 'Failed', 1, 80)
     `);
     await db.run(`
       INSERT INTO workflow_task_routing_rules (tenant_id, workflow_id, project_id, workflow_type, task_type, status, agent_id, priority)
@@ -212,14 +213,15 @@ describe('dispatcher relationship-driven eligibility', () => {
     await teardownTestDb();
   });
 
-  it('keeps workflow-specific terminal statuses non-dispatchable before non-terminal fallbacks', async () => {
+  it('keeps workflow-type terminal statuses non-dispatchable over a non-terminal global fallback and leftover workflow rows', async () => {
     const db = await setupDb();
     const { runDispatcher } = await import('./dispatcher');
     await db.run(`INSERT INTO task_statuses (name, label, terminal) VALUES ('failed', 'Failed', 0)`);
-    await db.run(`INSERT INTO workflow_type_task_statuses (tenant_id, workflow_type_key, status_key, label, terminal) VALUES (1, 'dev', 'failed', 'Failed', 0)`);
+    await db.run(`INSERT INTO workflow_type_task_statuses (tenant_id, workflow_type_key, status_key, label, terminal) VALUES (1, 'dev', 'failed', 'Failed', 1)`);
+    // A workflow has no statuses of its own: a leftover per-workflow row has no effect.
     await db.run(`
       INSERT INTO workflow_task_statuses (workflow_id, status_key, label, terminal, stage_order)
-      VALUES (10, 'failed', 'Failed', 1, 80)
+      VALUES (10, 'failed', 'Failed', 0, 80)
     `);
     await db.run(`
       INSERT INTO workflow_task_routing_rules (tenant_id, workflow_id, project_id, workflow_type, task_type, status, agent_id, priority)
@@ -239,11 +241,7 @@ describe('dispatcher relationship-driven eligibility', () => {
     const db = await setupDb({ includeTaskDispatchMetadataColumns: false });
     const { runDispatcher } = await import('./dispatcher');
     await db.run(`INSERT INTO task_statuses (name, label, terminal) VALUES ('failed', 'Failed', 1)`);
-    await db.run(`INSERT INTO workflow_type_task_statuses (tenant_id, workflow_type_key, status_key, label, terminal) VALUES (1, 'dev', 'failed', 'Failed', 1)`);
-    await db.run(`
-      INSERT INTO workflow_task_statuses (workflow_id, status_key, label, terminal, stage_order)
-      VALUES (10, 'failed', 'Failed', 0, 80)
-    `);
+    await db.run(`INSERT INTO workflow_type_task_statuses (tenant_id, workflow_type_key, status_key, label, terminal) VALUES (1, 'dev', 'failed', 'Failed', 0)`);
     await db.run(`
       INSERT INTO workflow_task_routing_rules (tenant_id, workflow_id, project_id, workflow_type, task_type, status, agent_id, priority)
       VALUES (1, 10, 86, 'dev', 'backend', 'failed', 1, 10)
@@ -423,13 +421,13 @@ describe('dispatcher relationship-driven eligibility', () => {
     await teardownTestDb();
   });
 
-  it('keeps blocking when the workflow marks the blocker status non-terminal', async () => {
+  it('keeps blocking when the workflow type marks the blocker status non-terminal', async () => {
     const db = await setupDb();
     const { runDispatcher } = await import('./dispatcher');
     await insertNarrowBlockerType(db);
-    // This workflow treats `failed` as retryable, so the blocker can still
-    // progress and must keep blocking.
-    await db.run(`INSERT INTO workflow_task_statuses (workflow_id, status_key, label, terminal) VALUES (10, 'failed', 'Failed', 0)`);
+    // This workflow's type treats `failed` as retryable, so the blocker can
+    // still progress and must keep blocking.
+    await db.run(`INSERT INTO workflow_type_task_statuses (tenant_id, workflow_type_key, status_key, label, terminal) VALUES (1, 'dev', 'failed', 'Failed', 0)`);
     await insertTask(db, 530, 'ready');
     await insertTask(db, 567, 'failed', 'frontend');
     await db.run(`INSERT INTO task_relationships (source_task_id, target_task_id, relationship_type_key) VALUES (530, 567, 'narrow_blocked_by')`);

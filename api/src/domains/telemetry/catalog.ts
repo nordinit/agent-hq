@@ -112,6 +112,9 @@ async function buildTelemetryCatalog(db: Db, access: TelemetryAccess, scope: Tel
   const taskTypes = await db.all<any>('SELECT task_type AS key, task_type AS label,workflow_type_key AS workflow_type FROM workflow_type_task_types WHERE tenant_id = ? ORDER BY task_type',access.tenantId);
   const typeStatuses = await db.all<any>('SELECT id,status_key AS key,label,workflow_type_key AS workflow_type,terminal FROM workflow_type_task_statuses WHERE tenant_id = ? ORDER BY stage_order,id',access.tenantId);
   const statusSources = typeStatuses.filter(row=>allowedTypeKeys.has(row.workflow_type)).map(row=>({kind:'status' as const,key:row.key,label:row.label,terminal:Number(row.terminal),source:{table:'workflow_type_task_statuses',id:String(row.id)},scope:{workflow_type:row.workflow_type,...(typeMap.get(row.workflow_type)?.project_id?{project_id:Number(typeMap.get(row.workflow_type).project_id)}:{})}} as any));
+  // Historical only: statuses now live only on the workflow type, but tasks observed before that
+  // carry identities of their workflow's old per-workflow rows. Listing those rows keeps status
+  // selectors (matched by key) covering that history; new observations use the type's identity.
   if(workflows.length){
     const instanceStatuses=await db.all<any>('SELECT id,workflow_id,status_key AS key,label,terminal FROM workflow_task_statuses WHERE workflow_id=ANY(?::bigint[])',workflows.map(row=>row.id));
     const byId=new Map(workflows.map(row=>[Number(row.id),row]));

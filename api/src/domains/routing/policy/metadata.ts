@@ -334,29 +334,6 @@ async function removeQaPassFromDevelopmentStatusMetadata(db: Db): Promise<void> 
       }
     }
 
-    if (await tableExists(db, 'workflow_task_statuses') && await tableExists(db, 'workflows')) {
-      await db.run(`
-        DELETE FROM workflow_task_statuses
-        WHERE status_key = 'qa_pass'
-          AND workflow_id IN (SELECT id FROM workflows WHERE workflow_type = 'dev')
-      `);
-      const rows = await db.all(`
-        SELECT sts.id, sts.allowed_transitions_json
-        FROM workflow_task_statuses sts
-        JOIN workflows s ON s.id = sts.workflow_id
-        WHERE s.workflow_type = 'dev'
-      `) as Array<{ id: number; allowed_transitions_json: string | null }>;
-      for (const row of rows) {
-        const next = parseJsonArray(row.allowed_transitions_json)
-          .map(status => status === 'qa_pass' ? 'ready_to_merge' : status)
-          .filter(status => status !== 'qa_pass');
-        await db.run(`
-          UPDATE workflow_task_statuses
-          SET allowed_transitions_json = ?, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
-          WHERE id = ?
-        `, JSON.stringify([...new Set(next)]), row.id);
-      }
-    }
   } catch {
     // Metadata cleanup is best-effort during startup across historical schemas.
   }

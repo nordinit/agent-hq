@@ -127,18 +127,20 @@ describe('workflow field schema seeding', () => {
       INSERT INTO workflows (id, tenant_id, project_id, name, goal, workflow_type, status, task_policy_seeded_at, length_kind, length_value, created_at)
       VALUES (9901, ?, 990, 'Lead Generation', '', 'lead_generation', 'active', CURRENT_TIMESTAMP, 'time', 'ongoing', CURRENT_TIMESTAMP)
     `, tenantId);
+    // Statuses live on the workflow type: this tenant's lead_generation type uses a custom set.
+    await db.run(`DELETE FROM workflow_type_task_statuses WHERE tenant_id = ? AND workflow_type_key = 'lead_generation'`, tenantId);
     await db.run(`
-      INSERT INTO workflow_task_statuses (
-        workflow_id, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json
+      INSERT INTO workflow_type_task_statuses (
+        tenant_id, workflow_type_key, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json
       ) VALUES
-        (9901, 'todo', 'To Do', 'slate', 0, 0, '["ready"]', 0, 1, '{}'),
-        (9901, 'ready', 'Ready', 'blue', 0, 0, '["in_progress"]', 1, 0, '{}'),
-        (9901, 'in_progress', 'In Progress', 'yellow', 0, 0, '["review"]', 2, 0, '{}'),
-        (9901, 'review', 'Review', 'purple', 0, 0, '["approved"]', 3, 0, '{}'),
-        (9901, 'approved', 'Approved', 'emerald', 0, 0, '["submitted"]', 4, 0, '{}'),
-        (9901, 'submitted', 'Submitted', 'cyan', 0, 0, '["closed"]', 5, 0, '{}'),
-        (9901, 'closed', 'Closed', 'green', 1, 0, '[]', 6, 0, '{}')
-    `);
+        (?, 'lead_generation', 'todo', 'To Do', 'slate', 0, 0, '["ready"]', 0, 1, '{}'),
+        (?, 'lead_generation', 'ready', 'Ready', 'blue', 0, 0, '["in_progress"]', 1, 0, '{}'),
+        (?, 'lead_generation', 'in_progress', 'In Progress', 'yellow', 0, 0, '["review"]', 2, 0, '{}'),
+        (?, 'lead_generation', 'review', 'Review', 'purple', 0, 0, '["approved"]', 3, 0, '{}'),
+        (?, 'lead_generation', 'approved', 'Approved', 'emerald', 0, 0, '["submitted"]', 4, 0, '{}'),
+        (?, 'lead_generation', 'submitted', 'Submitted', 'cyan', 0, 0, '["closed"]', 5, 0, '{}'),
+        (?, 'lead_generation', 'closed', 'Closed', 'green', 1, 0, '[]', 6, 0, '{}')
+    `, tenantId, tenantId, tenantId, tenantId, tenantId, tenantId, tenantId);
     await db.run(`
       INSERT INTO workflow_task_transitions (
         tenant_id, workflow_id, project_id, workflow_type, task_type, from_status, outcome, to_status, enabled, priority, is_protected, created_at, updated_at

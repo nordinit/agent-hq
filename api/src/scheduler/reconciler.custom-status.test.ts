@@ -69,7 +69,7 @@ describe('reconciler workflow-defined status routing', () => {
 
   it('does not reconcile ownership for workflow terminal custom statuses', async () => {
     const db = await setupDb();
-    await db.run(`INSERT INTO workflow_task_statuses (workflow_id, status_key, label, terminal) VALUES (10, 'archived', 'Archived', 1)`);
+    await db.run(`INSERT INTO workflow_type_task_statuses (tenant_id, workflow_type_key, status_key, label, terminal) VALUES (1, 'dev', 'archived', 'Archived', 1)`);
     await db.run(`
       INSERT INTO workflow_task_routing_rules (workflow_id, project_id, workflow_type, task_type, status, agent_id, priority)
       VALUES (10, 86, 'dev', 'backend', 'archived', 2, 10)
@@ -84,7 +84,7 @@ describe('reconciler workflow-defined status routing', () => {
 
   it('reconciles ownership for legacy failed when workflow configuration marks it non-terminal', async () => {
     const db = await setupDb();
-    await db.run(`INSERT INTO workflow_task_statuses (workflow_id, status_key, label, terminal) VALUES (10, 'failed', 'Failed', 0)`);
+    await db.run(`INSERT INTO workflow_type_task_statuses (tenant_id, workflow_type_key, status_key, label, terminal) VALUES (1, 'dev', 'failed', 'Failed', 0)`);
     await db.run(`
       INSERT INTO workflow_task_routing_rules (workflow_id, project_id, workflow_type, task_type, status, agent_id, priority)
       VALUES (10, 86, 'dev', 'backend', 'failed', 2, 10)
@@ -97,11 +97,12 @@ describe('reconciler workflow-defined status routing', () => {
     expect(task.assigned_agent_id).toBe(2);
   });
 
-  it('uses workflow-specific terminality before workflow-type and global fallbacks', async () => {
+  it('uses workflow-type terminality before the global fallback and ignores leftover workflow rows', async () => {
     const db = await setupDb();
     await db.run(`INSERT INTO task_statuses (name, label, terminal) VALUES ('failed', 'Failed', 1)`);
-    await db.run(`INSERT INTO workflow_type_task_statuses (tenant_id, workflow_type_key, status_key, label, terminal) VALUES (1, 'dev', 'failed', 'Failed', 1)`);
-    await db.run(`INSERT INTO workflow_task_statuses (workflow_id, status_key, label, terminal) VALUES (10, 'failed', 'Failed', 0)`);
+    await db.run(`INSERT INTO workflow_type_task_statuses (tenant_id, workflow_type_key, status_key, label, terminal) VALUES (1, 'dev', 'failed', 'Failed', 0)`);
+    // A workflow has no statuses of its own: a leftover per-workflow row has no effect.
+    await db.run(`INSERT INTO workflow_task_statuses (workflow_id, status_key, label, terminal) VALUES (10, 'failed', 'Failed', 1)`);
     await db.run(`
       INSERT INTO workflow_task_routing_rules (workflow_id, project_id, workflow_type, task_type, status, agent_id, priority)
       VALUES (10, 86, 'dev', 'backend', 'failed', 2, 10)
@@ -114,11 +115,12 @@ describe('reconciler workflow-defined status routing', () => {
     expect(task.assigned_agent_id).toBe(2);
   });
 
-  it('keeps workflow-specific terminal failed from reconciling before non-terminal fallbacks', async () => {
+  it('keeps workflow-type terminal failed from reconciling over a non-terminal global fallback and leftover workflow rows', async () => {
     const db = await setupDb();
     await db.run(`INSERT INTO task_statuses (name, label, terminal) VALUES ('failed', 'Failed', 0)`);
-    await db.run(`INSERT INTO workflow_type_task_statuses (tenant_id, workflow_type_key, status_key, label, terminal) VALUES (1, 'dev', 'failed', 'Failed', 0)`);
-    await db.run(`INSERT INTO workflow_task_statuses (workflow_id, status_key, label, terminal) VALUES (10, 'failed', 'Failed', 1)`);
+    await db.run(`INSERT INTO workflow_type_task_statuses (tenant_id, workflow_type_key, status_key, label, terminal) VALUES (1, 'dev', 'failed', 'Failed', 1)`);
+    // A workflow has no statuses of its own: a leftover per-workflow row has no effect.
+    await db.run(`INSERT INTO workflow_task_statuses (workflow_id, status_key, label, terminal) VALUES (10, 'failed', 'Failed', 0)`);
     await db.run(`
       INSERT INTO workflow_task_routing_rules (workflow_id, project_id, workflow_type, task_type, status, agent_id, priority)
       VALUES (10, 86, 'dev', 'backend', 'failed', 2, 10)

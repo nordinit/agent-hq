@@ -307,6 +307,23 @@ Other workflow types define their own statuses. The starter Generic (Backlog) wo
 `todo`, `ready`, `in_progress`, `review`, and `done`; Operations and Lead Generation have their
 own status sets.
 
+Statuses are defined only on the workflow type (`workflow_type_task_statuses`, edited on the
+Workflow Definitions page or at `/api/v1/workflows/types/:key/statuses`). Every workflow of a type
+has exactly that type's statuses: the board, the routing checks and the agents all read the same
+list, and a status added to the type appears on every workflow of the type. A single workflow
+cannot have statuses of its own; `GET /api/v1/routing/statuses?workflow_id=` returns its type's
+list, and writes there answer 409 `statuses_defined_on_workflow_type`. A workflow that needs
+different statuses needs its own type: `POST /api/v1/workflows/types` with `copy_from` starts a
+type as a full copy of another (statuses, task types, outcomes, relationship types, task fields
+and type-wide routing). Moves and assignment rules can still be set per workflow.
+
+Changing a workflow's type (`PUT /api/v1/workflows/:id` with `workflow_type`) moves the
+workflow's own transitions, assignment rules, requirements, event mappings and model routing onto
+the new type in the same transaction. It is refused with 409 `workflow_type_change_unsafe`, and
+nothing changes, when the new type lacks a status or task type the workflow's tasks or routing
+use, when the workflow inherits type-wide routing the new type does not have, or when its
+assignment rules come from a team.
+
 ### Statuses, Outcomes, Workflow Phases
 Statuses are task board states. Outcomes are agent-reported transition requests such as `completed_for_review`, `qa_pass`, `qa_fail`, `deployed_live`, `live_verified`, `blocked`, or `failed`. `qa_pass` is a QA outcome, not a board status; the starter Development route moves `review + qa_pass` directly to `ready_to_merge`. Workflow phase is derived internally from status and outcome configuration for contract phrasing; it is not persisted on transition rows and does not control dispatch.
 

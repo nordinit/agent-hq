@@ -126,11 +126,14 @@ describe('starter template setup API', () => {
       expect(applied.agent_ids.pm).toBeGreaterThan(0);
 
       const db = getDb();
+      // A workflow's statuses are its type's; none are written per workflow.
+      expect(await db.all(`SELECT id FROM workflow_task_statuses WHERE workflow_id = ?`, applied.workflow_id)).toEqual([]);
       const workflowStatuses = await db.all(`
-        SELECT status_key
-        FROM workflow_task_statuses
-        WHERE workflow_id = ?
-        ORDER BY stage_order ASC
+        SELECT s.status_key
+        FROM workflow_type_task_statuses s
+        JOIN workflows w ON w.workflow_type = s.workflow_type_key AND w.tenant_id = s.tenant_id
+        WHERE w.id = ?
+        ORDER BY s.stage_order ASC
       `, applied.workflow_id) as Array<{ status_key: string }>;
       expect(workflowStatuses.map(row => row.status_key)).not.toContain('qa_pass');
       expect(workflowStatuses.map(row => row.status_key)).toEqual(expect.arrayContaining(['review', 'ready_to_merge']));

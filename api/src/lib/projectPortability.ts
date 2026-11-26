@@ -327,10 +327,7 @@ export async function exportProjectManifest(db: Db, projectId: number, includeFi
       definition[section]=(await selectRows(db,table,'WHERE tenant_id=? AND workflow_type_key=?',[tenantId,key])).map(portableConfiguration);
     workflowTypes.push(definition);
   }
-  for(const workflow of workflows){
-    const statuses=await selectRows(db,'workflow_task_statuses','WHERE workflow_id=?',[Number(workflow.ref.slice('workflow:'.length))]);
-    if(statuses.length)workflow.statuses=statuses.map(row=>{const portable=portableConfiguration(row);delete portable.workflow_id;return portable;});
-  }
+  // Statuses travel with their workflow type above; a workflow has none of its own.
 
   const files = (await selectRows(db, 'project_files', 'WHERE project_id = ?', [projectId], 'original_name ASC, id ASC')).map((file) => {
     const entry: ProjectManifest['files'][number] = {
@@ -521,7 +518,7 @@ export async function importProjectManifest(
   const manifest = input as ProjectManifest;
   const agentIdMap: Record<string, number> = {};
   const workflowIdMap: Record<string, number> = {};
-  const typeKeyMap:Record<string,string>={},schemaIdMap:Record<string,number>={};
+  const typeKeyMap:Record<string,string>={},schemaIdMap:Record<string,number>={},importedTypeKeys=new Set<string>();
   let telemetryResult:Awaited<ReturnType<typeof importTelemetry>>|undefined;
   const projectName = preview.proposed_project_name;
 
@@ -546,7 +543,7 @@ export async function importProjectManifest(
           const base=`${sourceKey.slice(0,96)}_import_${projectId}`;targetKey=base;let suffix=1;
           while(await db.get('SELECT id FROM workflow_types WHERE tenant_id=? AND key=?',options.tenantId,targetKey))targetKey=`${base}_${suffix++}`;
         }
-        if(!existing||targetKey!==sourceKey)await insertDynamic(db,'workflow_types',{...portableConfiguration(definition?.configuration??{}),tenant_id:options.tenantId,project_id:projectId,key:targetKey,name:definition?.configuration.name??sourceKey,is_system:0});
+        if(!existing||targetKey!==sourceKey){await insertDynamic(db,'workflow_types',{...portableConfiguration(definition?.configuration??{}),tenant_id:options.tenantId,project_id:projectId,key:targetKey,name:definition?.configuration.name??sourceKey,is_system:0});importedTypeKeys.add(targetKey);}
         typeKeyMap[sourceKey]=targetKey;
         if(definition)for(const [section,table] of [['task_types','workflow_type_task_types'],['statuses','workflow_type_task_statuses'],['outcomes','workflow_type_outcomes']] as const)
           for(const row of definition[section])await insertDynamic(db,table,{...portableConfiguration(row),tenant_id:options.tenantId,workflow_type_key:targetKey,is_system:0});
@@ -574,7 +571,14 @@ export async function importProjectManifest(
               environment_setup: JSON.stringify(normalizeEnvironmentSetup(workflow.environment_setup)),
             });
       workflowIdMap[workflow.ref] = workflowId;
-      for(const status of workflow.statuses??[])await insertDynamic(db,'workflow_task_statuses',{...portableConfiguration(status),workflow_id:workflowId,is_system:0});
+      // Older exports carried per-workflow statuses. Statuses now live only on the workflow type,
+      // so any the type lacks are added to it, but only to a type this import created: an existing
+      // type is shared with other workflows and is left unchanged.
+      const importedWorkflowType=typeKeyMap[workflow.workflow_type]??workflow.workflow_type??'generic';
+      if(importedTypeKeys.has(importedWorkflowType))for(const status of workflow.statuses??[]){
+        const present=await db.get('SELECT id FROM workflow_type_task_statuses WHERE tenant_id IS NOT DISTINCT FROM ? AND workflow_type_key=? AND status_key=?',options.tenantId??null,importedWorkflowType,status.status_key);
+        if(!present)await insertDynamic(db,'workflow_type_task_statuses',{...portableConfiguration(status),tenant_id:options.tenantId??null,workflow_type_key:importedWorkflowType,is_system:0});
+      }
       if (await tableExists(db, 'task_field_schemas')) {
         for (const schema of workflow.field_schemas ?? []) {
           const targetType=typeKeyMap[schema.workflow_type_key]??schema.workflow_type_key;

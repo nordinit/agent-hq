@@ -1,4 +1,5 @@
 import { Router, type Request, type Response } from 'express';
+import { copiedWorkflowTypeColumns, copyWorkflowTypeDefinition } from './copyType';
 import { getDb } from '../../db/client';
 import { listWorkflowTypeTaskStatuses } from '../routing/policy/statuses';
 import {
@@ -357,82 +358,6 @@ async function getWorkflowTypeStatusRow(db: ReturnType<typeof getDb>, workflowTy
   `, workflowTypeKey, statusKey, ...tenant.params) as WorkflowTypeStatusRow | undefined;
 }
 
-async function syncWorkflowTypeStatusToExistingWorkflows(
-  db: ReturnType<typeof getDb>,
-  workflowTypeKey: string,
-  tenantId: number | null | undefined,
-  row: {
-    status_key: string;
-    label: string;
-    color: string;
-    terminal: number;
-    is_system: number;
-    allowed_transitions_json: string;
-    stage_order: number;
-    is_default_entry: number;
-    metadata_json: string;
-  },
-): Promise<void> {
-  const tenant = await tableHasColumn(db, 'workflows', 'tenant_id') && tenantId != null
-    ? { sql: ' AND tenant_id = ?', params: [tenantId] }
-    : { sql: '', params: [] as unknown[] };
-  const workflows = await db.all(`
-    SELECT id
-    FROM workflows
-    WHERE workflow_type = ?
-      ${tenant.sql}
-  `, workflowTypeKey, ...tenant.params) as Array<{ id: number }>;
-  const existingSql = `SELECT id FROM workflow_task_statuses WHERE workflow_id = ? AND status_key = ? LIMIT 1`;
-  const updateSql = `
-    UPDATE workflow_task_statuses
-    SET label = ?,
-        color = ?,
-        terminal = ?,
-        is_system = ?,
-        allowed_transitions_json = ?,
-        stage_order = ?,
-        is_default_entry = ?,
-        metadata_json = ?,
-        updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
-    WHERE workflow_id = ? AND status_key = ?
-  `;
-  const insertSql = `
-    INSERT INTO workflow_task_statuses (
-      workflow_id, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
-  `;
-  for (const workflow of workflows) {
-    if (await db.get(existingSql, workflow.id, row.status_key)) {
-      await db.run(
-        updateSql,
-        row.label,
-        row.color,
-        row.terminal,
-        row.is_system,
-        row.allowed_transitions_json,
-        row.stage_order,
-        row.is_default_entry,
-        row.metadata_json,
-        workflow.id,
-        row.status_key,
-      );
-    } else {
-      await db.run(
-        insertSql,
-        workflow.id,
-        row.status_key,
-        row.label,
-        row.color,
-        row.terminal,
-        row.is_system,
-        row.allowed_transitions_json,
-        row.stage_order,
-        row.is_default_entry,
-        row.metadata_json,
-      );
-    }
-  }
-}
 
 async function getOutcomesForWorkflowType(db: ReturnType<typeof getDb>, workflowTypeKey: string, tenantId?: number | null) {
   const tenant = await outcomeListTenantPredicate(db, tenantId);
@@ -803,12 +728,33 @@ router.post('/types', async (req: Request, res: Response) => {
     if (existing) return res.status(409).json({ error: `Workflow type "${key}" already exists` });
     const tenant = await workflowTypeTenantInsertFragment(db, tenantId);
 
-    await db.run(`
-      INSERT INTO workflow_types (${tenant.columns}${project.columns}key, name, description, is_system, keep_same_agent, created_at, updated_at)
-      VALUES (${tenant.placeholders}${project.placeholders}?, ?, ?, 0, ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
-    `, ...tenant.params, ...project.params, key, name, description, keepSameAgent);
+    // copy_from: start the new type as a full copy of an existing one (statuses, task types,
+    // outcomes, relationship types, task fields and type-wide routing).
+    const copyFrom = req.body?.copy_from !== undefined && req.body?.copy_from !== null && req.body?.copy_from !== ''
+      ? normalizeConfigKey(req.body.copy_from, 'copy_from')
+      : null;
+    const source = copyFrom ? await getWorkflowTypeOr404(db, copyFrom, tenantId) : null;
+    if (copyFrom && !source) return res.status(404).json({ error: `Workflow type "${copyFrom}" to copy from was not found` });
+    if (copyFrom && tenantId == null) return res.status(400).json({ error: 'copy_from needs a tenant' });
 
-    return res.status(201).json(await getWorkflowTypeOr404(db, key, tenantId));
+    let copied: Awaited<ReturnType<typeof copyWorkflowTypeDefinition>> | null = null;
+    await db.withTransaction(async (db) => {
+      const sourceRow = source && copyFrom
+        ? await db.get(`SELECT * FROM workflow_types WHERE key = ?${tenantId != null ? ' AND tenant_id = ?' : ''} LIMIT 1`, copyFrom, ...(tenantId != null ? [tenantId] : [])) as Record<string, unknown> | undefined
+        : undefined;
+      const sourceColumns = sourceRow ? await copiedWorkflowTypeColumns(db, sourceRow) : {};
+      const extraColumns = Object.keys(sourceColumns).filter((column) => column !== 'keep_same_agent');
+      const keepSame = sourceRow && req.body?.keep_same_agent === undefined ? Number(sourceRow.keep_same_agent ?? 0) : keepSameAgent;
+      await db.run(`
+        INSERT INTO workflow_types (${tenant.columns}${project.columns}key, name, description, is_system, keep_same_agent, ${extraColumns.map((column) => `${column}, `).join('')}created_at, updated_at)
+        VALUES (${tenant.placeholders}${project.placeholders}?, ?, ?, 0, ?, ${extraColumns.map(() => '?, ').join('')}to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
+      `, ...tenant.params, ...project.params, key, name, description, keepSame, ...extraColumns.map((column) => sourceColumns[column]));
+      if (source && copyFrom && tenantId != null) {
+        copied = await copyWorkflowTypeDefinition(db, { tenantId, sourceKey: copyFrom, targetKey: key });
+      }
+    });
+
+    return res.status(201).json({ ...(await getWorkflowTypeOr404(db, key, tenantId)), ...(copied ? { copied_from: copied } : {}) });
   } catch (err) {
     return res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
   }
@@ -967,7 +913,6 @@ router.post('/types/:key/statuses', async (req: Request, res: Response) => {
           ${insertTenant.columns}workflow_type_key, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json, created_at, updated_at
         ) VALUES (${insertTenant.placeholders}?, ?, ?, ?, ?, ?, ?, ?, ?, ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
       `, ...insertTenant.params, workflowTypeKey, row.status_key, row.label, row.color, row.terminal, row.is_system, row.allowed_transitions_json, row.stage_order, row.is_default_entry, row.metadata_json);
-      await syncWorkflowTypeStatusToExistingWorkflows(db, workflowTypeKey, tenantId, row);
       await db.run(`UPDATE workflow_types SET updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS') WHERE key = ?${(await workflowTypeTenantPredicate(db, tenantId)).sql}`, workflowTypeKey, ...(await workflowTypeTenantPredicate(db, tenantId)).params);
     });
 
@@ -1055,7 +1000,6 @@ router.put('/types/:key/statuses/:statusKey', async (req: Request, res: Response
             AND (from_status = ? OR to_status = ?)
         `, currentStatusKey, nextStatusKey, currentStatusKey, nextStatusKey, workflowTypeKey, ...workflowTenantParams, currentStatusKey, currentStatusKey);
       }
-      await syncWorkflowTypeStatusToExistingWorkflows(db, workflowTypeKey, tenantId, row);
       await db.run(`UPDATE workflow_types SET updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS') WHERE key = ?${(await workflowTypeTenantPredicate(db, tenantId)).sql}`, workflowTypeKey, ...(await workflowTypeTenantPredicate(db, tenantId)).params);
     });
 
@@ -1130,11 +1074,6 @@ router.delete('/types/:key/statuses/:statusKey', async (req: Request, res: Respo
 
     await db.withTransaction(async (db) => {
       await db.run(`DELETE FROM workflow_type_task_statuses WHERE workflow_type_key = ? AND status_key = ?${statusTenant.sql}`, workflowTypeKey, statusKey, ...statusTenant.params);
-      await db.run(`
-        DELETE FROM workflow_task_statuses
-        WHERE status_key = ?
-          AND workflow_id IN (SELECT id FROM workflows WHERE workflow_type = ?${workflowTenantSql})
-      `, statusKey, workflowTypeKey, ...workflowTenantParams);
       await db.run(`UPDATE workflow_types SET updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS') WHERE key = ?${(await workflowTypeTenantPredicate(db, tenantId)).sql}`, workflowTypeKey, ...(await workflowTypeTenantPredicate(db, tenantId)).params);
     });
 

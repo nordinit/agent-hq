@@ -195,10 +195,9 @@ export async function loadMetricData(db:Db,access:TelemetryAccess,scope:Telemetr
   // Prerequisites are unresolved according to the blocker workflow's configured
   // terminality. Existence of a dependency alone is never a blockage signal.
   const dependencyRows=taskIds.length&&references.some(field=>field.includes('unresolved_dependencies'))?await db.all<any>(`SELECT d.blocked_id,b.id AS source_task_id,b.project_id,b.id IS NOT NULL AS visible,
-    COALESCE(ws.terminal,ts.terminal,gs.terminal,0) AS terminal
+    COALESCE(ts.terminal,gs.terminal,0) AS terminal
     FROM task_dependencies d LEFT JOIN tasks b ON b.id=d.blocker_id AND b.tenant_id=?
     LEFT JOIN workflows bs ON bs.id=b.workflow_id AND bs.tenant_id=b.tenant_id
-    LEFT JOIN workflow_task_statuses ws ON ws.workflow_id=b.workflow_id AND ws.status_key=b.status
     LEFT JOIN workflow_type_task_statuses ts ON ts.tenant_id=b.tenant_id AND ts.workflow_type_key=bs.workflow_type AND ts.status_key=b.status
     LEFT JOIN task_statuses gs ON gs.name=b.status WHERE d.blocked_id = ANY(?::bigint[])`,access.tenantId,taskIds):[];
   const dependenciesByTask=new Map<number,any[]>();

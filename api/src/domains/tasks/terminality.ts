@@ -9,7 +9,8 @@ import { tableExists, columnExists } from '../../db/introspection';
  *
  *   1. `task_statuses.terminal`            — global default for the instance
  *   2. `workflow_type_task_statuses.terminal` — per workflow type (tenant row wins over the shared row)
- *   3. `workflow_task_statuses.terminal`      — per workflow
+ *
+ * A workflow has no statuses of its own: it uses its workflow type's.
  *
  * Nothing in the codebase may decide terminality from a hardcoded status name.
  * A status with no configuration anywhere is treated as non-terminal, which is
@@ -26,12 +27,15 @@ export async function listConfiguredTerminalStatuses(
   // Callers generally know the workflow, not its type; resolve it here so no
   // call site can silently skip the workflow-type layer by omitting it.
   let workflowType = options.workflowType ?? null;
-  if (!workflowType && options.workflowId != null && await tableExists(db, 'workflows')) {
+  let tenantId = options.tenantId ?? null;
+  if ((!workflowType || tenantId == null) && options.workflowId != null && await tableExists(db, 'workflows')) {
+    const hasTenant = await columnExists(db, 'workflows', 'tenant_id');
     const workflow = await db.get(
-      `SELECT workflow_type FROM workflows WHERE id = ?`,
+      `SELECT workflow_type${hasTenant ? ', tenant_id' : ''} FROM workflows WHERE id = ?`,
       options.workflowId,
-    ) as { workflow_type?: string | null } | undefined;
-    workflowType = workflow?.workflow_type ?? null;
+    ) as { workflow_type?: string | null; tenant_id?: number | null } | undefined;
+    workflowType = workflowType ?? workflow?.workflow_type ?? null;
+    tenantId = tenantId ?? workflow?.tenant_id ?? null;
   }
 
   // Least specific first; more specific configuration overrides it below.
@@ -56,23 +60,11 @@ export async function listConfiguredTerminalStatuses(
           FROM workflow_type_task_statuses
           WHERE workflow_type_key = ? AND (tenant_id IS NULL OR tenant_id = ?)
           ORDER BY CASE WHEN tenant_id IS NULL THEN 0 ELSE 1 END ASC, id ASC
-        `, workflowType, options.tenantId ?? null) as Array<{ status_key: string; terminal: unknown }>
+        `, workflowType, tenantId) as Array<{ status_key: string; terminal: unknown }>
       : await db.all(
           `SELECT status_key, terminal FROM workflow_type_task_statuses WHERE workflow_type_key = ? ORDER BY id ASC`,
           workflowType,
         ) as Array<{ status_key: string; terminal: unknown }>;
-    for (const row of rows) applyRow(row, terminal, nonTerminal);
-  }
-
-  if (
-    options.workflowId != null
-    && await tableExists(db, 'workflow_task_statuses')
-    && await columnExists(db, 'workflow_task_statuses', 'terminal')
-  ) {
-    const rows = await db.all(
-      `SELECT status_key, terminal FROM workflow_task_statuses WHERE workflow_id = ? ORDER BY id ASC`,
-      options.workflowId,
-    ) as Array<{ status_key: string; terminal: unknown }>;
     for (const row of rows) applyRow(row, terminal, nonTerminal);
   }
 

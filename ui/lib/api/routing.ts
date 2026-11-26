@@ -64,12 +64,6 @@ getRoutingStatuses: (workflowId?: number) => {
   const qs = workflowId ? `?workflow_id=${workflowId}` : '';
   return apiFetch<{ statuses: TaskStatusMeta[] }>(`/api/v1/routing/statuses${qs}`);
 },
-createRoutingStatus: (data: Partial<TaskStatusMeta> & { name: string; label: string; workflow_id?: number }) =>
-  apiFetch<TaskStatusMeta>(`/api/v1/routing/statuses`, { method: 'POST', body: JSON.stringify(data) }),
-updateRoutingStatus: (name: string, data: Partial<TaskStatusMeta> & { workflow_id?: number }) =>
-  apiFetch<TaskStatusMeta>(`/api/v1/routing/statuses/${encodeURIComponent(name)}`, { method: 'PUT', body: JSON.stringify(data) }),
-deleteRoutingStatus: (name: string, workflowId?: number) =>
-  apiFetch<{ ok: boolean }>(`/api/v1/routing/statuses/${encodeURIComponent(name)}${workflowId ? `?workflow_id=${workflowId}` : ''}`, { method: 'DELETE' }),
 getRoutingTransitions: (projectId?: number, workflowId?: number, workflowType?: string) => {
   const params = new URLSearchParams();
   if (projectId) params.set('project_id', String(projectId));

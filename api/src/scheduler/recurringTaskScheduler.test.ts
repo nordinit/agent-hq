@@ -22,6 +22,8 @@ describe('recurring task scheduler', () => {
 
   async function seedBaseRows(status = 'active'): Promise<void> {
     const db = getDb();
+    // Statuses live on the workflow type, whose rows belong to a tenant.
+    await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Default Tenant', 'default', 1) ON CONFLICT DO NOTHING`);
     await db.run(`
       INSERT INTO projects (id, name, description, context_md, created_at)
       VALUES (613, 'Recurring Scheduler', '', '', CURRENT_TIMESTAMP)
@@ -234,10 +236,11 @@ describe('recurring task scheduler', () => {
 
   it('records invalid workflow-scoped status_on_create as failed and disables the series', async () => {
     const db = getDb();
-    await db.run(`DELETE FROM workflow_task_statuses WHERE workflow_id = 6131`);
+    // The workflow's type defines only 'todo', so 'ready' is not a status the workflow has.
+    await db.run(`DELETE FROM workflow_type_task_statuses WHERE workflow_type_key = 'dev'`);
     await db.run(`
-      INSERT INTO workflow_task_statuses (workflow_id, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json)
-      VALUES (6131, 'todo', 'Todo', 'slate', 0, 1, '[]', 0, 1, '{}')
+      INSERT INTO workflow_type_task_statuses (tenant_id, workflow_type_key, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json)
+      VALUES (1, 'dev', 'todo', 'Todo', 'slate', 0, 1, '[]', 0, 1, '{}')
     `);
     const series = await createPersistedDriftSeries({ status_on_create: 'ready' });
 

@@ -370,7 +370,7 @@ it('bootstraps taskless execution scope from its canonical tenant-owned agent',a
 
 it('records dependency resolution and reopening according to configured terminality',async()=>{
   await task();await task(3);
-  await db.run(`INSERT INTO workflow_task_statuses(workflow_id,status_key,label,terminal) VALUES(1,'accepted','Accepted',1)`);
+  await db.run(`INSERT INTO workflow_type_task_statuses(tenant_id,workflow_type_key,status_key,label,terminal) VALUES(1,'article','accepted','Accepted',1)`);
   await db.run(`INSERT INTO task_dependencies(blocker_id,blocked_id) VALUES(1,3)`);
   await db.run(`UPDATE tasks SET status='accepted' WHERE id=1`);
   await db.run(`UPDATE tasks SET status='draft' WHERE id=1`);
@@ -402,7 +402,7 @@ it('marks dependencies outside the task project for historical scope redaction',
 
 it('does not lose the final dependency count when different blockers resolve concurrently',async()=>{
   await task();await task(3);await task(4);
-  await db.run(`INSERT INTO workflow_task_statuses(workflow_id,status_key,label,terminal) VALUES(1,'accepted','Accepted',1)`);
+  await db.run(`INSERT INTO workflow_type_task_statuses(tenant_id,workflow_type_key,status_key,label,terminal) VALUES(1,'article','accepted','Accepted',1)`);
   await db.run(`INSERT INTO task_dependencies(blocker_id,blocked_id) VALUES(1,4),(3,4)`);
   let release!:()=>void;let notifyReady!:()=>void;
   const held=new Promise<void>(resolve=>{release=resolve;});

@@ -235,14 +235,7 @@ function parseStatusListJson(raw: string | null | undefined): string[] {
 async function listKnownStatusKeys(db: Db): Promise<Set<string>> {
   const keys = new Set((await listWorkflowTaskStatuses(db)).map((status) => status.name));
 
-  // both tables may be absent in isolated tests
-  if (await tableExists(db, 'workflow_task_statuses')) {
-    const workflowRows = await db.all(`SELECT DISTINCT status_key FROM workflow_task_statuses`) as Array<{ status_key: string }>;
-    for (const row of workflowRows) {
-      if (typeof row.status_key === 'string' && row.status_key.trim()) keys.add(row.status_key);
-    }
-  }
-
+  // Statuses are defined on workflow types; the table may be absent in isolated tests.
   if (await tableExists(db, 'workflow_type_task_statuses')) {
     const workflowTypeRows = await db.all(`SELECT DISTINCT status_key FROM workflow_type_task_statuses`) as Array<{ status_key: string }>;
     for (const row of workflowTypeRows) {

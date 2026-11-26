@@ -1,4 +1,5 @@
 import { normalizeEnvironmentSetup } from '../../lib/environmentSetup';
+import { assertWorkflowTypeChangeIsSafe, moveWorkflowScopedRowsToType } from './changeType';
 import { writeProjectAudit, diffFields } from '../../lib/projectAudit';
 import { insertRuntimeLog } from '../../lib/runtimeTenantScope';
 import { normalizeRepoConfig, validateRepoConfig } from '../../lib/repoConfig';
@@ -156,7 +157,6 @@ async function cloneWorkflowSetup(
   targetWorkflowId: number,
   targetTenantId: number | null,
 ): Promise<void> {
-  await cloneWorkflowScopedRows(db, 'workflow_task_statuses', sourceWorkflowId, targetProjectId, targetWorkflowId, targetTenantId);
   await cloneWorkflowScopedRows(db, 'workflow_task_transitions', sourceWorkflowId, targetProjectId, targetWorkflowId, targetTenantId);
   await cloneWorkflowScopedRows(db, 'workflow_task_transition_requirements', sourceWorkflowId, targetProjectId, targetWorkflowId, targetTenantId);
   await cloneWorkflowScopedRows(db, 'workflow_task_routing_rules', sourceWorkflowId, targetProjectId, targetWorkflowId, targetTenantId);
@@ -388,23 +388,39 @@ export async function updateWorkflow(
     environment_setup: environmentSetup,
   };
 
-  await db.run(`
-    UPDATE workflows SET
-      project_id = ?,
-      name = ?,
-      goal = ?,
-      workflow_type = ?,
-      status = ?,
-      length_kind = ?,
-      length_value = ?,
-      started_at = ?,
-      ended_at = ?,
-      repo_path = ?,
-      repo_url = ?,
-      repo_access_mode = ?,
-      environment_setup = ?
-    WHERE id = ?
-  `, newValues.project_id, newValues.name, newValues.goal, newValues.workflow_type, newValues.status, newValues.length_kind, newValues.length_value, newValues.started_at, newValues.ended_at, newValues.repo_path, newValues.repo_url, newValues.repo_access_mode, JSON.stringify(newValues.environment_setup), workflowId);
+  // Changing a workflow's type moves its own routing onto the new type, and only when the new
+  // type has everything the workflow uses (statuses live only on the type).
+  const typeChanged = newValues.workflow_type !== existing.workflow_type;
+  if (typeChanged) {
+    await assertWorkflowTypeChangeIsSafe(db, {
+      workflowId,
+      projectId: existing.project_id,
+      fromType: existing.workflow_type,
+      toType: newValues.workflow_type,
+      tenantId: (existing as WorkflowRecord & { tenant_id?: number | null }).tenant_id ?? null,
+    });
+  }
+
+  await db.withTransaction(async (db) => {
+    await db.run(`
+      UPDATE workflows SET
+        project_id = ?,
+        name = ?,
+        goal = ?,
+        workflow_type = ?,
+        status = ?,
+        length_kind = ?,
+        length_value = ?,
+        started_at = ?,
+        ended_at = ?,
+        repo_path = ?,
+        repo_url = ?,
+        repo_access_mode = ?,
+        environment_setup = ?
+      WHERE id = ?
+    `, newValues.project_id, newValues.name, newValues.goal, newValues.workflow_type, newValues.status, newValues.length_kind, newValues.length_value, newValues.started_at, newValues.ended_at, newValues.repo_path, newValues.repo_url, newValues.repo_access_mode, JSON.stringify(newValues.environment_setup), workflowId);
+    if (typeChanged) await moveWorkflowScopedRowsToType(db, workflowId, newValues.workflow_type);
+  });
 
   const changes = diffFields(
     {

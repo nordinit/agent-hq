@@ -174,13 +174,13 @@ describe('applyTaskOutcome scoped routing_config resolution', () => {
   it('persists workflow-defined custom statuses from configured outcome transitions', async () => {
     db = await createDb();
     await db.run(`UPDATE tasks SET status = 'todo' WHERE id = 417`);
-    await db.run(`DELETE FROM workflow_task_statuses WHERE workflow_id = 10`);
+    await db.run(`DELETE FROM workflow_type_task_statuses WHERE tenant_id = 1 AND workflow_type_key = 'generic'`);
     await db.run(`
-      INSERT INTO workflow_task_statuses (workflow_id, status_key, label, color, terminal, is_system, stage_order, is_default_entry)
+      INSERT INTO workflow_type_task_statuses (tenant_id, workflow_type_key, status_key, label, color, terminal, is_system, stage_order, is_default_entry)
       VALUES
-        (10, 'todo', 'Todo', 'slate', 0, 1, 0, 1),
-        (10, 'intake', 'Intake', 'amber', 0, 0, 1, 0),
-        (10, 'field_reported', 'Field Reported', 'blue', 0, 0, 2, 0)
+        (1, 'generic', 'todo', 'Todo', 'slate', 0, 1, 0, 1),
+        (1, 'generic', 'intake', 'Intake', 'amber', 0, 0, 1, 0),
+        (1, 'generic', 'field_reported', 'Field Reported', 'blue', 0, 0, 2, 0)
     `);
     await db.run(`
       INSERT INTO workflow_task_transitions (tenant_id, workflow_id, task_type, from_status, outcome, to_status, enabled)
@@ -207,12 +207,12 @@ describe('applyTaskOutcome scoped routing_config resolution', () => {
   it('rejects configured outcome routes whose target status is not defined for the workflow', async () => {
     db = await createDb();
     await db.run(`UPDATE tasks SET status = 'todo' WHERE id = 417`);
-    await db.run(`DELETE FROM workflow_task_statuses WHERE workflow_id = 10`);
+    await db.run(`DELETE FROM workflow_type_task_statuses WHERE tenant_id = 1 AND workflow_type_key = 'generic'`);
     await db.run(`
-      INSERT INTO workflow_task_statuses (workflow_id, status_key, label, color, terminal, is_system, stage_order, is_default_entry)
+      INSERT INTO workflow_type_task_statuses (tenant_id, workflow_type_key, status_key, label, color, terminal, is_system, stage_order, is_default_entry)
       VALUES
-        (10, 'todo', 'Todo', 'slate', 0, 1, 0, 1),
-        (10, 'ready', 'Ready', 'blue', 0, 1, 1, 0)
+        (1, 'generic', 'todo', 'Todo', 'slate', 0, 1, 0, 1),
+        (1, 'generic', 'ready', 'Ready', 'blue', 0, 1, 1, 0)
     `);
     await db.run(`
       INSERT INTO workflow_task_transitions (tenant_id, workflow_id, task_type, from_status, outcome, to_status, enabled)
@@ -254,12 +254,12 @@ describe('applyTaskOutcome scoped routing_config resolution', () => {
   it('returns workflow-specific allowed values for invalid outcome attempts', async () => {
     db = await createDb();
     await db.run(`UPDATE tasks SET status = 'todo' WHERE id = 417`);
-    await db.run(`DELETE FROM workflow_task_statuses WHERE workflow_id = 10`);
+    await db.run(`DELETE FROM workflow_type_task_statuses WHERE tenant_id = 1 AND workflow_type_key = 'generic'`);
     await db.run(`
-      INSERT INTO workflow_task_statuses (workflow_id, status_key, label, color, terminal, is_system, stage_order, is_default_entry)
+      INSERT INTO workflow_type_task_statuses (tenant_id, workflow_type_key, status_key, label, color, terminal, is_system, stage_order, is_default_entry)
       VALUES
-        (10, 'todo', 'Todo', 'slate', 0, 1, 0, 1),
-        (10, 'field_reported', 'Field Reported', 'blue', 0, 0, 1, 0)
+        (1, 'generic', 'todo', 'Todo', 'slate', 0, 1, 0, 1),
+        (1, 'generic', 'field_reported', 'Field Reported', 'blue', 0, 0, 1, 0)
     `);
     await db.run(`
       INSERT INTO workflow_task_transitions (tenant_id, workflow_id, task_type, from_status, outcome, to_status, enabled)
@@ -587,7 +587,7 @@ describe('applyTaskOutcome scoped routing_config resolution', () => {
       VALUES (93, 1, 417, 7, 'running')`);
     await db.run('UPDATE tasks SET status = ?, active_instance_id = 93 WHERE id = 417', taskStatus);
     for (const status of [taskStatus, 'submission_recorded']) {
-      await db.run(`INSERT INTO workflow_task_statuses (workflow_id, status_key, label, terminal) VALUES (10, ?, ?, 0)`, status, status);
+      await db.run(`INSERT INTO workflow_type_task_statuses (tenant_id, workflow_type_key, status_key, label, terminal) VALUES (1, 'generic', ?, ?, 0) ON CONFLICT DO NOTHING`, status, status);
     }
     await db.run(`INSERT INTO workflow_task_transitions
       (tenant_id, workflow_id, task_type, from_status, outcome, to_status, enabled)

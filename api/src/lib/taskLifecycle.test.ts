@@ -266,26 +266,30 @@ describe('task lifecycle worktree cleanup', () => {
     expect(mockedRemoveTaskWorktree).toHaveBeenCalledTimes(2);
   });
 
-  it('uses workflow terminal flags dynamically, including overrides back to non-terminal', async () => {
+  it('uses workflow type terminal flags dynamically, including overrides back to non-terminal', async () => {
     await seedLinkedTask(db, { taskStatus: 'custom_closed', activeInstanceId: null, instanceStatus: 'done' });
+    await db.run(`INSERT INTO workflow_types (tenant_id, key, name) VALUES (1, 'lifecycle_custom', 'Lifecycle custom')`);
+    await db.run(`UPDATE workflows SET workflow_type = 'lifecycle_custom' WHERE id = 1`);
     expect(await cleanupTerminalTaskWorkspaces(db, 1)).toBe(0);
-    await db.run(`INSERT INTO workflow_task_statuses (workflow_id, status_key, label, color, terminal) VALUES (1, 'custom_closed', 'Closed', 'green', 1)`);
+    await db.run(`INSERT INTO workflow_type_task_statuses (tenant_id, workflow_type_key, status_key, label, color, terminal) VALUES (1, 'lifecycle_custom', 'custom_closed', 'Closed', 'green', 1)`);
     expect(await cleanupTerminalTaskWorkspaces(db, 1)).toBe(1);
-    await db.run(`UPDATE workflow_task_statuses SET terminal = 0 WHERE workflow_id = 1 AND status_key = 'custom_closed'`);
+    await db.run(`UPDATE workflow_type_task_statuses SET terminal = 0 WHERE workflow_type_key = 'lifecycle_custom' AND status_key = 'custom_closed'`);
     expect(await cleanupTerminalTaskWorkspaces(db, 1)).toBe(0);
+    // The type can override the global `done` back to non-terminal.
     await db.run(`UPDATE tasks SET status = 'done' WHERE id = 1`);
-    await db.run(`INSERT INTO workflow_task_statuses (workflow_id, status_key, label, color, terminal) VALUES (1, 'done', 'Done but retained', 'green', 0)`);
+    await db.run(`INSERT INTO workflow_type_task_statuses (tenant_id, workflow_type_key, status_key, label, color, terminal) VALUES (1, 'lifecycle_custom', 'done', 'Done but retained', 'green', 0)`);
     expect(await cleanupTerminalTaskWorkspaces(db, 1)).toBe(0);
   });
 
-  it('uses the owning tenant workflow-type terminal flags below workflow overrides', async () => {
+  it('uses the owning tenant workflow-type terminal flags and ignores leftover per-workflow rows', async () => {
     await seedLinkedTask(db, { taskStatus: 'archived_by_customer', activeInstanceId: null, instanceStatus: 'done' });
     await db.run(`INSERT INTO workflow_types (tenant_id, key, name) VALUES (1, 'customer_work', 'Customer work')`);
     await db.run(`UPDATE workflows SET workflow_type = 'customer_work' WHERE id = 1`);
     await db.run(`INSERT INTO workflow_type_task_statuses (tenant_id, workflow_type_key, status_key, label, color, terminal) VALUES (1, 'customer_work', 'archived_by_customer', 'Archived', 'green', 1)`);
     expect(await cleanupTerminalTaskWorkspaces(db, 1)).toBe(1);
+    // Statuses live only on the type: a per-workflow row no longer overrides it.
     await db.run(`INSERT INTO workflow_task_statuses (workflow_id, status_key, label, color, terminal) VALUES (1, 'archived_by_customer', 'Keep', 'green', 0)`);
-    expect(await cleanupTerminalTaskWorkspaces(db, 1)).toBe(0);
+    expect(await cleanupTerminalTaskWorkspaces(db, 1)).toBe(1);
   });
 
   it('waits for every live run before reclaiming a configured terminal workspace', async () => {

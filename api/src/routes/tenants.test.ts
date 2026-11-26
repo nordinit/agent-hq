@@ -1,4 +1,5 @@
 import {approveExecutableFixture} from '../test-support/executionFixtures';
+import { listWorkflowTaskStatuses } from '../domains/routing/policy/statuses';
 import express from 'express';
 import type { Server } from 'http';
 import fs from 'fs';
@@ -219,12 +220,14 @@ describe('tenant workspace isolation', () => {
           AND a.tenant_id != s.tenant_id
       `) as { n: number }).n).toBe(0);
       const starterWorkflow = await db.get(`SELECT id FROM workflows WHERE tenant_id = ? LIMIT 1`, first.tenant.id) as { id: number };
-      expect((await db.get(`SELECT COUNT(*) AS n FROM workflow_task_statuses WHERE workflow_id = ?`, starterWorkflow.id) as { n: number }).n).toBeGreaterThan(0);
+      // A workflow's statuses are its type's; starter setup writes none per workflow.
+      expect((await listWorkflowTaskStatuses(db, starterWorkflow.id)).length).toBeGreaterThan(0);
+      expect(Number((await db.get(`SELECT COUNT(*) AS n FROM workflow_task_statuses WHERE workflow_id = ?`, starterWorkflow.id) as { n: number }).n)).toBe(0);
       const expectedRelationshipCounts: Record<string, number> = { dev: 5, generic: 1, ops: 1, lead_generation: 1 };
       for (const workflowType of ['dev', 'generic', 'ops', 'lead_generation']) {
         const starterWorkflow = await db.get(`SELECT id FROM workflows WHERE tenant_id = ? AND workflow_type = ? LIMIT 1`, first.tenant.id, workflowType) as { id: number };
         expect(starterWorkflow).toBeTruthy();
-        expect((await db.get(`SELECT COUNT(*) AS n FROM workflow_task_statuses WHERE workflow_id = ?`, starterWorkflow.id) as { n: number }).n).toBeGreaterThan(0);
+        expect((await listWorkflowTaskStatuses(db, starterWorkflow.id)).length).toBeGreaterThan(0);
         expect((await db.get(`SELECT COUNT(*) AS n FROM workflow_task_transitions WHERE workflow_id = ?`, starterWorkflow.id) as { n: number }).n).toBeGreaterThan(0);
         expect((await db.get(`SELECT COUNT(*) AS n FROM workflow_type_task_statuses WHERE workflow_type_key = ?`, workflowType) as { n: number }).n).toBeGreaterThan(0);
         expect((await db.get(`
@@ -477,11 +480,13 @@ describe('tenant workspace isolation', () => {
         WHERE tenant_id = ? AND workflow_type = 'generic'
         LIMIT 1
       `, created.tenant.id) as { id: number };
-      expect((await db.get(`
+      // The new tenant's workflow uses its own tenant's generic type, with one todo.
+      expect((await listWorkflowTaskStatuses(db, starterWorkflow.id)).filter((status) => status.name === 'todo')).toHaveLength(1);
+      expect(Number((await db.get(`
         SELECT COUNT(*) AS n
-        FROM workflow_task_statuses
-        WHERE workflow_id = ? AND status_key = 'todo'
-      `, starterWorkflow.id) as { n: number }).n).toBe(1);
+        FROM workflow_type_task_statuses
+        WHERE tenant_id = ? AND workflow_type_key = 'generic' AND status_key = 'todo'
+      `, created.tenant.id) as { n: number }).n)).toBe(1);
     } finally {
       await stopServer(server);
     }

@@ -800,23 +800,13 @@ async function buildResolvedTaskTerminalityExpression(
   const sources: string[] = [];
   const params: unknown[] = [];
 
-  if (await tableExists(db, 'workflow_task_statuses') && await tableHasColumn(db, 'workflow_task_statuses', 'terminal')) {
-    const workflowStatusOrder = await tableHasColumn(db, 'workflow_task_statuses', 'id') ? 'ORDER BY workflow_status.id DESC' : '';
-    sources.push(`
-      (
-        SELECT workflow_status.terminal
-        FROM workflow_task_statuses workflow_status
-        WHERE workflow_status.workflow_id = ${taskAlias}.workflow_id
-          AND workflow_status.status_key = ${taskAlias}.status
-        ${workflowStatusOrder}
-        LIMIT 1
-      )
-    `);
-  }
+  // A workflow has no statuses of its own: terminality comes from its workflow type's statuses.
+  const workflowTypeExpr = workflowAlias
+    ? `${workflowAlias}.workflow_type`
+    : `(SELECT status_workflow.workflow_type FROM workflows status_workflow WHERE status_workflow.id = ${taskAlias}.workflow_id)`;
 
   if (
-    workflowAlias
-    && await tableExists(db, 'workflow_type_task_statuses')
+    await tableExists(db, 'workflow_type_task_statuses')
     && await tableHasColumn(db, 'workflow_type_task_statuses', 'terminal')
   ) {
     const hasTaskTenant = await tableHasColumn(db, 'tasks', 'tenant_id');
@@ -828,7 +818,7 @@ async function buildResolvedTaskTerminalityExpression(
           (
             SELECT workflow_type_status.terminal
             FROM workflow_type_task_statuses workflow_type_status
-            WHERE workflow_type_status.workflow_type_key = ${workflowAlias}.workflow_type
+            WHERE workflow_type_status.workflow_type_key = ${workflowTypeExpr}
               AND workflow_type_status.status_key = ${taskAlias}.status
               AND workflow_type_status.tenant_id = ${taskAlias}.tenant_id
             ${workflowTypeStatusOrder}
@@ -837,7 +827,7 @@ async function buildResolvedTaskTerminalityExpression(
           (
             SELECT workflow_type_status.terminal
             FROM workflow_type_task_statuses workflow_type_status
-            WHERE workflow_type_status.workflow_type_key = ${workflowAlias}.workflow_type
+            WHERE workflow_type_status.workflow_type_key = ${workflowTypeExpr}
               AND workflow_type_status.status_key = ${taskAlias}.status
               AND workflow_type_status.tenant_id IS NULL
             ${workflowTypeStatusOrder}
@@ -849,7 +839,7 @@ async function buildResolvedTaskTerminalityExpression(
         (
           SELECT workflow_type_status.terminal
           FROM workflow_type_task_statuses workflow_type_status
-          WHERE workflow_type_status.workflow_type_key = ${workflowAlias}.workflow_type
+          WHERE workflow_type_status.workflow_type_key = ${workflowTypeExpr}
             AND workflow_type_status.status_key = ${taskAlias}.status
           ${workflowTypeStatusOrder}
           LIMIT 1
