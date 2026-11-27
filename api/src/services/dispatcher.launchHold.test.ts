@@ -77,10 +77,10 @@ async function boardHold() {
 }
 
 /** Approves every setup the list shows as not approved for the agent. */
-async function approveAll(grantHostExecute: boolean) {
-  const [entry] = await listApprovals(db, 1, { agentId: AGENT });
+async function approveAll(grantHostExecute: boolean, agentId = AGENT) {
+  const [entry] = await listApprovals(db, 1, { agentId });
   return approveReviewed(db, 1, 'operator', {
-    agentId: AGENT,
+    agentId,
     grantHostExecute,
     profiles: [entry.setup, ...entry.workflows].filter((check) => check.state !== 'approved')
       .map((check) => ({ resource_kind: check.resource_kind, resource_id: check.resource_id, digest: check.digest! })),
@@ -214,6 +214,37 @@ describe('a refused launch', () => {
       ['Build', 'approved', { count: 1, statuses: ['ready'] }, []],
       ['Client POC', 'not_approved', { count: 2, statuses: ['blocked', 'review'] }, []],
     ]);
+  });
+
+  describe('with a second agent routed at lower priority', () => {
+    const FALLBACK = 2;
+
+    beforeEach(async () => {
+      await db.run(`INSERT INTO agents (id, tenant_id, project_id, name, job_title, job_instructions, enabled, session_key, runtime_type, runtime_config, workspace_path)
+        VALUES (?, 1, 86, 'Helper', 'Builder', 'Help build it.', 1, 'agent:helper:main', 'openclaw', '{}', '/tmp')`, FALLBACK);
+      await db.run(`INSERT INTO workflow_task_routing_rules (tenant_id, workflow_id, project_id, workflow_type, task_type, status, agent_id, priority)
+        VALUES (1, 10, 86, 'team', 'backend', 'ready', ?, 90)`, FALLBACK);
+    });
+
+    it('starts the task with the next agent when the first is not approved, leaving no hold or note', async () => {
+      await approveAll(true, FALLBACK);
+
+      const result = await runDispatcher(db, 86);
+      expect(result).toEqual(expect.objectContaining({ dispatched: 1, errors: [] }));
+      await waitForRuntimeResponse();
+      expect(await db.get('SELECT agent_id FROM job_instances WHERE task_id = ?', TASK)).toEqual({ agent_id: FALLBACK });
+      expect(await getTaskById(db, TASK)).toEqual(expect.objectContaining({ launch_hold: null }));
+      expect(await launchNotes()).toEqual([]);
+    });
+
+    it('holds the task for the top-priority agent when no routed agent may start it', async () => {
+      const result = await runDispatcher(db, 86);
+      expect(result).toEqual(expect.objectContaining({ dispatched: 0, errors: [] }));
+      expect((await getTaskById(db, TASK))?.launch_hold).toEqual(expect.objectContaining({
+        agent_id: AGENT, reason_code: 'host_execute_missing',
+      }));
+      expect(await launchNotes()).toHaveLength(1);
+    });
   });
 
   it('notes a new reason when the reason changes', async () => {

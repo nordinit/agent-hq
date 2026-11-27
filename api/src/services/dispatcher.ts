@@ -1,4 +1,4 @@
-import {requirePublishedProfile} from '../domains/execution/authority';
+import { ExecutionDenied, requirePublishedProfile } from '../domains/execution/authority';
 import { clearLaunchHold, recordLaunchHold } from '../domains/execution/launchHolds';
 import { activeProjectPredicate } from '../lib/projectArchive';
 import fs from 'fs';
@@ -1754,6 +1754,33 @@ async function claimTaskDispatch(db: Db, job: JobRow, task: CandidateTask, routi
   });
 }
 
+/** The approvals an agent needs to start this task: its own setup, then the task workflow's setup. */
+function launchChecks(agentId: number, task: CandidateTask): Array<['agent_runtime' | 'workflow_setup', number]> {
+  const checks: Array<['agent_runtime' | 'workflow_setup', number]> = [['agent_runtime', agentId]];
+  if (task.workflow_id != null) checks.push(['workflow_setup', task.workflow_id]);
+  return checks;
+}
+
+interface LaunchRefusal {
+  agentId: number;
+  kind: 'agent_runtime' | 'workflow_setup';
+  resourceId: number;
+  error: ExecutionDenied;
+}
+
+/** Why this agent may not start this task, or null when it may. Other errors propagate. */
+async function findLaunchRefusal(db: Db, agentId: number, task: CandidateTask): Promise<LaunchRefusal | null> {
+  for (const [kind, resourceId] of launchChecks(agentId, task)) {
+    try {
+      await requirePublishedProfile(db, agentId, kind, resourceId);
+    } catch (error) {
+      if (error instanceof ExecutionDenied) return { agentId, kind, resourceId, error };
+      throw error;
+    }
+  }
+  return null;
+}
+
 export async function dispatchTaskToJob(
   db: Db,
   job: JobRow,
@@ -1763,9 +1790,7 @@ export async function dispatchTaskToJob(
 ): Promise<boolean> {
   // Check before workspace preparation, git commands, setup or runtime launch. A refusal happens
   // before any run exists, so it is recorded on the task for the task page and Approvals.
-  const checks: Array<['agent_runtime' | 'workflow_setup', number]> = [['agent_runtime', job.agent_id]];
-  if (task.workflow_id != null) checks.push(['workflow_setup', task.workflow_id]);
-  for (const [kind, resourceId] of checks) {
+  for (const [kind, resourceId] of launchChecks(job.agent_id, task)) {
     try {
       await requirePublishedProfile(db, job.agent_id, kind, resourceId);
     } catch (error) {
@@ -2149,6 +2174,9 @@ export async function runDispatcher(db: Db, projectId?: number): Promise<Dispatc
 
       let dispatched = false;
       let requiredOwnerBusy = false;
+      // The highest-priority candidate that was not approved to start this task. It is recorded
+      // only if no candidate starts it, so a fallback start leaves no "can't start" hold or note.
+      let refusal: LaunchRefusal | null = null;
       for (const rule of rules) {
         // Skip if this rule's job agent already has an active run
         if (await hasActiveInstance(db, rule.agent_id)) {
@@ -2158,6 +2186,13 @@ export async function runDispatcher(db: Db, projectId?: number): Promise<Dispatc
 
         // Fast skip only; claimTaskDispatch performs the definitive locked check.
         if (await hasTaskLiveInstance(db, task.id)) break;
+
+        // An agent that is not approved for this task falls through to the next routed agent.
+        const agentRefusal = await findLaunchRefusal(db, rule.agent_id, task);
+        if (agentRefusal) {
+          refusal ??= agentRefusal;
+          continue;
+        }
 
         const resolvedRepo = resolveRepoConfig({
           workflow: {
@@ -2226,6 +2261,9 @@ export async function runDispatcher(db: Db, projectId?: number): Promise<Dispatc
         if (retryState && !dispatchBackoffElapsed(retryState)) break;
       }
 
+      if (!dispatched && refusal) {
+        await recordLaunchHold(db, { taskId: task.id, agentId: refusal.agentId, kind: refusal.kind, resourceId: refusal.resourceId, error: refusal.error });
+      }
       if (!dispatched && requiredOwner && requiredOwnerBusy) {
         await noteWaitingForStatusOwner(db, task, requiredOwner);
       }
