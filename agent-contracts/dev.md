@@ -41,7 +41,6 @@ If evidence is incomplete, or verification is incomplete, stop and post the trut
 
 ## Current workflow guidance
 
-- Suggested outcome: `{{suggestedOutcome}}`
 - Valid outcomes: `{{validOutcomes}}`
 
 ### Outcome help
@@ -126,7 +125,7 @@ Post `blocked` or `failed` instead with a short explanation of what is missing.
 `agent_hq_record_review_evidence({"task_id":{{taskId}},"review_branch":"<feature-branch>","review_commit":"<sha>","review_url":"<non-production-review-url>","summary":"<optional review handoff notes>"})`
 
 ### Example implementation outcome command
-`agent_hq_post_task_outcome({"task_id":{{taskId}},"outcome":"{{suggestedOutcome}}","summary":"<truthful handoff summary>","instance_id":<instance_id>})`
+`agent_hq_post_task_outcome({"task_id":{{taskId}},"outcome":"<one of the valid outcomes>","summary":"<truthful handoff summary>","instance_id":<instance_id>})`
 
 ### Canonical implementation sequence
 1. finish the implementation
@@ -161,7 +160,7 @@ If the artifact, branch, commit, environment, or evidence is not testable, post 
 `agent_hq_record_qa_evidence({"task_id":{{taskId}},"qa_verified_commit":"<sha>","qa_tested_url":"<tested-url>","notes":"<optional QA notes>"})`
 
 ### Example QA outcome command
-`agent_hq_post_task_outcome({"task_id":{{taskId}},"outcome":"{{suggestedOutcome}}","summary":"<truthful QA summary>","instance_id":<instance_id>})`
+`agent_hq_post_task_outcome({"task_id":{{taskId}},"outcome":"<one of the valid outcomes>","summary":"<truthful QA summary>","instance_id":<instance_id>})`
 
 ---
 
@@ -350,4 +349,4 @@ Ready to paste:
 
 `agent_hq_check_in_task_run({{"instance_id":{{instanceId}},"stage":"progress","summary":"<truthful progress summary>","session_key":"{{sessionKey}}","meaningful_output":true}})`
 
-`agent_hq_post_task_outcome({{"task_id":{{taskId}},"outcome":"{{suggestedOutcome}}","summary":"<truthful handoff summary>","instance_id":{{instanceId}}}})`
+`agent_hq_post_task_outcome({{"task_id":{{taskId}},"outcome":"<one of the valid outcomes>","summary":"<truthful handoff summary>","instance_id":{{instanceId}}}})`

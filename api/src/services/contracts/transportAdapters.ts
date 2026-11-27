@@ -37,7 +37,6 @@ function getPromptOutcomeHelp(workflow: ResolvedWorkflow): Array<{ outcome: stri
 
 async function getConfiguredEvidenceRequirements(
   ctx: TransportContext,
-  workflow: ResolvedWorkflow,
   promptOutcomes: string[],
 ): Promise<EvidenceRequirements> {
   return resolveEvidenceRequirements({
@@ -46,7 +45,6 @@ async function getConfiguredEvidenceRequirements(
     taskType: ctx.taskType,
     workflowId: ctx.workflowId,
     outcomes: promptOutcomes,
-    suggestedOutcome: workflow.suggestedOutcome,
   });
 }
 
@@ -69,12 +67,12 @@ async function buildTemplateValues(
   const baseUrl = ctx.baseUrl ?? getAgentHqBaseUrl();
   const promptOutcomeHelp = getPromptOutcomeHelp(workflow);
   const promptOutcomes = promptOutcomeHelp.map((entry) => entry.outcome);
-  const evidence = await getConfiguredEvidenceRequirements(ctx, workflow, promptOutcomes);
+  const evidence = await getConfiguredEvidenceRequirements(ctx, promptOutcomes);
   const workflowType = normalizeContractTemplateKey(ctx.workflowType);
   const pipelineStages = PIPELINE_STAGES.join(' -> ');
   const evidenceOutcomes = promptOutcomes
     .filter(outcome => !['blocked', 'failed', 'qa_fail', 'dev_deploy_queued'].includes(outcome))
-    .join(', ') || workflow.suggestedOutcome;
+    .join(', ') || promptOutcomes.join(', ');
 
   return {
     baseUrl,
@@ -86,7 +84,6 @@ async function buildTemplateValues(
     workflowType,
     workflowTemplateKey: workflow.source,
     workflowSource: workflow.source,
-    suggestedOutcome: workflow.suggestedOutcome,
     validOutcomes: promptOutcomes.join(', '),
     outcomeHelp: formatOutcomeHelp(promptOutcomeHelp),
     taskStatus: ctx.taskStatus,
@@ -120,7 +117,6 @@ export const CONTRACT_PLACEHOLDER_DEFINITIONS: ContractPlaceholderDefinition[] =
   { key: 'workflowType', description: 'Normalized workflow type for the task, such as generic, dev, or ops.' },
   { key: 'workflowTemplateKey', description: 'Workflow resolution source for this dispatch, useful when templates need to explain config-backed versus compatibility routing.' },
   { key: 'workflowSource', description: 'Alias for workflowTemplateKey.' },
-  { key: 'suggestedOutcome', description: 'Recommended semantic outcome for the current workflow state when the happy path succeeds.' },
   { key: 'validOutcomes', description: 'Comma-separated list of outcomes valid from the current workflow state.' },
   { key: 'outcomeHelp', description: 'Multi-line outcome dictionary explaining what each valid outcome means in this workflow state.' },
   { key: 'taskStatus', description: 'Current task status at dispatch time, useful when the contract needs to reference the exact pipeline state.' },
@@ -156,7 +152,6 @@ export interface RenderedContractInstructions {
   inheritedFrom: string | null;
   /** How the workflow itself resolved — config-backed, compatibility routing, etc. */
   workflowSource: string;
-  suggestedOutcome: string;
   validOutcomes: string[];
 }
 
@@ -181,7 +176,6 @@ export async function buildContractInstructionsDetailed(
     templatePath: template.path,
     inheritedFrom: template.inheritedFrom,
     workflowSource: workflow.source,
-    suggestedOutcome: workflow.suggestedOutcome,
     validOutcomes: workflow.outcomeHelp.map((entry) => entry.outcome),
   };
 }

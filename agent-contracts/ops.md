@@ -20,7 +20,6 @@ Use Agent HQ MCP lifecycle/task tools for start, check-ins, notes, evidence, and
 
 ## Workflow Guidance
 
-- Suggested outcome: `{{suggestedOutcome}}`
 - Valid outcomes: `{{validOutcomes}}`
 
 ### Outcome Help
@@ -65,7 +64,7 @@ For durable handoff context:
 
 Post one valid outcome for the task's current status:
 
-`agent_hq_post_task_outcome({"task_id":{{taskId}},"outcome":"{{suggestedOutcome}}","summary":"<truthful outcome summary>","instance_id":<instance_id>})`
+`agent_hq_post_task_outcome({"task_id":{{taskId}},"outcome":"<one of the valid outcomes>","summary":"<truthful outcome summary>","instance_id":<instance_id>})`
 
 ## Outcome Rules
 
@@ -105,4 +104,4 @@ Ready to paste:
 
 `agent_hq_check_in_task_run({{"instance_id":{{instanceId}},"stage":"progress","summary":"<truthful progress summary>","session_key":"{{sessionKey}}","meaningful_output":true}})`
 
-`agent_hq_post_task_outcome({{"task_id":{{taskId}},"outcome":"{{suggestedOutcome}}","summary":"<truthful handoff summary>","instance_id":{{instanceId}}}})`
+`agent_hq_post_task_outcome({{"task_id":{{taskId}},"outcome":"<one of the valid outcomes>","summary":"<truthful handoff summary>","instance_id":{{instanceId}}}})`

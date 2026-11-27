@@ -14,7 +14,6 @@ export type WorkflowPhase = 'implementation' | 'review' | 'release' | 'pm';
 
 export interface ResolvedWorkflow {
   workflowPhase: WorkflowPhase;
-  suggestedOutcome: string;
   validOutcomes: string[];
   outcomeHelp: OutcomeHelpEntry[];
   requiresSemanticOutcome: boolean;
@@ -46,7 +45,6 @@ function buildResolvedWorkflow(
   source: ResolvedWorkflow['source'],
   options: {
     workflowType?: string | null;
-    suggestedOutcome?: string;
     validOutcomes?: string[];
     outcomeHelp?: OutcomeHelpEntry[];
   } = {},
@@ -55,11 +53,9 @@ function buildResolvedWorkflow(
 
   switch (workflowPhase) {
     case 'review': {
-      const suggestedOutcome = options.suggestedOutcome ?? 'qa_pass';
       const validOutcomes = options.validOutcomes ?? ['qa_pass', 'qa_fail', 'blocked', 'failed'];
       return {
         workflowPhase: 'review',
-        suggestedOutcome,
         validOutcomes,
         outcomeHelp: options.outcomeHelp ?? validOutcomes.map((outcome) => buildOutcomeHelp(outcome)),
         requiresSemanticOutcome: true,
@@ -68,11 +64,9 @@ function buildResolvedWorkflow(
       };
     }
     case 'release': {
-      const suggestedOutcome = options.suggestedOutcome ?? 'deployed_live';
       const validOutcomes = options.validOutcomes ?? ['deployed_live', 'blocked', 'failed'];
       return {
         workflowPhase: 'release',
-        suggestedOutcome,
         validOutcomes,
         outcomeHelp: options.outcomeHelp ?? validOutcomes.map((outcome) => buildOutcomeHelp(outcome)),
         requiresSemanticOutcome: true,
@@ -81,11 +75,9 @@ function buildResolvedWorkflow(
       };
     }
     case 'pm': {
-      const suggestedOutcome = options.suggestedOutcome ?? 'completed_for_review';
       const validOutcomes = options.validOutcomes ?? ['completed_for_review', 'blocked', 'failed'];
       return {
         workflowPhase: 'pm',
-        suggestedOutcome,
         validOutcomes,
         outcomeHelp: options.outcomeHelp ?? validOutcomes.map((outcome) => buildOutcomeHelp(outcome)),
         requiresSemanticOutcome: true,
@@ -94,11 +86,9 @@ function buildResolvedWorkflow(
       };
     }
     default: {
-      const suggestedOutcome = options.suggestedOutcome ?? 'completed_for_review';
       const validOutcomes = options.validOutcomes ?? ['completed_for_review', 'dev_deploy_queued', 'blocked', 'failed'];
       return {
         workflowPhase: 'implementation',
-        suggestedOutcome,
         validOutcomes,
         outcomeHelp: options.outcomeHelp ?? validOutcomes.map((outcome) => buildOutcomeHelp(outcome)),
         requiresSemanticOutcome: true,
@@ -130,7 +120,6 @@ function legacyResolveWorkflow(
   if (isReviewLane) {
     return buildResolvedWorkflow('review', 'compatibility', {
       workflowType: normalizedWorkflowType,
-      suggestedOutcome: 'qa_pass',
       validOutcomes: ['qa_pass', 'qa_fail', 'blocked', 'failed'],
     });
   }
@@ -139,7 +128,6 @@ function legacyResolveWorkflow(
     if (taskStatus === 'deployed') {
       return buildResolvedWorkflow('release', 'compatibility', {
         workflowType: normalizedWorkflowType,
-        suggestedOutcome: 'live_verified',
         validOutcomes: ['live_verified', 'blocked', 'failed'],
       });
     }
@@ -179,35 +167,9 @@ function getApplicableWorkflowTransitions(
     });
 }
 
-function getSuggestedOutcome(
-  taskStatus: string,
-  taskType: string | null | undefined,
-  validOutcomes: string[],
-): string | null {
-  const preferredByStatus: Record<string, string[]> = {
-    review: ['completed', 'qa_pass', 'qa_fail', 'blocked', 'failed'],
-    ready_to_merge: ['deployed_live', 'qa_fail', 'failed'],
-    deployed: ['live_verified', 'qa_fail', 'failed'],
-    stalled: ['retry'],
-  };
-
-  const preferred = preferredByStatus[taskStatus] ?? ['completed', 'completed_for_review', 'dev_deploy_queued', 'blocked', 'failed'];
-
-  for (const outcome of preferred) {
-    if (validOutcomes.includes(outcome)) return outcome;
-  }
-
-  return validOutcomes[0] ?? null;
-}
-
-function inferWorkflowPhase(
-  taskStatus: string,
-  _taskType: string | null | undefined,
-  suggestedOutcome: string,
-): WorkflowPhase {
+function inferWorkflowPhase(taskStatus: string): WorkflowPhase {
   if (taskStatus === 'review') return 'review';
   if (taskStatus === 'ready_to_merge' || taskStatus === 'deployed') return 'release';
-  if (suggestedOutcome === 'deployed_live' || suggestedOutcome === 'live_verified') return 'release';
   return 'implementation';
 }
 
@@ -232,13 +194,8 @@ async function resolveWorkflowFromResolvedWorkflow(
     : new Map<string, WorkflowOutcomeDefinition>();
 
   const validOutcomes = [...validOutcomeSet];
-  const suggestedOutcome = getSuggestedOutcome(taskStatus, taskType, validOutcomes);
-  if (!suggestedOutcome) return null;
-
-  const workflowPhase = inferWorkflowPhase(taskStatus, taskType, suggestedOutcome);
-  return buildResolvedWorkflow(workflowPhase, 'workflow_type_config', {
+  return buildResolvedWorkflow(inferWorkflowPhase(taskStatus), 'workflow_type_config', {
     workflowType: workflow.workflowType,
-    suggestedOutcome,
     validOutcomes,
     outcomeHelp: validOutcomes.map((outcome) => buildOutcomeHelp(outcome, transitionByOutcome.get(outcome), outcomeMeta.get(outcome)?.description)),
   });
@@ -249,7 +206,6 @@ async function resolveWorkflowFromResolvedWorkflow(
  * from the task's current status and type.
  *
  * This is the semantic model shared by ALL runtimes. The current status/outcome configuration determines:
- * - Which outcome the agent should report (suggestedOutcome)
  * - Which outcomes are valid for this dispatch
  * - What each outcome means (outcomeHelp)
  *
@@ -365,12 +321,10 @@ export async function resolveEvidenceRequirements(options: {
   taskType?: string | null;
   workflowId?: number | null;
   outcomes?: string[];
-  suggestedOutcome?: string | null;
 }): Promise<EvidenceRequirements> {
-  const outcomes = Array.from(new Set([
-    ...(options.outcomes ?? []),
-    options.suggestedOutcome ?? '',
-  ].filter((outcome): outcome is string => Boolean(outcome) && isAdvancementOutcome(outcome))));
+  const outcomes = Array.from(new Set(
+    (options.outcomes ?? []).filter((outcome) => Boolean(outcome) && isAdvancementOutcome(outcome)),
+  ));
 
   if (!options.db || outcomes.length === 0) {
     return {

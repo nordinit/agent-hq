@@ -113,7 +113,6 @@ export async function buildInstanceCallbackContractSegmentDrafts(
       template_path: contract.templatePath,
       inherited_from: contract.inheritedFrom,
       workflow_source: contract.workflowSource,
-      suggested_outcome: contract.suggestedOutcome,
       valid_outcomes: contract.validOutcomes.join(', '),
       transport_mode: ctx.transportMode,
       task_status: input.taskStatus,
