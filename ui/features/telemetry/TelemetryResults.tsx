@@ -14,6 +14,24 @@ import TelemetryVisualization from './TelemetryVisualization';
 import { availableTelemetryDisplays, telemetryDimensionLabel, telemetryGroupLabel } from '@/lib/telemetryViews';
 import { isTelemetryResultUnavailable, type TelemetryRecovery } from '@/lib/telemetryRecovery';
 
+const recordLinkClass = 'text-amber-300 hover:underline';
+
+/** A contributing record, linked to where it can be inspected: a task to its page, a run to its chat. */
+export function TelemetryRecordLink({ row }: { row: Pick<Contribution, 'entity_kind' | 'entity_id' | 'details'> }) {
+  const title = typeof row.details?.title === 'string' && row.details.title ? row.details.title : null;
+  if (row.entity_kind === 'task') {
+    return <Link className={recordLinkClass} href={`/tasks/${row.entity_id}`}>{title ?? `Task #${row.entity_id}`}</Link>;
+  }
+  if (row.entity_kind === 'run') {
+    const taskId = row.details?.task_id;
+    return <>
+      <Link className={recordLinkClass} href={`/chat?instanceId=${encodeURIComponent(String(row.entity_id))}`}>Run #{row.entity_id}</Link>
+      {taskId != null && <p className="mt-1 text-slate-400"><Link className="hover:underline" href={`/tasks/${encodeURIComponent(String(taskId))}`}>{title ?? `Task #${taskId}`}</Link></p>}
+    </>;
+  }
+  return <span>{row.entity_kind} #{row.entity_id}</span>;
+}
+
 function Contributors({ result, index, group, catalog, onRecover }: { result: TelemetryResult; index?: number; group?: Scalar[]; catalog?: TelemetryCatalog | null; onRecover?: TelemetryRecovery }) {
   const [offset, setOffset] = useState(0);
   const [filter, setFilter] = useState(group ? 'included' : 'all');
@@ -50,7 +68,7 @@ function Contributors({ result, index, group, catalog, onRecover }: { result: Te
       void onRecover(result.query_id, true).catch(cause => setError(telemetryErrorMessage(cause))).finally(() => setBusy(false));
     }}>Refresh calculation</Button>}
     {busy ? <p role="status" className="text-sm text-slate-400">Loading contributing records…</p> : !error && <>
-      <div className="overflow-auto"><table className="w-full text-left text-xs"><thead className="text-slate-500"><tr><th className="py-2 pr-3">Record</th><th className="pr-3">Attributed agent</th><th className="pr-3">Included</th><th className="pr-3">Contribution</th><th className="pr-3">Explanation</th><th>Evidence</th></tr></thead><tbody className="divide-y divide-slate-700/40">{rows.map(row => <tr key={row.sample_id} className="align-top"><td className="py-3 pr-3">{row.entity_kind === 'task' ? <Link className="text-amber-300 hover:underline" href={`/tasks/${row.entity_id}`}>{String(row.details?.title ?? `Task #${row.entity_id}`)}</Link> : <span>{row.entity_kind} #{row.entity_id}</span>}{row.started_at && <p className="mt-1 text-slate-500">{new Date(row.started_at).toLocaleString()}</p>}</td><td className="py-3 pr-3">{telemetryDimensionLabel(row.agent_id ?? null, 'agent_id', catalog)}</td><td className="py-3 pr-3"><Badge variant={row.included ? 'done' : 'default'}>{row.included ? 'Yes' : 'No'}</Badge></td><td className="py-3 pr-3 font-mono">{formatTelemetryContribution(row, result.unit)}</td><td className="min-w-48 py-3 pr-3 text-slate-300">{row.reason}{row.resolution && <p className="mt-1 text-slate-500">{row.resolution}</p>}</td><td className="py-3"><JsonDetails label={`${row.observation_ids.length} observations`} value={{ observations: row.observation_ids, ...row.details }}/></td></tr>)}</tbody></table></div>
+      <div className="overflow-auto"><table className="w-full text-left text-xs"><thead className="text-slate-500"><tr><th className="py-2 pr-3">Record</th><th className="pr-3">Attributed agent</th><th className="pr-3">Included</th><th className="pr-3">Contribution</th><th className="pr-3">Explanation</th><th>Evidence</th></tr></thead><tbody className="divide-y divide-slate-700/40">{rows.map(row => <tr key={row.sample_id} className="align-top"><td className="py-3 pr-3"><TelemetryRecordLink row={row}/>{row.started_at && <p className="mt-1 text-slate-500">{new Date(row.started_at).toLocaleString()}</p>}</td><td className="py-3 pr-3">{telemetryDimensionLabel(row.agent_id ?? null, 'agent_id', catalog)}</td><td className="py-3 pr-3"><Badge variant={row.included ? 'done' : 'default'}>{row.included ? 'Yes' : 'No'}</Badge></td><td className="py-3 pr-3 font-mono">{formatTelemetryContribution(row, result.unit)}</td><td className="min-w-48 py-3 pr-3 text-slate-300">{row.reason}{row.resolution && <p className="mt-1 text-slate-500">{row.resolution}</p>}</td><td className="py-3"><JsonDetails label={`${row.observation_ids.length} observations`} value={{ observations: row.observation_ids, ...row.details }}/></td></tr>)}</tbody></table></div>
       {!rows.length && <p className="py-3 text-sm text-slate-400">No records match this inclusion filter.</p>}
       <div className="flex items-center justify-between gap-2 text-xs text-slate-400"><span>{total ? `${offset + 1}–${Math.min(offset + rows.length, total)} of ${total}` : '0 records'}</span><div className="flex gap-2"><Button size="sm" variant="ghost" disabled={!offset} onClick={() => setOffset(Math.max(0, offset - 25))}><ChevronLeft className="h-3 w-3"/>Previous</Button><Button size="sm" variant="ghost" disabled={offset + rows.length >= total} onClick={() => setOffset(offset + 25)}>Next<ChevronRight className="h-3 w-3"/></Button></div></div>
     </>}
